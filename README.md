@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="tuigui" width="340">
+  <img src="assets/logo.png" alt="tuigui" width="340" style="image-rendering: pixelated;">
 </p>
 
 # tuigui
