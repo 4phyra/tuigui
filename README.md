@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="tuigui" width="340">
+</p>
+
 # tuigui
 
 [![Rust lines of code](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2F4phyra%2Ftuigui%2Fmaster%2F.github%2Ftokei.json)](https://github.com/4phyra/tuigui)
