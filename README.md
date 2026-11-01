@@ -8,8 +8,6 @@
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-1.88%2B-orange.svg" alt="Rust: 1.88+"></a>
 </p>
 
----
-
 ## What is tuigui?
 
 tuigui puts graphical programs in the terminal, alongside the text tools you
