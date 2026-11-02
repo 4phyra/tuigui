@@ -20,19 +20,6 @@ use std::sync::Weak;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
-/// What a program says, as the two streams it says it on.
-///
-/// Held as handles rather than as a path to a file: the caller is the side that shows
-/// them, and a file is one answer to "where do these go" that is not the caller's to
-/// choose. Both are read to their end by whoever takes them, which is also what keeps the
-/// program from blocking on a full pipe.
-pub struct Spoken {
-    /// What the program writes to standard output.
-    pub stdout: std::process::ChildStdout,
-    /// What the program writes to standard error.
-    pub stderr: std::process::ChildStderr,
-}
-
 /// Where a window is and how big it is, in cells, and the cells it draws into.
 ///
 /// The rectangle is on the pane, whose origin is `(0, 0)`, so it is already the
