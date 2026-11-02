@@ -59,6 +59,17 @@ pub enum Message {
         surface: SurfaceId,
 
         z: u32, // 0 - behind everything, bigger - closer to the user.
+        /// The window's box, in terminal cells, as the side that owns the window laid it out.
+        ///
+        /// The size to *scale the picture to*, which is what `c`/`r` mean on a placement. Not
+        /// pixels: `w`/`h` name a source rectangle to crop the image by, so a far side sending
+        /// the capture's pixel size there draws the picture at its own size inside a box of a
+        /// different one — small windows enlarged, large ones shrunk, and nothing to say why.
+        ///
+        /// Only the side with the window knows its box, and only in cells: the compositor
+        /// decides where a window sits on the pane, and the pane is a grid.
+        cols: u32,
+        rows: u32,
         /// The codec's bytes, opaque to the link.
         bytes: Vec<u8>,
     },
@@ -258,6 +269,8 @@ mod tests {
                     bg: (4, 5, 6),
                 },
                 z: 0,
+                cols: 80,
+                rows: 24,
                 bytes: b"raw frame bytes".to_vec(),
             },
             // Not text, so a codec that assumed UTF-8 would show up here.
@@ -268,6 +281,8 @@ mod tests {
                     bg: (255, 255, 255),
                 },
                 z: 9,
+                cols: 1,
+                rows: 1,
                 bytes: vec![0x00, 0xff, 0x1b, 0x9b],
             },
             Message::OpenWindow {

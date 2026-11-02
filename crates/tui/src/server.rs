@@ -121,7 +121,11 @@ impl<F: Format> Server<F> {
                     // Every window's cells, worked out once and used by both the filter and the scan:
                     // they are the same question — which cells belong to a window — asked of the same
                     // list.
-                    let surfaces = self.collect_surfaces();
+                    let surfaces: Vec<SurfaceId> = self
+                        .sessions
+                        .iter()
+                        .flat_map(|session| session.windows.keys().copied())
+                        .collect();
 
                     // What the terminal is written: the same bytes with every window's cells blanked,
                     // so the picture behind them shows through.
@@ -189,16 +193,5 @@ impl<F: Format> Server<F> {
             // again, and a resize goes unnoticed while the pane keeps its old shape.
             tokio::task::yield_now().await;
         }
-    }
-
-    /// Every surface a window draws into, across all sessions.
-    ///
-    /// The list a cell is matched against: the filter blanks the cells carrying one of these, and
-    /// the scan looks for the same set on the screen.
-    fn collect_surfaces(&self) -> Vec<SurfaceId> {
-        self.sessions
-            .iter()
-            .flat_map(Session::surface_ids)
-            .collect()
     }
 }

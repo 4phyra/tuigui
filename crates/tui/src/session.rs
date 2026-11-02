@@ -93,9 +93,11 @@ const BLUE: (u32, u32) = (64, 64);
 ///
 /// One of these per window, not per session: two windows are two pictures, and a decoder that
 /// followed one stream cannot follow the other.
+///
+/// The window does not carry its own surface: the session keeps these in a map *keyed* by it, so
+/// the identity exists once. A copy here would be a second answer to "which cells is this window",
+/// and a frame naming the key would still have to search for the copy that matched.
 pub struct Window<F: Format> {
-    /// The cells this window draws into, and the name it is placed under.
-    pub surface: SurfaceId,
     /// The image the frames are sent under, and the pending operations on it.
     ///
     /// Kept across frames rather than rebuilt, because it owns the unacknowledged
@@ -125,12 +127,16 @@ pub struct Session<F: Format> {
     pub debug: std::sync::Arc<DebugOptions>,
     /// Creates image requests, and owns the reply router behind them.
     pub controller: Arc<Controller>,
-    /// Every window this session is drawing, in the order they were opened.
+    /// Every window this session is drawing, keyed by the cells it draws into.
     ///
-    /// A list and not a map: the order *is* the stacking order, so a sorted structure would be a
-    /// second answer to "what is in front". Empty until one is opened, which is also the reason a
-    /// frame can arrive with nowhere to go.
-    pub windows: Vec<Window<F>>,
+    /// A map rather than a list, because the surface *is* how a frame names its window: every
+    /// lookup was a search for the entry whose copy of the key matched the one in hand. A map
+    /// answers that directly, and the identity exists once instead of once per lookup.
+    ///
+    /// The stacking order is not this map's business: `z` travels with each frame, so it is read
+    /// from the frame it applies to rather than from a position in here. Empty until a window is
+    /// opened, which is also the reason a frame can arrive with nowhere to go.
+    pub windows: HashMap<SurfaceId, Window<F>>,
 }
 
 impl<F: Format> Session<F> {
@@ -143,13 +149,8 @@ impl<F: Format> Session<F> {
             connection,
             debug,
             controller,
-            windows: Vec::new(),
+            windows: HashMap::new(),
         }
-    }
-
-    /// The surface of every window this session draws into.
-    pub fn surface_ids(&self) -> impl Iterator<Item = SurfaceId> + '_ {
-        self.windows.iter().map(|window| window.surface)
     }
 
     pub async fn handle(
@@ -188,7 +189,13 @@ impl<F: Format> Session<F> {
         sink: &mut (impl std::io::Write + ?Sized),
     ) -> Result<()> {
         match message {
-            Message::Frame { surface, z, bytes } => {
+            Message::Frame {
+                surface,
+                z,
+                cols,
+                rows,
+                bytes,
+            } => {
                 // Where the window is, looked up rather than tracked: nothing about position
                 // travels on the wire, because the cells carrying the surface are its box — so a
                 // multiplexer that moved the text moved the window without anyone saying so.
@@ -197,12 +204,27 @@ impl<F: Format> Session<F> {
                 // is in front of another: that is the window manager's answer, and it arrives with
                 // the frame it applies to.
                 match positions.get(&surface) {
-                    Some(at) => self.paint(&bytes, surface, *at, z, sink).await?,
+                    Some(at) => {
+                        self.paint(&bytes, surface, *at, z, (cols, rows), sink)
+                            .await?
+                    }
                     // A window with no cells is not placed. It has scrolled away, or been covered
                     // entirely, or has not drawn yet, and all three mean the same thing to a
                     // placement: there is nothing on screen for it to go behind.
+                    //
+                    // Its picture is deleted on the way out. The terminal owns an image once it is
+                    // transmitted, so the cells going away frees nothing: the picture stays where
+                    // it was while the text that placed it has moved on. Only the image goes — the
+                    // window stays, because cells that scrolled away can come back, and its next
+                    // frame transmits a fresh picture under the same id.
                     None => {
-                        tracing::debug!("a frame for {surface:?} has no cells to be placed on");
+                        if let Some(image) = self
+                            .windows
+                            .get_mut(&surface)
+                            .and_then(|window| window.image.take())
+                        {
+                            image.delete();
+                        }
                     }
                 }
             }
@@ -216,24 +238,40 @@ impl<F: Format> Session<F> {
             }
             Message::Pong => (),
             Message::OpenWindow { surface, codec } => {
-                self.windows.push(Window {
+                self.windows.insert(
                     surface,
-                    codec,
-                    image: None,
-                    decoder: None,
-                });
+                    Window {
+                        codec,
+                        image: None,
+                        decoder: None,
+                    },
+                );
                 log::info!(
                     "opened a window on {surface:?} in {codec:?} ({} now open)",
                     self.windows.len()
                 );
             }
             Message::CloseWindow { surface } => {
-                let before = self.windows.len();
-                self.windows.retain(|window| window.surface != surface);
-                if self.windows.len() == before {
-                    return Err(
-                        io::Error::other(format!("no window draws into {surface:?}")).into(),
-                    );
+                match self.windows.remove(&surface) {
+                    // The picture is deleted with the window. The terminal owns an image once it
+                    // is transmitted, so dropping the window frees nothing on screen: the last
+                    // frame would stay where it was for the rest of the session. `delete` consumes
+                    // the image because its id goes with it, which is why the window comes out of
+                    // the map first.
+                    Some(window) => {
+                        if let Some(image) = window.image {
+                            image.delete();
+                        }
+                        log::info!(
+                            "closed the window on {surface:?} ({} left)",
+                            self.windows.len()
+                        );
+                    }
+                    None => {
+                        return Err(
+                            io::Error::other(format!("no window draws into {surface:?}")).into(),
+                        )
+                    }
                 }
             }
             // Not handled yet. Nothing here is a failure — the client sends these in the normal
@@ -271,6 +309,7 @@ impl<F: Format> Session<F> {
         surface: SurfaceId,
         at: Position,
         z: u32,
+        (cols, rows): (u32, u32),
         sink: &mut (impl std::io::Write + ?Sized),
     ) -> Result<()> {
         // A frame for a window this side has not been told about is not a failure: the
@@ -278,17 +317,11 @@ impl<F: Format> Session<F> {
         // can be announced after the drawer's first commit has been encoded. The frame is
         // dropped and the next one — which arrives after the announcement — is painted, so
         // nothing is lost but one turn.
-        let Some(window) = self
-            .windows
-            .iter_mut()
-            .find(|window| window.surface == surface)
-        else {
+        let Some(state) = self.windows.get_mut(&surface) else {
             tracing::debug!("a frame for a window this session does not know: {surface:?}");
             return Ok(());
         };
         let (left, top) = at;
-
-        let state = window;
         let pixels = if self.debug.blue_pixel {
             // The frame is ignored on purpose, so nothing in the wire path, the codec
             // or the decode is exercised: what appears on screen is attributable to
@@ -327,10 +360,16 @@ impl<F: Format> Session<F> {
         let request = F::request(&self.controller, pixels).map_err(Error::Stage)?;
 
         let placement = PlacementRequest {
-            // No `cols`/`rows`: the image is its own size. A window's picture is captured from the
-            // window, so the pixels are the window's box — scaling to a cell count the scan does
-            // not carry would be inventing a size nobody measured.
+            // The box the picture is scaled into, in cells, as the side that owns the window laid
+            // it out. `c`/`r` are the keys that scale: the terminal fits the image into that many
+            // cells and computes the other dimension from the picture's own aspect ratio, so the
+            // window keeps its shape at whatever size the pane gives it.
             //
+            // Not `w`/`h`, which look like a size and are not: they name a *source* rectangle to
+            // crop the image by, so the pixels sent there would cut the picture down and leave it
+            // drawn at its own resolution inside a box of a different one.
+            cols: Some(cols),
+            rows: Some(rows),
             // Behind the text *and* behind the cell backgrounds, so a window's
             // picture cannot cover another window's content. Ordered among windows by
             // `z`, which is what `stacking` is for.
@@ -396,7 +435,8 @@ impl<F: Format> Session<F> {
         // cause. A frame that is not acknowledged is a frame that was not drawn, not a session
         // that ends.
         let ack_span = tracing::info_span!("image.sync");
-        let synced = tokio::time::timeout(TRANSMIT_TIMEOUT, image.sync().instrument(ack_span)).await;
+        let synced =
+            tokio::time::timeout(TRANSMIT_TIMEOUT, image.sync().instrument(ack_span)).await;
         match synced {
             // `sync` returns nothing; the image is what is stored, and it is still held here.
             Ok(Ok(())) => state.image = Some(image),
@@ -407,7 +447,9 @@ impl<F: Format> Session<F> {
                 return Ok(());
             }
             Err(_) => {
-                tracing::error!("the terminal did not acknowledge a placement within {TRANSMIT_TIMEOUT:?}");
+                tracing::error!(
+                    "the terminal did not acknowledge a placement within {TRANSMIT_TIMEOUT:?}"
+                );
                 return Ok(());
             }
         }
@@ -573,26 +615,9 @@ mod tests {
         // acknowledgement of its own transmit: a test that drained the pipe after the message would
         // be waiting on a reply it has not read yet.
         let (answers, replies) = std::io::pipe().expect("a pipe for the terminal's answers");
-        let (controller, escapes, input) =
+        let (controller, input) =
             easytgp::Controller::init_with_pipe(answers).expect("the controller's pipes");
         drop(input);
-        let written_by_the_screen = written.clone();
-        std::thread::spawn(move || {
-            let mut screen = Terminal {
-                written: written_by_the_screen,
-                keys: Mutex::new(replies),
-            };
-            let mut escapes = std::io::BufReader::with_capacity(64 * 1024, escapes);
-            loop {
-                match wire::drain::drain_reader(&mut escapes) {
-                    Ok(Some(drawn)) => screen.write_all(&drawn).expect("the terminal takes it"),
-                    // Nothing written yet: the library writes from a thread of its own, so this is
-                    // the normal state between frames rather than a failure.
-                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(1)),
-                    Err(e) => panic!("the escape pipe broke: {e}"),
-                }
-            }
-        });
 
         let mut terminal = Screen(written.clone());
 
@@ -654,11 +679,12 @@ mod tests {
         // below `INT32_MIN / 2` — a window's box is full of background colour, so a picture at or
         // above that boundary would be covered by the cells it exists to sit behind. Rank 0 is the
         // furthest back, so it is the floor of the range and not the boundary.
+        assert!(first.contains(&format!("z={}", stacking(0))), "{first:?}");
         assert!(
-            first.contains(&format!("z={}", stacking(0))),
-            "{first:?}"
+            stacking(0) < i32::MIN / 2,
+            "under the backgrounds: {}",
+            stacking(0)
         );
-        assert!(stacking(0) < i32::MIN / 2, "under the backgrounds: {}", stacking(0));
         assert!(first.contains("p=98"), "{first:?}");
         // Without this the terminal moves the cursor by the placement's box once per frame, which
         // walks the picture down the screen.

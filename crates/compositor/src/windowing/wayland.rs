@@ -196,9 +196,16 @@ impl StatefulWindow for WaylandWindow {
             return Ok(());
         }
 
+        // The box the picture is scaled into, in cells. The window's own rectangle rather than a
+        // measurement of the capture: the far side places the picture on a grid of cells, and the
+        // compositor is the side that decided which cells those are.
+        let area = self.state().area;
+
         let frame = wire::message::Message::Frame {
             surface,
             z,
+            cols: u32::from(area.width),
+            rows: u32::from(area.height),
             bytes,
         };
         send(link, &frame)
