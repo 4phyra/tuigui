@@ -7,6 +7,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 /// Fire all pending frame callbacks on a window's surface tree, and its
 /// subsurfaces' — the "you may draw the next frame" signal a client waits on
 /// after registering one with `wl_surface.frame`.
+#[tracing::instrument(name = "wayland.frame_callbacks", skip_all)]
 pub(crate) fn fire_frame_callbacks(surface: &WlSurface) {
     smithay::wayland::compositor::with_surface_tree_downward(
         surface,
@@ -71,7 +72,7 @@ pub(crate) fn proc_parent(pid: u32) -> Option<u32> {
 /// number. Cropping assumes the two agree, which loses a client's right and
 /// bottom edges when it renders at a higher density and leaves it in a corner
 /// when it does not.
-#[tracing::instrument(name = "map_rgba", skip(buffer, out))]
+#[tracing::instrument(name = "wayland.map_rgba", skip(buffer, out))]
 pub(crate) fn map_rgba(
     buffer: &smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
     out: &mut Vec<u8>,
@@ -176,7 +177,7 @@ fn opaque_bounds(src: &[u8], stride: usize, size: (usize, usize)) -> (usize, usi
 ///
 /// `src` is `src_size.0 * 4` bytes of picture per row with `src_stride` bytes
 /// between rows, and `dst` is written densely at `dst_size.0 * 4` per row.
-#[tracing::instrument(name = "scale_bgra", skip(src, dst))]
+#[tracing::instrument(name = "wayland.scale_bgra", skip(src, dst))]
 fn scale_bgra(
     src: &[u8],
     src_stride: usize,

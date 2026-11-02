@@ -53,6 +53,7 @@ impl State {
     /// the trust chain — and is attached to that parent's sub-clients. A
     /// connection whose parent is unknown is warned about and dropped: there is
     /// nothing to attach it to.
+    #[tracing::instrument(name = "wayland.accept_client", skip_all)]
     pub(crate) fn accept_client(&mut self, stream: UnixStream) -> Result<(), CompError> {
         let root = self
             .root_client

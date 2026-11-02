@@ -25,7 +25,7 @@ impl CompositorHandler for State
             .expect("client has neither RootClient, SubClient nor XWaylandClientData")
     }
 
-    #[tracing::instrument(name = "commit", skip_all)]
+    #[tracing::instrument(name = "wayland.commit", skip_all)]
     fn commit(&mut self, surface: &WlSurface) {
         // Software compositing: read the committed buffer straight into the
         // owning client's window and accumulate damage. (No renderer-side
@@ -94,6 +94,7 @@ impl CompositorHandler for State
 /// The buffer is still released here for the same reason — a client waiting on
 /// `wl_buffer.release` would otherwise never draw again, and the window would be waiting
 /// for a picture from a client that is waiting for its buffer.
+#[tracing::instrument(name = "wayland.hold", skip_all)]
 fn hold(state: &mut State, surface: &WlSurface, out_size: (u32, u32))
 {
     let mut pixels = Vec::new();
@@ -122,6 +123,7 @@ fn hold(state: &mut State, surface: &WlSurface, out_size: (u32, u32))
 }
 
 /// Read the committed buffer into `win`'s pixel store.
+#[tracing::instrument(name = "wayland.commit_into", skip_all)]
 fn commit_into(win: &crate::window::Window, out_size: (u32, u32), surface: &WlSurface) {
     let mut any_pixels = false;
     // Buffer consumed this commit; we `memcpy` its contents in `map_rgba`,

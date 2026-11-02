@@ -211,6 +211,7 @@ pub const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// FIXME: this should go. A draw that blocks on a socket is a draw waiting for
 /// another process, and the frame loop should hand its messages over instead of
 /// writing them itself.
+#[tracing::instrument(name = "windowing.send", skip(link, message))]
 pub fn send(
     link: &wire::transport::Connection,
     message: &wire::message::Message,

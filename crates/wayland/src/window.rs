@@ -116,6 +116,7 @@ impl Window {
     /// frame too early and the client runs one encode period ahead. Move it
     /// to the presentation point (or gate it on the encode queue being empty)
     /// at that point.
+    #[tracing::instrument(name = "wayland.capture", skip_all)]
     pub fn capture(&self) -> Option<(Vec<u8>, (u32, u32))> {
         if !self.surface.committed.load(Ordering::Acquire) {
             return None;

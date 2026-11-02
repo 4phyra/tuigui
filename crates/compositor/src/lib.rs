@@ -160,6 +160,7 @@ impl<T: WindowingServer> Compositor<T> {
     /// caller: it is the only place the pane's size in **pixels** comes from, and
     /// a terminal may change it without changing its grid — a font that grew is a
     /// bigger picture of the same number of cells.
+    #[tracing::instrument(name = "compositor.frame", skip_all)]
     pub fn frame(
         &mut self,
         link: &wire::transport::Connection,
@@ -216,6 +217,7 @@ impl<T: WindowingServer> Compositor<T> {
     /// pixels, and the cells merely say where that picture goes. Configuring the
     /// program at the cell count instead gives it a window of `80x24` pixels for
     /// the pane to stretch over `80x24` cells.
+    #[tracing::instrument(name = "compositor.resize", skip_all)]
     fn maybe_resize_root(
         &mut self,
         root: &Arc<dyn StatefulWindow>,
@@ -272,6 +274,7 @@ impl<T: WindowingServer> Compositor<T> {
 
     /// Bring the stack up to date with the session: drop what died, add what is
     /// new, keep everything else as it is, chrome and drag included.
+    #[tracing::instrument(name = "compositor.sync", skip_all)]
     fn sync(&mut self, root: Arc<dyn StatefulWindow>) {
         // Bottom first, which is the order the stack is kept in: the root, then
         // everything under it, each window after the one it was opened from.
@@ -364,6 +367,7 @@ const WALK_BUDGET: usize = 256;
 
 /// Walk a window's children into `out`, each before its own: a window is
 /// drawn under the windows it opened.
+#[tracing::instrument(name = "compositor.collect", skip_all)]
 fn collect(window: &Arc<dyn StatefulWindow>) -> Vec<Arc<dyn StatefulWindow>> {
     let mut out = Vec::new();
     let mut left = WALK_BUDGET;

@@ -95,7 +95,7 @@ pub struct WaylandServer {
 impl WaylandServer {
     /// Start the headless session: display, private socket, the single output,
     /// the seat, and (when asked) the XWayland server.
-    #[tracing::instrument(name = "server.new", skip_all)]
+    #[tracing::instrument(name = "wayland.new", skip_all)]
     pub fn new(options: Options) -> Result<Self, CompError> {
         // A private runtime dir, isolated from the caller's (Hyprland's): the
         // child's `XDG_RUNTIME_DIR` points here, so the only Wayland socket it
@@ -308,7 +308,7 @@ impl WaylandServer {
     /// Nothing is waited for. The child has not connected yet, so it has no
     /// window: the caller learns about both by advancing the server and asking
     /// `root_tree` again, which is what makes the loop the caller's to own.
-    #[tracing::instrument(name = "server.spawn", skip_all)]
+    #[tracing::instrument(name = "wayland.spawn", skip_all)]
     pub fn spawn(
         &mut self,
         path: &std::path::Path,
@@ -377,7 +377,7 @@ impl WaylandServer {
     ///
     /// The server only moves forward when this is called, so the caller's loop
     /// is the session's heartbeat.
-    #[tracing::instrument(name = "server.step", skip(self))]
+    #[tracing::instrument(name = "wayland.step", skip(self))]
     pub fn step(&mut self, timeout: Duration) {
         let WaylandServer {
             state,
@@ -389,24 +389,43 @@ impl WaylandServer {
 
         // New clients on our private socket. The socket is polled here rather
         // than as a loop source, so `step` owns every part of the turn.
-        while let Ok(Some(stream)) = socket.accept() {
-            if let Err(e) = state.accept_client(stream) {
-                log::warn!("a connection was not admitted: {e}");
+        {
+            let _accept = tracing::info_span!("wayland.step.accept").entered();
+            while let Ok(Some(stream)) = socket.accept() {
+                if let Err(e) = state.accept_client(stream) {
+                    log::warn!("a connection was not admitted: {e}");
+                }
             }
         }
 
         // Queued inputs dispatch here, against the window each queue came
         // from, so they land at a well-defined point in the protocol stream.
-        state.dispatch_inputs();
+        {
+            let _inputs = tracing::info_span!("wayland.step.inputs").entered();
+            state.dispatch_inputs();
+        }
 
-        if let Err(e) = event_loop.dispatch(Some(timeout), state) {
-            log::warn!("the event loop did not dispatch: {e}");
+        {
+            let _dispatch = tracing::info_span!("wayland.step.event_loop").entered();
+            // A zero wait, not `None`. `None` is calloop's "wait without a duration limit",
+            // which parks this call until a client says something — and since this loop is
+            // what steps the session, that stops everything from drawing. Zero takes what has
+            // arrived since the last step and returns, so the caller's tick is the only pace.
+            if let Err(e) = event_loop.dispatch(Some(Duration::ZERO), state) {
+                log::warn!("the event loop did not dispatch: {e}");
+            }
         }
-        if let Err(e) = display.dispatch_clients(state) {
-            log::warn!("the display did not dispatch: {e}");
+        {
+            let _clients = tracing::info_span!("wayland.step.clients").entered();
+            if let Err(e) = display.dispatch_clients(state) {
+                log::warn!("the display did not dispatch: {e}");
+            }
         }
-        if let Err(e) = display.flush_clients() {
-            log::warn!("the display did not flush: {e}");
+        {
+            let _flush = tracing::info_span!("wayland.step.flush").entered();
+            if let Err(e) = display.flush_clients() {
+                log::warn!("the display did not flush: {e}");
+            }
         }
     }
 

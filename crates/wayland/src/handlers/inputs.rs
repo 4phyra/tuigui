@@ -41,6 +41,7 @@ impl State {
     /// Called by `step`, so inputs land at a well-defined point in the protocol
     /// stream. The walk is the client tree's own: the root dispatches its window
     /// tree, then every helper it started.
+    #[tracing::instrument(name = "wayland.dispatch_inputs", skip_all)]
     pub(crate) fn dispatch_inputs(&mut self) {
         // Cloned out of the field so the borrow of `self` ends before the walk needs it
         // mutably: the record is behind an `Arc`, so this is a share of one count.
@@ -57,6 +58,7 @@ impl State {
     /// control, press `c`, release `c`, release control. The modifiers hold for
     /// the group, which is why they are pressed once around it rather than per
     /// event.
+    #[tracing::instrument(name = "wayland.dispatch_key", skip_all)]
     pub(crate) fn dispatch_key_input(
         &mut self,
         focus: &WlSurface,
@@ -98,6 +100,7 @@ impl State {
     /// Only the focused surface releases, because the pressed keys are the seat's and the
     /// seat has one recipient: every other window in the walk has an empty queue, and
     /// would let go of the key the focused one just pressed.
+    #[tracing::instrument(name = "wayland.release_unrenewed", skip_all)]
     pub(crate) fn release_unrenewed(&mut self, focus: &WlSurface, queue: &[KeyboardEvent]) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
@@ -121,6 +124,7 @@ impl State {
     }
 
     /// Deliver one pointer event to `focus`.
+    #[tracing::instrument(name = "wayland.dispatch_mouse", skip_all)]
     pub(crate) fn dispatch_mouse_input(
         &mut self,
         focus: &WlSurface,

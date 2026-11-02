@@ -19,6 +19,7 @@ impl XdgShellHandler for State
         &mut self.globals.xdg_shell_state
     }
 
+    #[tracing::instrument(name = "wayland.new_toplevel", skip_all)]
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         tracing::debug!("compositor: new toplevel requested");
         let client = surface
@@ -45,6 +46,7 @@ impl XdgShellHandler for State
         surface.send_close();
     }
 
+    #[tracing::instrument(name = "wayland.toplevel_destroyed", skip_all)]
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let Some(client) = surface.wl_surface().client() else { return };
         if let Some(root) = client.get_data::<RootClient>() {

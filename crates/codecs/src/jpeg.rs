@@ -39,6 +39,7 @@ impl Encoder {
 }
 
 impl crate::Encoder for Encoder {
+    #[tracing::instrument(name = "codec.encode", skip_all)]
     fn encode(
         &mut self,
         bgra: &[u8],

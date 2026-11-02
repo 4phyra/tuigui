@@ -63,6 +63,27 @@ impl WaylandWindow {
             announced: std::sync::atomic::AtomicBool::new(false),
         }
     }
+
+    /// Encode one captured frame, building the encoder on the first one.
+    ///
+    /// The encoder is made for a size, and the size is only known once the window has drawn,
+    /// which is why it cannot be built with the window. The lock is released before the caller
+    /// sends, so a link that stalls holds nothing but the frame.
+    #[tracing::instrument(name = "window.encode", skip(self, pixels))]
+    fn encode(&self, pixels: &[u8], size: (u32, u32)) -> Result<Vec<u8>, super::Error> {
+        let mut held = self.encoder.lock().unwrap();
+        let encoder = match held.as_mut() {
+            Some(encoder) => encoder,
+            None => held.insert(
+                self.codec
+                    .to_encoder(size)
+                    .map_err(|e| super::Error::Build(e.to_string()))?,
+            ),
+        };
+        encoder
+            .encode(pixels, size.0, size.1, false)
+            .map_err(|e| super::Error::Encode(e.to_string()))
+    }
 }
 
 impl WaylandServer {
@@ -114,6 +135,7 @@ impl WindowingServer for WaylandServer {
         Ok(None)
     }
 
+    #[tracing::instrument(name = "compositor.advance", skip_all)]
     fn advance(&mut self, timeout: std::time::Duration) {
         self.inner.step(timeout);
     }
@@ -152,6 +174,7 @@ impl StatefulWindow for WaylandWindow {
     /// later one sends the picture alone. Announcement precedes the frame because
     /// the far side places what it has been told about: a frame for a window it
     /// has never heard of is a frame it drops.
+    #[tracing::instrument(name = "window.capture", skip_all)]
     fn capture(&self, link: &wire::transport::Connection, z: u32) -> Result<(), super::Error> {
         let surface = *self.inner.id();
         if !self
@@ -176,20 +199,7 @@ impl StatefulWindow for WaylandWindow {
         // Built once, on the first frame: an encoder is made for a size, and the
         // size is only known once the window has drawn. The lock is released
         // before the send, so a link that stalls holds nothing but the frame.
-        let bytes = {
-            let mut held = self.encoder.lock().unwrap();
-            let encoder = match held.as_mut() {
-                Some(encoder) => encoder,
-                None => held.insert(
-                    self.codec
-                        .to_encoder(size)
-                        .map_err(|e| super::Error::Build(e.to_string()))?,
-                ),
-            };
-            encoder
-                .encode(&pixels, size.0, size.1, false)
-                .map_err(|e| super::Error::Encode(e.to_string()))?
-        };
+        let bytes = self.encode(&pixels, size)?;
         // Nothing to send is not a failure: a codec holding a frame back has
         // nothing for the wire yet.
         if bytes.is_empty() {
@@ -216,6 +226,7 @@ impl StatefulWindow for WaylandWindow {
     /// Only when it differs from what the window was last asked for: this is
     /// called every frame, and a configure per frame is a client re-laying itself
     /// out per frame.
+    #[tracing::instrument(name = "window.set_size", skip_all)]
     fn set_size(&self, size: (u32, u32)) {
         if self.inner.size() != size {
             self.inner.set_size(size);
@@ -233,6 +244,7 @@ impl StatefulWindow for WaylandWindow {
     /// The windows this one's program opened after it, and the root windows of the
     /// helper clients it started. Each is minted once and kept, so the compositor
     /// sees the same window as last frame.
+    #[tracing::instrument(name = "window.children", skip_all)]
     fn get_children(&self) -> Vec<Weak<dyn StatefulWindow>> {
         let descendants = self.inner.descendants();
         let mut children = self.children.write().unwrap();
