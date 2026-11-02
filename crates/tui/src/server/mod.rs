@@ -109,51 +109,66 @@ impl<F: Format> Server<F> {
         master_r: &mut (impl tokio::io::AsyncBufRead + Unpin),
         sink_w: &mut impl std::io::Write,
     ) -> io::Result<()> {
+        // Where the windows were, as of the last pass that read any output. A pass with nothing to
+        // read learns nothing about the screen, so what the last one found is still the answer.
+        let mut positions = std::collections::HashMap::new();
         loop {
-            let Some(master_bytes_chunk) = wire::drain::drain_reader_async(master_r).await? else {
-                return Ok(());
-            };
-            let master_bytes_chunk = master_bytes_chunk.as_slice();
+            match wire::drain::drain_reader_async(master_r).await? {
+                // Output to rewrite, a screen to scan, and possibly a client to dial.
+                Some(master_bytes) if !master_bytes.is_empty() => {
+                    let master_bytes_chunk = master_bytes.as_slice();
 
-            // Every window's cells, worked out once and used by both the filter and the scan: they are
-            // the same question — which cells belong to a window — asked of the same list.
-            let surfaces = self.collect_surfaces();
+                    // Every window's cells, worked out once and used by both the filter and the scan:
+                    // they are the same question — which cells belong to a window — asked of the same
+                    // list.
+                    let surfaces = self.collect_surfaces();
 
-            // What the terminal is written: the same bytes with every window's cells blanked, so the
-            // picture behind them shows through.
-            self.filter
-                .feed(master_bytes_chunk, &mut self.terminal, sink_w, &surfaces)
-                .await?;
+                    // What the terminal is written: the same bytes with every window's cells blanked,
+                    // so the picture behind them shows through.
+                    self.filter
+                        .feed(master_bytes_chunk, &mut self.terminal, sink_w, &surfaces)
+                        .await?;
 
-            // And the screen the scan reads, which is the command's own drawing rather than the
-            // rewritten stream: a window's cells are found where it drew them.
-            self.scanner.feed(master_bytes_chunk);
-            let positions = self.scanner.scan_positions(&surfaces);
+                    // And the screen the scan reads, which is the command's own drawing rather than
+                    // the rewritten stream: a window's cells are found where it drew them.
+                    self.scanner.feed(master_bytes_chunk);
+                    positions = self.scanner.scan_positions(&surfaces);
 
-            // A client that cannot be dialed says so by drawing its address, and the scan is what
-            // turns that into a channel.
-            //
-            // One client at a time, for now. The scan reports the longest run of braille on the
-            // screen, which is one announcement, so there is one address to dial and one session
-            // to make of it. The wait is local rather than stored: a future kept in a field is a
-            // future holding the link's lock across steps, which starved every read of it.
-            //
-            // TODO: several panes are several announcements on one screen, so this is where it
-            // stops being one. `scan_barcode` has to report every run it parses rather than the
-            // longest, a session has to carry the announcement it came from, and the dial has to
-            // skip the ones already attached — a client that has answered is no longer listening,
-            // so greeting it again is a wait nothing ends.
-            if self.sessions.is_empty() {
-                if let Some(announced) = self.scanner.scan_barcode() {
-                    match announced.connect().await {
-                        Ok(connection) => self.sessions.push(Session::new(
-                            connection,
-                            self.debug.clone(),
-                            self.controller.clone(),
-                        )),
-                        Err(e) => tracing::warn!("could not reach an announced client: {e}"),
+                    // A client that cannot be dialed says so by drawing its address, and the scan is
+                    // what turns that into a channel.
+                    //
+                    // One client at a time, for now. The scan reports the longest run of braille on
+                    // the screen, which is one announcement, so there is one address to dial and one
+                    // session to make of it. The wait is local rather than stored: a future kept in a
+                    // field is a future holding the link's lock across steps, which starved every
+                    // read of it.
+                    //
+                    // TODO: several panes are several announcements on one screen, so this is where
+                    // it stops being one. `scan_barcode` has to report every run it parses rather
+                    // than the longest, a session has to carry the announcement it came from, and the
+                    // dial has to skip the ones already attached — a client that has answered is no
+                    // longer listening, so greeting it again is a wait nothing ends.
+                    if self.sessions.is_empty() {
+                        if let Some(announced) = self.scanner.scan_barcode() {
+                            match announced.connect().await {
+                                Ok(connection) => self.sessions.push(Session::new(
+                                    connection,
+                                    self.debug.clone(),
+                                    self.controller.clone(),
+                                )),
+                                Err(e) => {
+                                    tracing::warn!("could not reach an announced client: {e}")
+                                }
+                            }
+                        }
                     }
                 }
+                // Nothing waiting. The screen is untouched, so the scan of it is skipped: walking
+                // every cell to rediscover where the windows already are is the most expensive thing
+                // in here, and a quiet command would pay it on every pass.
+                Some(_) => {}
+                // The pty is closed, which is the command exiting.
+                None => return Ok(()),
             }
 
             // Every session's turn, with the positions they share. Read by reference, so the sessions
@@ -165,6 +180,14 @@ impl<F: Format> Server<F> {
             for session in &mut self.sessions {
                 session.handle(&positions, sink_w).await?;
             }
+
+            // Handed back to the runtime at the end of every pass, whatever the pass did. Nothing
+            // above can park this loop: the read answers with whatever is waiting instead of waiting
+            // for more, and a quiet client's `recv_next` answers too. A loop that only ever returns
+            // `Ready` never gives the runtime its thread back, so the `select!` that drives this
+            // against the command's own half — the arm that reads `SIGWINCH` — is never polled
+            // again, and a resize goes unnoticed while the pane keeps its old shape.
+            tokio::task::yield_now().await;
         }
     }
 
