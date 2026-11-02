@@ -12,11 +12,10 @@
 //!   either ──▶ Error         something failed; the peer decides what to do
 //! ```
 //!
-//! Two of them are about more than one window. `InitClient` tells the server what
-//! its compositor admitted: which process, and which cells it draws into. The tree
-//! that grows from those facts is the server's own business, built by matching a
-//! helper's parent pid. `CompositorRequest` is the way back down: the server asks
-//! the compositor to act, and the client that owns it forwards the request.
+//! Two of them are about more than one window. `OpenWindow` says a window exists and which cells
+//! it draws into; `CloseWindow` says it is gone. The stacking order is the order those arrive in,
+//! which is why nothing carries a z index to keep in step. `CompositorRequest` is the way back
+//! down: the server asks the compositor to act, and the client that owns it forwards the request.
 //!
 //! The pair is a handshake, not a formality. `Ping` is how the client learns its
 //! request was *accepted* — a different fact from its socket being open, since a
@@ -51,17 +50,15 @@ pub enum Message {
     Pong,
     /// One frame, in whatever the transport carries.
     ///
-    /// Opaque here on purpose: a transport that had to understand a frame's
-    /// internals could not carry one it had never heard of. What it does name is
-    /// the window the frame belongs to, because a session holds more than one and
-    /// a decoder is per window: without the surface there is no way to know which
-    /// stream this stretch continues. The pid names which client's tree to look in,
-    /// which is the other half of the same lookup.
+    /// Opaque here on purpose: a transport that had to understand a frame's internals could not
+    /// carry one it had never heard of. What it does name is the window the frame belongs to,
+    /// because a session holds more than one and a decoder is per window: without the surface
+    /// there is no way to know which stream this stretch continues.
     Frame {
-        /// The process whose program draws this window, and so whose stream this is.
-        pid: u32,
         /// The cells of the window this frame draws.
         surface: SurfaceId,
+
+        z: u32, // 0 - behind everything, bigger - closer to the user.
         /// The codec's bytes, opaque to the link.
         bytes: Vec<u8>,
     },
@@ -71,24 +68,6 @@ pub enum Message {
     /// receives it is on another machine, and an `ErrorKind` from *there* would
     /// name a condition that does not exist *here*. The text is for a human.
     Error(String),
-    /// The codec this session streams with, announced by the client that encodes.
-    ///
-    /// Sent once, right after the handshake: every `Frame` that follows is in
-    /// that codec, and the decoder that reads them is built from this and kept.
-    /// It exists so a client and a server agree on a codec without either
-    /// assuming the other: a server that learns the codec here is one that can
-    /// be written without knowing the client's source.
-    InitStreaming {
-        /// The codec every frame that follows is in.
-        codec: CodecId,
-    },
-    /// The decoder on the server is gone; send a fresh keyframe.
-    ///
-    /// Sent by the server when its decoder can no longer follow the stream — a
-    /// decode that failed, a reset. It asks for a picture a decoder that has
-    /// lost all of its state can start from, which is a keyframe encoded now,
-    /// not a replay of the last frame.
-    ReinitStreaming,
     /// A request from the server to the compositor inside the client.
     ///
     /// The compositor is what owns the window tree, so anything that has to
@@ -96,48 +75,26 @@ pub enum Message {
     /// here rather than decided by the server. The variant carries the request;
     /// the client forwards it and the compositor answers.
     CompositorRequest(CompositorAddressible),
-    /// A client connected to the client's compositor: the program itself, or a
-    /// helper it started.
+    /// A window opened, and draws into these cells from now on.
     ///
-    /// Sent when the client's first window is ready to be drawn, not when the
-    /// connection opens: a client with no window is a process the server has nothing
-    /// to say to, and reporting it earlier would only be a fact that changes a
-    /// moment later.
-    InitClient {
-        /// The process id, which is what a helper is matched to its parent by.
-        pid: u32,
-        /// The signature this client's root window draws into.
-        surface: SurfaceId,
-        /// Where that window sits in the stacking order, higher in front.
-        z: i32,
-    },
-    /// A client's program opened another toplevel, beside its root window.
-    ///
-    /// Not a sub-client: the window belongs to a connection the server already
-    /// knows, and is addressed under it.
-    NewWindow {
-        /// The process whose program opened it.
-        pid: u32,
+    /// The **only** thing that brings a window into being: the surface is registered, the box its
+    /// cells occupy is where its picture goes, and a frame naming it is one the server can place.
+    /// Sent when the window is ready to be drawn, not when the connection opens — a window with
+    /// nothing in it is one the server has nothing to say to.
+    OpenWindow {
         /// The signature this window draws into, and the name it is placed under.
         surface: SurfaceId,
-        /// Where it sits in the stacking order, higher in front.
-        z: i32,
+        /// The codec this window's frames are in.
+        ///
+        /// Carried here rather than announced once per session because it belongs to the window:
+        /// two windows are two streams, and a program that opens its second one in another codec
+        /// would otherwise either re-announce for the whole session or be silently mis-decoded.
+        codec: CodecId,
     },
     /// A window closed. Its cells are gone, so nothing has to be said about those.
-    DeleteWindow {
+    CloseWindow {
         /// The signature the window drew into.
         surface: SurfaceId,
-    },
-    /// A window moved in the stacking order.
-    ///
-    /// Sent instead of a new placement: the pixels did not change, only which
-    /// window is in front. A terminal re-orders what it already has, so this costs
-    /// no image traffic.
-    Restack {
-        /// The signature the window draws into.
-        surface: SurfaceId,
-        /// Its new place in the stacking order, higher in front.
-        z: i32,
     },
 }
 
@@ -232,7 +189,11 @@ fn colour(seed: u64) -> (u8, u8, u8) {
     hasher.write_u64(seed);
     let value = hasher.finish().to_le_bytes();
     // 1..=254: never a pure black or a pure white, both of which read as "no colour".
-    (value[0].clamp(1, 254), value[1].clamp(1, 254), value[2].clamp(1, 254))
+    (
+        value[0].clamp(1, 254),
+        value[1].clamp(1, 254),
+        value[2].clamp(1, 254),
+    )
 }
 
 /// A request from the server down to the compositor.
@@ -291,56 +252,38 @@ mod tests {
             Message::Ping(String::new()),
             Message::Pong,
             Message::Frame {
-                pid: 4242,
                 surface: SurfaceId {
                     symbol: '❋',
                     fg: (1, 2, 3),
                     bg: (4, 5, 6),
                 },
+                z: 0,
                 bytes: b"raw frame bytes".to_vec(),
             },
             // Not text, so a codec that assumed UTF-8 would show up here.
             Message::Frame {
-                pid: 1,
                 surface: SurfaceId {
                     symbol: '\u{10eeee}',
                     fg: (0, 0, 0),
                     bg: (255, 255, 255),
                 },
+                z: 9,
                 bytes: vec![0x00, 0xff, 0x1b, 0x9b],
             },
-            Message::InitClient {
-                pid: 4242,
+            Message::OpenWindow {
                 surface: SurfaceId {
                     symbol: '❋',
                     fg: (9, 8, 7),
                     bg: (6, 5, 4),
                 },
-                z: -1_073_741_824,
+                codec: CodecId::H264,
             },
-            Message::NewWindow {
-                pid: 4242,
+            Message::CloseWindow {
                 surface: SurfaceId {
                     symbol: '✳',
                     fg: (1, 1, 1),
                     bg: (2, 2, 2),
                 },
-                z: 7,
-            },
-            Message::DeleteWindow {
-                surface: SurfaceId {
-                    symbol: '✳',
-                    fg: (1, 1, 1),
-                    bg: (2, 2, 2),
-                },
-            },
-            Message::Restack {
-                surface: SurfaceId {
-                    symbol: '✳',
-                    fg: (1, 1, 1),
-                    bg: (2, 2, 2),
-                },
-                z: 9,
             },
             Message::Error("the peer refused the frame".into()),
             Message::Error(String::new()),
@@ -373,7 +316,9 @@ mod tests {
         );
         // A real message cut in half: the archive is complete-shaped, so a
         // truncated body is caught by validation rather than by chance.
-        let mut full = Message::Ping("a label".into()).to_bytes().expect("serializes");
+        let mut full = Message::Ping("a label".into())
+            .to_bytes()
+            .expect("serializes");
         full.truncate(full.len() / 2);
         assert!(
             Message::from_bytes(&full).is_err(),

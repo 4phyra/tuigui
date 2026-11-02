@@ -10,6 +10,12 @@ wire = { workspace = true }
 # The stream rewrite: cells of a registered surface are blanked on their way to the
 # terminal, so the image behind them is visible.
 cell_map = { workspace = true }
+# A client's announcement as braille cells: the scan reads a run back into the string the
+# transports already know how to parse.
+cellcode = { workspace = true }
+# `Default` on a type that wraps one: std's derive would reach into the tuple field by hand,
+# where the wrapper's job is to be exactly that field's default.
+better_default = { workspace = true }
 # The screen the command is drawing into. Shared between the proxy that feeds it
 # and the server that reads it, so there is one answer to "what is on screen".
 vt100 = { workspace = true }

@@ -9,7 +9,7 @@ use ratatui::widgets::{Clear, Widget, WidgetRef};
 use termina::event::MouseEvent;
 
 use super::frame::Frame;
-use crate::compositor::windowing::{StatefulWindow, event_map};
+use crate::windowing::{StatefulWindow, event_map};
 
 /// One window, as the pane draws it and hands events to it.
 pub struct DecoratedWindow {

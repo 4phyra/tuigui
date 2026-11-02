@@ -7,7 +7,7 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::Widget;
 use termina::event::{MouseButton, MouseEvent, MouseEventKind};
 
-use crate::compositor::windowing::{StatefulWindow, WindowState};
+use crate::windowing::{StatefulWindow, WindowState};
 
 /// Eight dots, the standard grip: the bar is what a window is moved by.
 const GRIP: char = '⣿';

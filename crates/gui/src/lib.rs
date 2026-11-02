@@ -19,19 +19,28 @@
 //! drawn, so the step is driven from the draw: one frame is one step. See
 //! [`widget::Session`].
 
-use std::io::{BufReader, Read, Write};
-use std::sync::Arc;
+use std::io::{Read, Write};
 
 use codecs::CodecId;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use widget::{GuiWidget, Session};
 
-use compositor::WindowingServer;
-
-mod compositor;
 mod inputs;
 mod widget;
+
+/// The name, in the block letters a shell prints when it starts.
+///
+/// Written once, before anything else and before a terminal is built, so it lands on the
+/// screen the terminal keeps rather than on one of the two the client draws: the logs screen
+/// anchors its three rows under the cursor, so the name stays above them and scrolls into
+/// history exactly as any other output above the pane does.
+const BANNER: &str = r#"
+ ▗   ▘    ▘
+ ▜▘▌▌▌▛▌▌▌▌
+ ▐▖▙▌▌▙▌▙▌▌
+      ▄▌
+"#;
 
 /// A program to stream into this pane.
 #[derive(Debug, Clone, clap::Parser)]
@@ -129,7 +138,7 @@ impl Gui {
     pub async fn run(
         self,
         stdin: impl Read + std::os::fd::AsRawFd + Send + 'static,
-        stdout: impl Write + Send + 'static,
+        stdout: impl Write + Send + Sync + 'static,
     ) -> std::io::Result<()> {
         // Before anything can fail, so the first failure is in the log rather than missing
         // from it.
@@ -151,14 +160,45 @@ impl Gui {
         // Mouse reporting is the reader's protocol, and nothing turns it on by
         // itself: asked for here, through that same writer, once, with
         // crossterm's own capture — SGR encoding under it, no pixel mode.
+        //
+        // Not asked for yet. While the main screen is up, a captured wheel is a wheel the
+        // terminal can no longer use for its own scrolling: the events come to this
+        // process instead, and the scrollback above the dock is the terminal's, not
+        // something this side can move. So capture follows the screen, and the main screen
+        // leaves the wheel alone.
         let mut stdout = stdout;
-        crossterm::execute!(stdout, crossterm::event::EnableMouseCapture)?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
+
+        // The name, on the terminal's own screen, before either of the two terminals is
+        // built: the inline one anchors to the cursor, so writing first is what puts the
+        // banner above the dock rather than under it.
+        stdout.write_all(BANNER.as_bytes())?;
+
+        // Two terminals, because a `Terminal`'s viewport is fixed when it is built and the
+        // two screens want different answers: the logs screen wants three rows anchored
+        // under the cursor, where lines printed above them scroll into the terminal's own
+        // history, and the stream wants the whole screen with a window on it.
+        //
+        // Each backend gets this process's own stdout rather than a handle to the writer
+        // above, and they never draw at the same time — the loop picks one per frame — so
+        // there is nothing for them to interleave and nothing to share: one writer, two
+        // handles to it, one of them writing at any given moment.
+        //
+        // Both are built before the input thread exists, and that order is not cosmetic:
+        // `Viewport::Inline` asks the terminal where the cursor is, and crossterm reads that
+        // answer off stdin itself. A reader holding stdin would take the reply.
+        let (mut primary_terminal, mut secondary_terminal) = (
+            Terminal::with_options(
+                CrosstermBackend::new(std::io::stdout()),
+                ratatui::TerminalOptions {
+                    viewport: ratatui::Viewport::Inline(widget::DOCK_HEIGHT),
+                },
+            )?,
+            Terminal::new(CrosstermBackend::new(std::io::stdout()))?,
+        );
 
         // The output size is the terminal's own, read once: it is the size the session
         // is created at, and the pane's own report is what resizes it from then on.
-        let output = output_size()?;
+        let size = output_size()?;
 
         // The terminal is asked for its mouse and keyboard events before the
         // session starts, so nothing typed while it connects is lost.
@@ -175,44 +215,70 @@ impl Gui {
         // The pane's input, read and parsed on a thread of its own: a read of
         // the raw terminal blocks until the pane has something to say, and the
         // draw loop cannot sit in that read. Nothing typed while the session
-        // connects is lost — the events wait in the channel until a state
+        // connects is lost — the events wait in the channel until a frame
         // reads them.
-        let input = BufReader::new(Box::new(stdin) as widget::Input);
-        let input_receiver = inputs::start(input)?;
+        //
+        // Handed over rather than started here: reading this terminal is the session's own
+        // business, and it is the session that drains what the reader parses.
+        let input = Box::new(stdin) as widget::Input;
 
-        // The window session this pane composites: the dummy one under
-        // `--dbg-dummy-windowing`, which draws windows nobody is running, the
-        // wayland server otherwise. Boxed once here, so the session does not
-        // care which one it was.
-        let server: Box<dyn WindowingServer> = if self.debug.dummy_windowing {
-            Box::new(compositor::windowing::dummy::DummyServer::default())
-        } else {
-            Box::new(compositor::windowing::wayland::WaylandServer::new(
-                wayland::Options {
-                    resolution: output,
-                    dpi: 1.0,
-                    show_cursor: true,
-                    use_x11: false,
-                },
-                self.streaming.codec(),
-            )?)
-        };
+        // The window session, the input reader, and the dock: all of it is the session's,
+        // built from the switches this client was started with.
         let mut session = Session::new(
-            self.program,
-            output,
-            input_receiver,
+            self.debug.dummy_windowing,
+            size,
             self.streaming.codec(),
-            server,
-            Arc::new(self.debug),
-        );
+            input,
+            self.program.display().to_string(),
+        )
+        .await?;
 
+        // Two modes, set once and never toggled, because both belong to the terminal device
+        // rather than to a screen: the alternate screen is a grid the terminal keeps for as
+        // long as it is asked for, and mouse tracking is one mode on the tty — which these
+        // two terminals share through `SharedStdout`, so asking twice is asking once.
+
+        let mut was_alternate = false;
         loop {
-            // The frame's span is on `GuiWidget::render`, which is what one call
-            // to `draw` actually is.
-            terminal.draw(|frame| {
+            if session.is_alternate() {
+                if !was_alternate {
+                    crossterm::execute!(
+                        secondary_terminal.backend_mut(),
+                        crossterm::terminal::EnterAlternateScreen,
+                        crossterm::event::EnableMouseCapture
+                    )?;
+                }
+
+                was_alternate = true;
+
+                &mut secondary_terminal
+            } else {
+                if was_alternate {
+                    crossterm::execute!(
+                        secondary_terminal.backend_mut(),
+                        crossterm::terminal::LeaveAlternateScreen,
+                        crossterm::event::DisableMouseCapture
+                    )?;
+                }
+
+                &mut primary_terminal
+            }
+            .draw(|frame| {
                 frame.render_stateful_widget(GuiWidget::default(), frame.area(), &mut session)
             })?;
+
             if session.done() {
+                // The same pair the loop leaves with, for the same reason: ending on the
+                // stream's screen leaves the logs screen behind rather than a hole, and a
+                // wheel handed over to the stream is handed back. Guarded, so a session that
+                // never streamed does not ask for a screen it never entered.
+                if was_alternate {
+                    crossterm::execute!(
+                        secondary_terminal.backend_mut(),
+                        crossterm::terminal::LeaveAlternateScreen,
+                        crossterm::event::DisableMouseCapture
+                    )?;
+                }
                 return Ok(());
             }
         }
@@ -305,7 +371,11 @@ fn install_logger() -> std::path::PathBuf {
         file: std::sync::Mutex::new(file),
     });
     log::set_logger(capturer).expect("the log is installed once, before anything logs");
-    log::set_max_level(log::LevelFilter::Trace);
+    // `Debug`, not `Trace`: trace is where `tracing` puts every span enter and exit, so a
+    // `trace` level here captures a line per frame per span — gigabytes of them, from every
+    // process, into one file. What is wanted from this log is what the client decided, and
+    // that is `debug` and above.
+    log::set_max_level(log::LevelFilter::Debug);
     path
 }
 
@@ -377,7 +447,7 @@ fn install_tracing() -> std::io::Result<()> {
     Ok(())
 }
 
-/// The one logger: every record is appended to the log file.
+/// The one logger: every record is appended to the log file, and kept for the screen.
 ///
 /// Appended and never truncated, so a session's lines are not lost by the next session and
 /// a client that was killed outright still left its log behind.

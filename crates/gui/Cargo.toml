@@ -7,7 +7,13 @@ description = "Client side: draw a runnable's output into the pane the tui serve
 
 [dependencies]
 wire = { workspace = true }
-easytgp = { workspace = true }
+# The announcement, written as cells rather than as text: the same string in a handful of
+# columns, which is what a dock three rows tall can spare.
+cellcode = { workspace = true }
+# The windows: which program's window is in front, what it is called, and the
+# capture that turns it into a frame. The client composites; it does not know how a
+# window is driven.
+compositor = { workspace = true }
 # `unstable-widget-ref`: a window draws itself through a shared reference, so
 # a window is a `WidgetRef` rather than a `Widget` consumed by the draw.
 ratatui = { workspace = true, features = ["unstable-widget-ref"] }
@@ -19,19 +25,18 @@ wayland = { workspace = true }
 # The terminal's input parser: raw bytes from the pane go in, typed events
 # (keys, mouse, protocol responses) come out.
 termina = { workspace = true }
-# What an event becomes for a window: W3C UI Events as data. `dpi` is the
-# coordinate type those events are expressed in — physical pixels, as f64.
-ui-events = { workspace = true }
-dpi = "0.1"
-# The capybara demo image, converted to ANSI art cells (halftone).
-halftone = { version = "0.10", default-features = false }
 # The codec the client encodes with, behind the trait a codec can be swapped
 # behind. Which codec it is, is announced on the wire, not assumed here.
 codecs = { workspace = true }
-ffmpeg-sidecar = { workspace = true }
 rustix = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
+# Where the program's output waits while its window is on screen: the thread
+# reading the pipe produces, the frame that prints consumes.
+ringbuf = { workspace = true }
+# `Default` on a widget that names the type of its state without storing one: std's derive
+# would demand `T: Default` of the window session, which a `Box<dyn WindowingServer>` is not.
+better_default = { workspace = true }
 # `poll!`, for the two steps that must not block: the dial and the program's start have
 # to let their frame finish before anything they drew can reach the terminal.
 futures = "0.3"

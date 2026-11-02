@@ -1,0 +1,39 @@
+[package]
+name = "compositor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The session's windows: the programs running in a compositor of ours, drawn as panes"
+
+[dependencies]
+# The pixels a window sends: a codec turns a window's capture into a stream, and
+# which codec it is is announced on the wire rather than assumed here.
+codecs = { workspace = true }
+# The messages and the link: a window announces itself and sends its own frame,
+# so this crate talks to the wire rather than being handed an encoder by its host.
+wire = { workspace = true }
+# The real window session: a program running in a compositor of this process.
+wayland = { workspace = true }
+# A window draws itself into the pane through a shared reference, so a window is a
+# `WidgetRef` rather than a `Widget` consumed by the draw.
+ratatui = { workspace = true, features = ["unstable-widget-ref"] }
+# What an event becomes for a window: W3C UI Events as data, and the physical
+# pixel position they are expressed in.
+ui-events = { workspace = true }
+dpi = "0.1"
+# The terminal's own event types: a window is pressed and typed into with the
+# events the reader produced.
+termina = { workspace = true }
+# The terminal's report of its own size, which is the size a window's program is
+# configured at.
+rustix = { workspace = true }
+# The capybara demo image, converted to ANSI art cells, for the dummy session.
+halftone = { version = "0.10", default-features = false }
+# Blocking a runtime worker to send a frame is `block_in_place`, and the timer that
+# bounds the send is tokio's.
+tokio = { workspace = true }
+# Diagnostics: a window that could not send a frame is a pane that stopped moving,
+# and the reason has to be somewhere.
+log = { workspace = true }
+# Spans, for the frames this crate produces.
+tracing = { workspace = true }

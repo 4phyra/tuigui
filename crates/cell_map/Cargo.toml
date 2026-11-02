@@ -7,3 +7,6 @@ description = "Parse a terminal stream and hand each cell to a callback, in plac
 
 [dependencies]
 vt100 = { workspace = true }
+# The rewriter reads and writes through async handles, so a caller hands it the pty's own
+# stream and a sink with no blocking thread in between.
+tokio = { workspace = true }

@@ -45,9 +45,6 @@ pub struct WaylandWindow {
     /// The codec that encoder is for: the session's, handed over when the window
     /// was minted.
     codec: codecs::CodecId,
-    /// Whether this window is the session's root: the one that opens the tree on
-    /// the far side, rather than a window under it.
-    root: bool,
     /// Whether this window has been announced on the link. Once only: the far
     /// side addresses a window by its surface, so the announcement has to arrive
     /// before the first frame that names it, and must not be repeated.
@@ -56,14 +53,13 @@ pub struct WaylandWindow {
 
 impl WaylandWindow {
     /// One window of the session, with nothing known about where it sits yet.
-    fn new(inner: Arc<wayland::Window>, codec: codecs::CodecId, root: bool) -> Self {
+    fn new(inner: Arc<wayland::Window>, codec: codecs::CodecId) -> Self {
         Self {
             state: RwLock::new(WindowState::default()),
             inner,
             children: RwLock::new(Vec::new()),
             encoder: Mutex::new(None),
             codec,
-            root,
             announced: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -87,14 +83,35 @@ impl WindowingServer for WaylandServer {
         let mut root = self.root.write().unwrap();
         if root.is_none() {
             let tree = self.inner.root_tree()?;
-            *root = Some(Arc::new(WaylandWindow::new(tree, self.codec, true)));
+            *root = Some(Arc::new(WaylandWindow::new(tree, self.codec)));
         }
         let root = root.as_ref()?;
         Some(Arc::downgrade(root) as Weak<dyn StatefulWindow>)
     }
 
-    fn spawn(&mut self, path: &std::path::Path) -> std::io::Result<()> {
-        self.inner.spawn(path)
+    fn spawn(
+        &mut self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Option<(std::process::ChildStdout, std::process::ChildStderr)>> {
+        let (stdout, stderr) = self.inner.spawn(path)?;
+
+        // The program's own words, drained rather than dropped. They are the whole diagnosis when
+        // a client exits instead of drawing: "cannot open display", a missing driver, a path that
+        // is not there — none of which this side can see any other way. A pipe nobody reads also
+        // blocks its writer once it fills, which would turn a chatty program into a stalled one.
+        for (which, pipe) in [
+            ("out", Box::new(stdout) as Box<dyn std::io::Read + Send>),
+            ("err", Box::new(stderr) as Box<dyn std::io::Read + Send>),
+        ] {
+            std::thread::spawn(move || {
+                use std::io::BufRead as _;
+                for line in std::io::BufReader::new(pipe).lines().map_while(Result::ok) {
+                    log::info!("the program's {which}: {line}");
+                }
+            });
+        }
+
+        Ok(None)
     }
 
     fn advance(&mut self, timeout: std::time::Duration) {
@@ -135,27 +152,21 @@ impl StatefulWindow for WaylandWindow {
     /// later one sends the picture alone. Announcement precedes the frame because
     /// the far side places what it has been told about: a frame for a window it
     /// has never heard of is a frame it drops.
-    fn capture(&self, link: &wire::transport::Connection) -> Result<(), super::Error> {
+    fn capture(&self, link: &wire::transport::Connection, z: u32) -> Result<(), super::Error> {
         let surface = *self.inner.id();
         if !self
             .announced
             .swap(true, std::sync::atomic::Ordering::AcqRel)
         {
-            // The root opens the session's tree on the far side; everything else
-            // hangs under it. Every window carries the same pid: one program, and
-            // these are the windows it opened.
-            let said = if self.root {
-                wire::message::Message::InitClient {
-                    pid: 1,
-                    surface,
-                    z: 0,
-                }
-            } else {
-                wire::message::Message::NewWindow {
-                    pid: 1,
-                    surface,
-                    z: 0,
-                }
+            // One window, one announcement, and the codec it streams with travels in it: two
+            // windows are two streams, so a codec announced once for the session would be one
+            // answer to a question each window answers for itself.
+            //
+            // `root` is not part of the message: a window on the far side is a surface and a codec,
+            // and which one the pane fills is the far side's own business.
+            let said = wire::message::Message::OpenWindow {
+                surface,
+                codec: self.codec,
             };
             send(link, &said)?;
         }
@@ -186,8 +197,8 @@ impl StatefulWindow for WaylandWindow {
         }
 
         let frame = wire::message::Message::Frame {
-            pid: 1,
             surface,
+            z,
             bytes,
         };
         send(link, &frame)
@@ -232,7 +243,7 @@ impl StatefulWindow for WaylandWindow {
             {
                 continue;
             }
-            children.push(Arc::new(WaylandWindow::new(tree, self.codec, false)));
+            children.push(Arc::new(WaylandWindow::new(tree, self.codec)));
         }
         children
             .iter()

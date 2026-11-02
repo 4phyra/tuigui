@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, Borders, Widget};
 use termina::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use super::bar::Bar;
-use crate::compositor::windowing::{StatefulWindow, WindowState};
+use crate::windowing::{StatefulWindow, WindowState};
 
 #[derive(Default)]
 pub struct Frame {

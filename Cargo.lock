@@ -255,6 +255,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "better_default"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b9a5040dce49a7642c97ccb1ae59567098967b5d52c29773f1299a42d23bb39"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -401,8 +412,13 @@ dependencies = [
 name = "cell_map"
 version = "0.1.0"
 dependencies = [
+ "tokio",
  "vt100",
 ]
+
+[[package]]
+name = "cellcode"
+version = "0.1.0"
 
 [[package]]
 name = "cfg-if"
@@ -519,6 +535,24 @@ dependencies = [
  "rustversion",
  "ryu",
  "static_assertions",
+]
+
+[[package]]
+name = "compositor"
+version = "0.1.0"
+dependencies = [
+ "codecs",
+ "dpi",
+ "halftone",
+ "log",
+ "ratatui",
+ "rustix 1.1.5",
+ "termina 0.4.0",
+ "tokio",
+ "tracing",
+ "ui-events",
+ "wayland",
+ "wire",
 ]
 
 [[package]]
@@ -1314,23 +1348,22 @@ checksum = "37bfe73dc8ec21f54d181e5a60554327ec3f1c600c455a75ccbfc65d2106a6c4"
 name = "gui"
 version = "0.1.0"
 dependencies = [
+ "better_default",
+ "cellcode",
  "clap",
  "codecs",
+ "compositor",
  "crossterm 0.28.1",
- "dpi",
- "easytgp",
- "ffmpeg-sidecar",
  "futures",
- "halftone",
  "log",
  "ratatui",
+ "ringbuf",
  "rustix 1.1.5",
  "termina 0.4.0",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "tracing-tracy",
- "ui-events",
  "wayland",
  "wire",
 ]
@@ -2360,6 +2393,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
+name = "portable-atomic-util"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10ab3eb7f3becc3a1cbc4f2c6f20267996cfc1a6467a873763411b136a122715"
+dependencies = [
+ "portable-atomic",
+]
+
+[[package]]
 name = "powerfmt"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2829,6 +2871,17 @@ name = "rgb"
 version = "0.8.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
+
+[[package]]
+name = "ringbuf"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33d5f59e4145df5f29e84b6389394a8a3fedf7bd8c12570560ae67a917e6eae3"
+dependencies = [
+ "crossbeam-utils",
+ "portable-atomic",
+ "portable-atomic-util",
+]
 
 [[package]]
 name = "rkyv"
@@ -3674,7 +3727,9 @@ checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 name = "tui"
 version = "0.1.0"
 dependencies = [
+ "better_default",
  "cell_map",
+ "cellcode",
  "clap",
  "codecs",
  "crossterm 0.28.1",
@@ -4439,6 +4494,7 @@ dependencies = [
  "codecs",
  "futures-util",
  "rkyv",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "tokio",

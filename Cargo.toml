@@ -8,6 +8,8 @@ members = [
     "crates/wayland",
     "crates/codecs",
     "crates/cell_map",
+    "crates/cellcode",
+    "crates/compositor",
 ]
 
 [workspace.package]
@@ -18,6 +20,11 @@ license = "GPL-3.0-or-later"
 [workspace.dependencies]
 thiserror = "2"
 derive_builder = "0.20"
+# `#[derive(Default)]`, with two things std's derive cannot do: a field's default given
+# inline, and no `T: Default` bound for a `T` that is only a marker. That second one is why
+# it is here: a struct generic over a type parameter it never stores — a widget naming the
+# type of its state — is not `Default` under std's derive at all.
+better_default = "1"
 clap = { version = "4", features = ["derive", "env"] }
 rustix = { version = "1.1", features = ["fs", "termios", "process", "pty", "net", "event"] }
 png = "0.18"
@@ -43,6 +50,10 @@ vt100 = "0.18"
 # Rewrites the cells of a terminal stream on its way to the screen. Here with the
 # other workspace members so `wire` and `tui` agree on one version.
 cell_map = { path = "crates/cell_map" }
+# Carries a string in cells — symbol, foreground and background together — so an
+# announcement costs a few columns instead of a whole line of text. Here with the
+# other members so both halves of a session encode a record the same way.
+cellcode = { path = "crates/cellcode" }
 pollster = "0.4"
 fxhash = "0.2"
 crossterm = { version = "0.28", default-features = false, features = ["events"] }
@@ -89,8 +100,9 @@ tracing-tracy = { version = "=0.11.4", default-features = false, features = [
     "callstack-inlines",
 ] }
 # `signal` for SIGWINCH: the real terminal reports a resize by signalling, not by sending
-# bytes, and the pty the command runs on has to be told the new size.
-tokio = { version = "1", features = ["rt-multi-thread", "io-util", "net", "process", "sync", "time", "macros", "signal"] }
+# bytes, and the pty the command runs on has to be told the new size. `fs` for the pty's master:
+# a plain `File` read would park a thread on it, and the reactor is what makes it a future.
+tokio = { version = "1", features = ["rt-multi-thread", "io-util", "net", "process", "sync", "time", "macros", "signal", "fs"] }
 # Retry, for the one message that must arrive: the report that something else failed. Chosen
 # over `tokio-retry` because its handler sees each error, so an error that is plainly
 # permanent can be passed on instead of retried.
@@ -100,10 +112,16 @@ futures-retry = "0.6"
 # archive before it is trusted; without it a corrupted length would be a lie
 # the decoder believes.
 rkyv = { version = "0.8", features = ["alloc", "bytecheck"] }
+# The buffer a program's output waits in while nobody can see it: one producer
+# (the thread reading the pipe) and one consumer (the frame that prints). It has
+# to be bounded, because a program that writes faster than it is read would
+# otherwise be a program that grows this process without limit.
+ringbuf = "0.6"
 
 # internal
 easytgp = { path = "crates/easytgp" }
 codecs = { path = "crates/codecs" }
+compositor = { path = "crates/compositor" }
 wire = { path = "crates/wire" }
 tui = { path = "crates/tui" }
 gui = { path = "crates/gui" }

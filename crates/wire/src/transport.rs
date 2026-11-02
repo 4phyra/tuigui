@@ -174,6 +174,19 @@ impl Connection {
     pub async fn recv(&self) -> io::Result<Option<Message>> {
         self.transport.recv().await
     }
+
+    /// Read one message, but do not wait for one.
+    ///
+    /// `None` means nothing is waiting yet, which is a fact rather than an error: the caller does
+    /// its work and asks again. It says nothing about the peer — a closed link is an `Err`, so a
+    /// caller can tell "quiet" from "gone".
+    ///
+    /// Stopping here loses nothing: what has been read of a half-arrived message lives in the
+    /// transport's own codec, which outlives this call, rather than in a future that would be
+    /// dropped. That is what makes this different from cancelling [`Connection::recv`].
+    pub fn recv_next(&self) -> io::Result<Option<Message>> {
+        self.transport.recv_next()
+    }
 }
 
 impl std::fmt::Debug for Connection {
@@ -262,6 +275,17 @@ pub trait Transport: Send + Sync {
     ///
     /// `Ok(None)` means the peer closed between messages, which is the normal end of one.
     fn recv(&self) -> BoxFuture<'_, io::Result<Option<Message>>>;
+
+    /// Read one message, but do not wait for one.
+    ///
+    /// `None` means nothing is waiting yet, which is a fact rather than an error: the caller does
+    /// its work and asks again. It says nothing about the peer — a closed link is an `Err`, so a
+    /// caller can tell "quiet" from "gone".
+    ///
+    /// Stopping here loses nothing: what has been read of a half-arrived message lives in the
+    /// transport's own codec, which outlives this call, rather than in a future that would be
+    /// dropped. That is what makes this different from cancelling [`Transport::recv`].
+    fn recv_next(&self) -> io::Result<Option<Message>>;
 }
 
 /// An in-process pair of streams, for a session with both halves in one program.

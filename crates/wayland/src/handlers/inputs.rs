@@ -23,6 +23,16 @@ use ui_events::pointer::{PointerButton, PointerEvent};
 use ui_events::ScrollDelta;
 
 use crate::state::State;
+
+/// How far one wheel step moves a client, in pixels of smooth scrolling.
+const SCROLL_PX: f64 = 100.0;
+
+/// How many discrete steps one wheel notch is worth, for clients that count in steps.
+///
+/// Ten times the single step the protocol would give it: a wheel notch is one event
+/// here and a screenful elsewhere, and one line per notch is a scroll nothing appears to
+/// do.
+const SCROLL_STEPS: f32 = 10.0;
 use crate::CompError;
 
 impl State {
@@ -266,22 +276,22 @@ impl State {
             frame = frame
                 .value(
                     smithay::backend::input::Axis::Vertical,
-                    f64::from(steps_v) * 10.0,
+                    f64::from(steps_v) * SCROLL_PX,
                 )
                 .v120(
                     smithay::backend::input::Axis::Vertical,
-                    steps_v.round() as i32,
+                    (steps_v * SCROLL_STEPS).round() as i32,
                 );
         }
         if steps_h != 0.0 {
             frame = frame
                 .value(
                     smithay::backend::input::Axis::Horizontal,
-                    f64::from(steps_h) * 10.0,
+                    f64::from(steps_h) * SCROLL_PX,
                 )
                 .v120(
                     smithay::backend::input::Axis::Horizontal,
-                    steps_h.round() as i32,
+                    (steps_h * SCROLL_STEPS).round() as i32,
                 );
         }
         pointer.axis(self, frame);

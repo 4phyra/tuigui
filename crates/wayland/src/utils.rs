@@ -3,7 +3,6 @@
 //! `delegate_*!` macros (which take lifetimes, but not type generics).
 
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point};
 
 /// Fire all pending frame callbacks on a window's surface tree, and its
 /// subsurfaces' — the "you may draw the next frame" signal a client waits on
@@ -58,42 +57,6 @@ pub(crate) fn proc_parent(pid: u32) -> Option<u32> {
         .map(sysinfo::Pid::as_u32)
 }
 
-/// The cursor overlay: a red disc of radius 3 drawn onto a captured frame at
-/// the pointer's position, so the pointer is visible even though the headless
-/// output has no real cursor plane. `rgba` is `size.0 * size.1 * 4` bytes of
-/// Argb8888 little-endian.
-pub(crate) fn draw_cursor(rgba: &mut [u8], size: (u32, u32), loc: Point<f64, Logical>) {
-    let (w, h) = size;
-    const R: f64 = 3.0;
-    let (cx, cy) = (loc.x, loc.y);
-    // Clamp the disc center to the visible area (minus margin so the outline
-    // can't wrap).
-    let (cx, cy) = (
-        cx.max(0.0).min(w.max(1) as f64 - 1.0),
-        cy.max(0.0).min(h.max(1) as f64 - 1.0),
-    );
-    // Bounding box of the disc as integer rows/cols.
-    let x0 = (cx - R).floor().max(0.0) as u32;
-    let x1 = (cx + R).ceil().min(w as f64) as u32;
-    let y0 = (cy - R).floor().max(0.0) as u32;
-    let y1 = (cy + R).ceil().min(h as f64) as u32;
-    let r2 = R * R;
-    for y in y0..y1 {
-        let row = (y as usize) * (w as usize) * 4;
-        for x in x0..x1 {
-            let dx = x as f64 - cx;
-            let dy = y as f64 - cy;
-            if dx * dx + dy * dy <= r2 {
-                let o = row + (x as usize) * 4;
-                // Argb8888 little-endian, so the bytes are B, G, R, A. Pure red.
-                rgba[o] = 0;
-                rgba[o + 1] = 0;
-                rgba[o + 2] = 255;
-                rgba[o + 3] = 255;
-            }
-        }
-    }
-}
 
 /// Convert a committed wl_shm buffer into pixels in `out`, sized `out_size`.
 ///
@@ -154,9 +117,54 @@ pub(crate) fn map_rgba(
         // The pool is handed to this closure for exactly this, and the bounds
         // are checked above, so the slice covers every byte that is read.
         let pool = unsafe { std::slice::from_raw_parts(ptr, len) };
-        scale_bgra(&pool[base..], stride, (bw, bh), out, (ow, oh));
+        // The margin a client draws around its window — a shadow, the strips it grabs its
+        // edges by — is transparent in the buffer, and no codec here carries alpha: scaled
+        // as it stands, that margin arrives as black bars around the picture. The opaqueness
+        // is the only thing in the buffer that says where the window really is, so the
+        // capture crops to it.
+        let (left, top, cw, ch) = opaque_bounds(&pool[base..], stride, (bw, bh));
+        if cw == 0 || ch == 0 {
+            return;
+        }
+        let start = top * stride + left * 4;
+        scale_bgra(&pool[base + start..], stride, (cw, ch), out, (ow, oh));
     })
     .map_err(|e| crate::CompError::Capture(e.to_string()))
+}
+
+/// The smallest rectangle holding every opaque pixel of a buffer, as
+/// `(left, top, width, height)` in pixels.
+///
+/// A client draws its window somewhere inside its buffer and leaves the rest transparent:
+/// shadows above and below, and the strips along the edges that it grabs a drag by. None of
+/// that margin means anything to a codec without alpha, which would turn it into black bars.
+/// The protocol lets a client state its window's rectangle with `set_window_geometry`, and
+/// this capture does not track that — so the buffer itself is asked instead, and its opaque
+/// pixels are the window.
+///
+/// A buffer with no opaque pixel at all answers with the whole buffer: there is no smaller
+/// rectangle that would be right, and a blank frame beats no frame.
+fn opaque_bounds(src: &[u8], stride: usize, size: (usize, usize)) -> (usize, usize, usize, usize) {
+    let (w, h) = size;
+    let (mut left, mut right) = (w, 0);
+    let (mut top, mut bottom) = (h, 0);
+    for y in 0..h {
+        let row = y * stride;
+        for x in 0..w {
+            // Argb8888 little-endian: the fourth byte is the alpha.
+            if src[row + x * 4 + 3] == 0 {
+                continue;
+            }
+            left = left.min(x);
+            right = right.max(x + 1);
+            top = top.min(y);
+            bottom = bottom.max(y + 1);
+        }
+    }
+    if right <= left || bottom <= top {
+        return (0, 0, w, h);
+    }
+    (left, top, right - left, bottom - top)
 }
 
 /// Resample one B,G,R,A buffer into another, of any size.
@@ -379,5 +387,31 @@ mod tests {
         let mut dst = vec![0xffu8; 4 * 4 * 4];
         scale_bgra(&src, 4 * 4, (4, 4), &mut dst, (0, 4));
         assert!(dst.iter().all(|&b| b == 0xff), "an empty target was written");
+    }
+
+    /// The margin a client leaves around its window is transparent, and cropping it is
+    /// what keeps it from arriving as black bars: no codec here carries alpha.
+    #[test]
+    fn the_opaque_pixels_are_the_window() {
+        let (bw, bh) = (8, 6);
+        let stride = bw * 4;
+        let mut src = vec![0u8; bw * bh * 4];
+        // A window at (2, 1) of 4x3, with transparent margins around it.
+        for y in 1..4 {
+            for x in 2..6 {
+                let o = y * stride + x * 4;
+                src[o..o + 4].copy_from_slice(&[1, 2, 3, 0xff]);
+            }
+        }
+        assert_eq!(opaque_bounds(&src, stride, (bw, bh)), (2, 1, 4, 3));
+    }
+
+    /// Nothing opaque is not a crop to nothing: the whole buffer is the only answer that
+    /// draws something rather than a rectangle of no size.
+    #[test]
+    fn a_buffer_with_no_opaque_pixel_keeps_its_size() {
+        let (bw, bh) = (4, 3);
+        let src = vec![0u8; bw * bh * 4];
+        assert_eq!(opaque_bounds(&src, bw * 4, (bw, bh)), (0, 0, bw, bh));
     }
 }

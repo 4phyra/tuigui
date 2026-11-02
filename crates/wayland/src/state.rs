@@ -30,6 +30,9 @@ pub struct Globals {
     /// X11 surface association (the `xwayland_shell` global).
     pub xwayland_shell_state: XWaylandShellState,
     pub seat_state: SeatState<crate::State>,
+    /// Held for its global, never read: constructing it publishes the
+    /// `zxdg_output_manager_v1` global, and dropping it withdraws that global.
+    #[allow(dead_code)]
     pub output_state: OutputManagerState,
     /// The running X11 window manager, once XWayland is ready.
     pub x11_wm: Option<X11Wm>,
@@ -65,8 +68,6 @@ pub struct State {
     /// The scale the output advertises (the session's `dpi`): what a client
     /// multiplies the size it is configured with by to get its buffer.
     pub output_scale: f64,
-    /// Whether capture draws the software cursor overlay (from `--no-cursor`).
-    pub show_cursor: bool,
     /// X11 display number for the XWayland server, once its WM is up —
     /// `Some(Ok(":n"))` when advertised, `Some(Err(why))` when XWayland is
     /// known to be unavailable. Read at `spawn` time to set `DISPLAY` for
@@ -94,7 +95,6 @@ impl State {
         output: smithay::output::Output,
         server_size: (u32, u32),
         output_scale: f64,
-        show_cursor: bool,
     ) -> Result<Self, CompError> {
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(dh, "compositor");
@@ -126,7 +126,6 @@ impl State {
             serial: 0,
             root_client: None,
             output_scale,
-            show_cursor,
             x11_display: None,
             pending_commits: std::collections::HashMap::new(),
         };

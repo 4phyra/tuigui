@@ -106,7 +106,7 @@ impl StatefulWindow for DummyWindow {
 
     /// A dummy window never draws a picture: nothing is running behind it to
     /// capture, so there is no frame to send.
-    fn capture(&self, _link: &wire::transport::Connection) -> Result<(), super::Error> {
+    fn capture(&self, _link: &wire::transport::Connection, _z: u32) -> Result<(), super::Error> {
         Err(super::Error::NotReady)
     }
 

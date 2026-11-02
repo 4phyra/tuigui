@@ -28,7 +28,7 @@ use tokio::sync::Mutex;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::message::Message;
-use crate::transport::{BoxFuture, Connection, MessageCodec, Transport, framed_read, framed_write};
+use crate::transport::{framed_read, framed_write, BoxFuture, Connection, MessageCodec, Transport};
 
 /// Stable key for this transport, as it appears in an announcement.
 pub const NAME: &str = "unix";
@@ -233,6 +233,31 @@ impl Transport for UnixSocket {
             }
         })
     }
+
+    /// Read one message, but do not wait for one.
+    ///
+    /// Polled straight through to the codec, which is where a half-arrived message is kept: no
+    /// future is created here, so having nothing to read leaves what has been read exactly where
+    /// it was.
+    ///
+    /// `None` for a quiet link. The lock is taken with `try_lock` and a link that is busy is
+    /// reported as quiet rather than waited on: there is one reader per connection, so a busy lock
+    /// cannot be a message this caller is about to miss.
+    fn recv_next(&self) -> io::Result<Option<Message>> {
+        let mut guard = match self.link.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return Ok(None),
+        };
+        let link = guard
+            .as_mut()
+            .ok_or_else(|| io::Error::other("this socket has no link yet"))?;
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match link.read.poll_next_unpin(&mut context) {
+            std::task::Poll::Ready(Some(r)) => r.map(Some),
+            std::task::Poll::Ready(None) => Ok(None),
+            std::task::Poll::Pending => Ok(None),
+        }
+    }
 }
 
 impl UnixSocket {
@@ -275,7 +300,10 @@ mod tests {
         let dialed = dialed.expect("the dialing side establishes");
 
         // Both ends are links, so both can send and be read at the other end.
-        dialed.send(&Message::Ping("hi".into())).await.expect("send");
+        dialed
+            .send(&Message::Ping("hi".into()))
+            .await
+            .expect("send");
         assert_eq!(
             accepted.recv().await.expect("recv"),
             Some(Message::Ping("hi".into()))

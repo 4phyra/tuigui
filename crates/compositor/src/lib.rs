@@ -23,8 +23,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::Color;
 use ratatui::widgets::Widget;
 
-use crate::DebugOptions;
-use widgets::decorated_window::DecoratedWindow;
+use crate::widgets::decorated_window::DecoratedWindow;
 
 pub mod widgets;
 pub mod windowing;
@@ -55,8 +54,6 @@ pub struct Compositor<T: WindowingServer> {
     windows: Vec<DecoratedWindow>,
     /// The window a key belongs to.
     focused: Option<Weak<dyn StatefulWindow>>,
-    /// The switches this pane runs with (`--dbg-*`).
-    debug: Arc<DebugOptions>,
     /// The pane's rectangle as of the last render, in cells.
     pane: Rect,
     /// Where the pointer last was, in cells of the pane.
@@ -69,13 +66,12 @@ pub struct Compositor<T: WindowingServer> {
 }
 
 impl<T: WindowingServer> Compositor<T> {
-    /// Take a session and the switches, and start compositing.
-    pub fn new(windowing: T, debug: Arc<DebugOptions>) -> Self {
+    /// Take a session, and start compositing it.
+    pub fn new(windowing: T) -> Self {
         Self {
             windowing,
             windows: Vec::new(),
             focused: None,
-            debug,
             pane: Rect::ZERO,
             pointer: None,
         }
@@ -87,6 +83,15 @@ impl<T: WindowingServer> Compositor<T> {
     /// still waiting, which is what `is_running` answers.
     pub fn finished(&self) -> bool {
         !self.windowing.is_running()
+    }
+
+    /// Start the session's program, so it connects to this compositor.
+    ///
+    /// Started after the link exists and not before: what a client is told in order to reach this
+    /// compositor is the same thing that tells it where its frames go, so a program running before
+    /// there is a link would draw into a session nothing is streaming.
+    pub fn spawn(&mut self, path: &std::path::Path) -> std::io::Result<()> {
+        self.windowing.spawn(path).map(|_| ())
     }
 
     /// Hand one event to the pane.
@@ -163,8 +168,18 @@ impl<T: WindowingServer> Compositor<T> {
     ) {
         self.windowing.advance(timeout);
 
-        let Some(root) = self.windowing.root_window().and_then(|root| root.upgrade()) else {
-            return;
+        let root = match self.windowing.root_window().and_then(|root| root.upgrade()) {
+            Some(root) => root,
+            None => {
+                // No session root yet: nothing to sync, nothing to capture. Said out loud
+                // because it is indistinguishable from a session whose windows never draw.
+                log::debug!(
+                    "compositor: no root window (ready: {}, windows: {})",
+                    self.windowing.is_ready(),
+                    self.windows.len()
+                );
+                return;
+            }
         };
         self.maybe_resize_root(&root, winsize);
         self.sync(root);
@@ -173,8 +188,13 @@ impl<T: WindowingServer> Compositor<T> {
         // so is the encoder, which is the pictures it has already sent. A window
         // that has not drawn has nothing to send, which is not a failure — the
         // next frame that commits carries a picture.
-        for window in &self.windows {
-            match window.window.capture(link) {
+        //
+        // Its place in the stack goes with the frame: this vector *is* the order,
+        // bottom first, so a window's index is its rank with `0` furthest away.
+        // Raising a window changes that order without changing its picture, which
+        // is why the rank travels per frame rather than being announced once.
+        for (z, window) in self.windows.iter().enumerate() {
+            match window.window.capture(link, z as u32) {
                 Ok(()) | Err(windowing::Error::NotReady) => {}
                 Err(e) => log::warn!("a frame was not sent: {e}"),
             }
@@ -293,7 +313,9 @@ impl<T: WindowingServer> Compositor<T> {
         }
 
         if self.windows.is_empty() {
-            log::warn!("compositor: the stack is empty, nothing to draw");
+            log::debug!("compositor: the stack is empty after sync");
+        } else {
+            log::debug!("compositor: {} window(s) in the stack", self.windows.len());
         }
     }
 }
@@ -330,14 +352,45 @@ impl<T: WindowingServer> Widget for &mut Compositor<T> {
     }
 }
 
+/// How deep the walk may go, and how many windows it may visit.
+///
+/// A session's tree is a few windows at most — a program, and what it opens. These are not sizes
+/// anything legitimate approaches; they are the point at which the walk stops rather than
+/// trusting the tree to be a tree. A window reachable from itself, or two windows that opened
+/// each other, recurses until the stack gives out, and nothing about that failure names the
+/// window that caused it.
+const WALK_DEPTH: usize = 32;
+const WALK_BUDGET: usize = 256;
+
 /// Walk a window's children into `out`, each before its own: a window is
 /// drawn under the windows it opened.
 fn collect(window: &Arc<dyn StatefulWindow>) -> Vec<Arc<dyn StatefulWindow>> {
+    let mut out = Vec::new();
+    let mut left = WALK_BUDGET;
+    walk(window, 0, &mut left, &mut out);
+    out
+}
+
+/// [`collect`]'s recursion, with the two limits it needs to terminate on a tree that is not one.
+fn walk(
+    window: &Arc<dyn StatefulWindow>,
+    depth: usize,
+    left: &mut usize,
+    out: &mut Vec<Arc<dyn StatefulWindow>>,
+) {
     // The smallest a window may be, in cells: below this the chrome alone would
     // take more room than the window has.
     const MIN: (u16, u16) = (10, 10);
 
-    let mut out = Vec::new();
+    if depth >= WALK_DEPTH || *left == 0 {
+        log::warn!(
+            "compositor: the window tree is deeper than {WALK_DEPTH} or wider than {WALK_BUDGET}; \
+             the walk stopped here"
+        );
+        return;
+    }
+    *left -= 1;
+
     // A dummy session opens windows at a fraction of its own, so a window opened
     // late is smaller than the chrome can be drawn in: it is grown to the floor,
     // and its next read says so.
@@ -354,13 +407,15 @@ fn collect(window: &Arc<dyn StatefulWindow>) -> Vec<Arc<dyn StatefulWindow>> {
         });
     }
     for child in window.get_children() {
-        if let Some(child) = child.upgrade() {
-            if out.iter().any(|known| Arc::ptr_eq(known, &child)) {
-                continue;
-            }
-            out.extend(collect(&child));
-            out.push(child);
+        let Some(child) = child.upgrade() else {
+            continue;
+        };
+        // Already placed: a window reachable by two paths is one window, and the stack must
+        // not hold it twice.
+        if out.iter().any(|known| Arc::ptr_eq(known, &child)) {
+            continue;
         }
+        walk(&child, depth + 1, left, out);
+        out.push(child);
     }
-    out
 }

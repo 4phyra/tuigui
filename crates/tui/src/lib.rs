@@ -16,31 +16,27 @@
 //! send it: the producer does not know about its consumers, so adding one is not a
 //! change to the pty.
 //!
-//! Both channels write the screen through one [`Sink`], which is what stops a
+//! Both channels write the screen through one [`SharedStdout`], which is what stops a
 //! frame from landing in the middle of the command's output.
 
-mod announce;
 mod bytes;
 mod error;
-mod proxy;
+mod filter;
 mod pty;
 mod raw;
+mod scanner;
 mod server;
 mod session;
-mod sink;
 
 use std::io::{self, Read, Write};
 
 use pty::Pty;
 use server::Server;
-use sink::Sink;
 
 pub use bytes::Bytes;
 pub use error::{Error, Result};
-pub use proxy::Streams;
-pub use pty::Pty as Command;
+pub use scanner::Scanner as CellScanner;
 pub use server::Server as ImageServer;
-pub use sink::Sink as Screen;
 
 // A session, as the command line describes it. `run` is where it starts.
 //
@@ -111,32 +107,6 @@ pub struct DebugOptions {
     /// visible: pink cells mean the mask works and the picture is the problem.
     #[arg(long = "dbg-pink-placeholders")]
     pub pink_placeholders: bool,
-    /// Dial a client at this path instead of waiting to be announced to.
-    ///
-    /// The session's normal shape is the client announcing an address that only it
-    /// can name, because it is the half that cannot know whether anyone is
-    /// listening. That breaks when the announcement does not survive the trip -- a
-    /// multiplexer that re-renders the pane, a pty whose output is not this
-    /// process's to read -- and the client is then listening on a socket nobody
-    /// hears about.
-    ///
-    /// This is the other direction: the server dials instead, on a path both ends
-    /// know without telling each other. Bare, it uses the address a local session's
-    /// client always binds; with a path it dials that. Only useful for a session on
-    /// one machine, and only as a diagnostic, because it assumes an address rather
-    /// than learning one.
-    ///
-    /// The path is written with `=`, as in `--dbg-dial-unix=/tmp/other.sock`. The
-    /// value is optional and the command follows the flag, so a space-separated
-    /// value would be read as the command instead.
-    #[arg(
-        long = "dbg-dial-unix",
-        value_name = "PATH",
-        default_missing_value = "/run/user/1000/tuigui.sock",
-        num_args = 0..=1,
-        require_equals = true
-    )]
-    pub dial_unix: Option<std::path::PathBuf>,
     /// Profile this half of the session, so a frame can be looked at rather than
     /// guessed at.
     ///
@@ -168,7 +138,7 @@ impl Tui {
     pub async fn run(
         self,
         stdin: impl Read + Send + 'static,
-        stdout: impl Write + Send + Sync + 'static,
+        stdout: impl Write + Send + Sync + Unpin + 'static,
     ) -> io::Result<()> {
         // Before anything else can fail. The pane is this process's screen, so a
         // diagnostic written to stdout would land in the middle of it; a file is the only
@@ -180,102 +150,60 @@ impl Tui {
             install_tracing()?;
         }
         let _raw = Raw::install()?;
-        let sink = Sink::new(stdout);
 
         // One set of switches, shared: the pty's proxy reads them on its forwarding
         // thread while the server and every session read them from the loop, and a copy
         // per reader would be several answers to one question.
         let debug = std::sync::Arc::new(self.debug);
 
-        // The keyboard, split in two on its way in. The terminal's answers to this side's
-        // graphics escapes arrive on the same descriptor as the user's keystrokes, so the
-        // router reads it and gives back only what was not a reply; that pipe is then the
-        // keyboard the command sees. Without this the command would be typed the terminal's
-        // own acknowledgements.
-        //
-        // The sink is the escape destination as well as the screen: one lock covers both the
-        // command's bytes and this side's escapes, which is what stops an escape landing in
-        // the middle of a line the command is printing.
-        let (keyboard, replies) = io::pipe()?;
-        let controller = easytgp::Controller::init_with_sink(
-            stdin,
-            replies,
-            std::sync::Arc::new(std::sync::Mutex::new(sink.clone())),
-        );
+        // The keyboard, split on its way in. The terminal's answers to this side's graphics
+        // escapes arrive on the same descriptor as the user's keystrokes, and only the library can
+        // tell them apart, so it does the split and hands back two pipes: the input the command
+        // reads, and the escapes the screen is drawn with. Without this the command would be typed
+        // the terminal's own acknowledgements.
+        let (controller, input) = easytgp::Controller::init_with_pipe(stdin)?;
 
-        // The two things the pty and the server share, made before either: the pty's
-        // proxy feeds the screen and blanks the registered surfaces, and the server
-        // reads the screen and has its sessions register surfaces into the list.
-        //
-        // Made here rather than in the server because the pty is built first, and a
-        // screen that the proxy could not see would be a screen that never updates.
-        let ws = rustix::termios::tcgetwinsize(std::io::stdin())?;
-        let screen = std::sync::Arc::new(std::sync::RwLock::new(vt100::Parser::new(
-            std::num::NonZeroU16::new(ws.ws_row).expect("a terminal needs a row"),
-            std::num::NonZeroU16::new(ws.ws_col).expect("a terminal needs a column"),
-            0,
-        )));
-        let surfaces = std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
+        // The command's output, buffered once for the whole session: a `BufReader` made per step
+        // would drop whatever it had read past the chunk it returned. The capacity is the pipe's
+        // own limit, so one read returns everything that was queued.
+        let (pty, master) = Pty::new(&self.command, input)?;
+        let mut master = tokio::io::BufReader::with_capacity(PIPE_CAPACITY, master);
 
-        // The pty next, because the server is built around what the pty produces: the pty
-        // is the producer and the server reads it. There is no socket to bind and no session
-        // file to write — a client names its own channel, and this side only answers.
-        let pty = Pty::new(
-            &self.command,
-            keyboard,
-            sink.clone(),
-            debug.clone(),
-            screen.clone(),
-            surfaces.clone(),
-        )?;
-
-        // One subscription, read by the server's own loop. Reading it there rather than on
-        // the pty's forwarding thread is what lets the same loop wait on the clients too: a
-        // scan on that thread would have to hand its finds over from it, and the finds would
-        // be a third thing to select on.
-        let output = pty.bytes().subscribe();
-
-        // The medium is chosen here and nowhere else: a flag read at every frame is the branch
-        // the type parameter exists to remove, but the flag still has to be read somewhere, and
-        // this is the one place that knows what the user asked for. The two arms are different
-        // types, so each is boxed to one.
-        let server: std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>>>> = if debug.no_shm
-        {
-            Box::pin(
-                Server::<easytgp::Png>::new(
-                    output,
-                    debug.clone(),
-                    controller,
-                    sink.clone(),
-                    screen,
-                    surfaces,
+        // The medium is chosen here and nowhere else: a flag read at every frame is the branch the
+        // type parameter exists to remove, but the flag still has to be read somewhere, and this is
+        // the one place that knows what the user asked for. The two arms are different types, so
+        // each is written out where it is built.
+        let mut output = stdout;
+        let mut server: std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + '_>> =
+            if debug.no_shm {
+                Box::pin(
+                    Server::<easytgp::Png>::new(debug.clone(), controller)?
+                        .run(&mut master, &mut output),
                 )
-                .run(),
-            )
-        } else {
-            Box::pin(
-                Server::<easytgp::Shm>::new(
-                    output,
-                    debug,
-                    controller,
-                    sink.clone(),
-                    screen,
-                    surfaces,
+            } else {
+                Box::pin(
+                    Server::<easytgp::Shm>::new(debug.clone(), controller)?
+                        .run(&mut master, &mut output),
                 )
-                .run(),
-            )
-        };
+            };
 
         tokio::select! {
-            // The command's half: its own select races the bytes against the child, so this
-            // is one arm of the whole session.
+            // The command's half: it waits on the child and keeps the pty's grid in step with
+            // this terminal.
             session = pty.run() => session,
-            // Nothing is reading the pty's output any more, so no client can be found and
-            // there is no session left to serve.
-            served = server => served,
+            // The screen: read the command's output, scan it, rewrite it, and give the clients
+            // their turn.
+            served = &mut server => served,
         }
     }
 }
+
+/// How much of the command's output is held between reads.
+///
+/// The kernel's own pipe limit, so one read takes everything that was waiting: a smaller buffer
+/// would split a chunk the writer made in one go, and a larger one would reserve memory the pipe
+/// cannot fill.
+const PIPE_CAPACITY: usize = 64 * 1024;
 
 /// Puts this terminal in raw mode for the session; restores it on drop.
 ///

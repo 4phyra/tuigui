@@ -45,22 +45,20 @@ mod id {
     use idalloc::Slab;
     use static_init::dynamic;
 
-    /// The id slab, and a screen clear at first use.
+    /// The id slab.
     ///
     /// The termios work that used to live here has moved to [`Controller`], which is
     /// the one call where a caller hands over its terminal; doing it here meant it
     /// ran on whatever thread first touched the slab.
     ///
-    /// The clear stays, because it is what makes a graphics program's own output
-    /// legible rather than appended to whatever was on the screen. There is nothing
-    /// to fail at, which is the difference from the termios code: a clear cannot
-    /// turn into an abort on a stdin that is not a terminal.
+    /// The screen clear that used to live here has gone for the same reason, and it
+    /// was worse. It ran on allocation — the first image, not a moment the caller
+    /// chose — and it was `2J` *and* `3J`: the visible screen and the scrollback
+    /// behind it. A library cannot erase the screen of the process that hosts it,
+    /// and this one is hosted by programs that draw a whole interface of their own
+    /// around what it transmits. A caller that wants a bare screen asks for one.
     #[dynamic]
     static mut I: Slab<Id> = {
-        use std::io::Write as _;
-        print!("\x1b[2J\x1b[3J\x1b[H");
-        let _ = std::io::stdout().flush();
-
         let mut slab = Slab::<Id>::new();
         // skip 0 as an id.
         slab.next();
@@ -84,95 +82,54 @@ mod id {
 /// encoding/comparison — the two overlap. One thread + one channel preserves
 /// FIFO order, which kitty needs for its single-loading-slot rule.
 mod writer {
-    use static_init::dynamic;
     use std::io::{self, Write};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::mpsc::{self, Sender};
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Mutex, OnceLock};
 
-    /// Escape sequences produced but not yet flushed to the pty. Rising =
-    /// the terminal can't keep up and the queue is piling up.
+    /// Escape sequences produced but not yet flushed to the pty.
+    ///
+    /// Written on the calling thread now, so this only ever reports a batch in progress: it is
+    /// kept because it is what a caller watches to see whether the terminal is keeping up.
     pub(crate) static IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
 
-    /// Where escapes go. Defaults to this process's stdout, which is right when
-    /// the renderer owns the terminal. A wrapper that serializes its own output
-    /// under a lock (`tui`) installs its sink here instead, so escapes interleave
-    /// with the wrapped command's bytes rather than racing them via a second
-    /// independent writer to the same fd.
-    static SINK: OnceLock<Arc<Mutex<dyn Write + Send>>> = OnceLock::new();
+    /// Where escapes go. Unset means this process's stdout, which is right when the renderer owns
+    /// the terminal. A wrapper that draws the same terminal installs its own writer here, so the
+    /// escapes and its own bytes are one stream in one order.
+    static OUT: OnceLock<Mutex<Box<dyn Write + Send>>> = OnceLock::new();
 
-    /// Direct every later escape to `sink`. Returns false if a sink was already
-    /// installed: moving it mid-stream would split one image's escapes across
-    /// two destinations, so the first caller wins.
-    pub fn set_sink(sink: Arc<Mutex<dyn Write + Send>>) -> bool {
-        SINK.set(sink).is_ok()
-    }
-
-    /// The sink a caller that owns the terminal gets: this process's stdout.
+    /// Direct every later escape to `out`.
     ///
-    /// The same type as any other sink, so the default is not a special case in the
-    /// writer below: an owning caller installs this and a sharing one installs its
-    /// own locked writer, and the thread that drains the queue does one thing.
-    pub fn stdout() -> Arc<Mutex<dyn Write + Send>> {
-        Arc::new(Mutex::new(io::stdout()))
+    /// Call it **once per process**: the destination is global because a command can be built and
+    /// sent without reaching the controller that made it, so there is one writer and one place to
+    /// configure it. Moving it mid-stream would split one image's escapes across two destinations.
+    pub fn set_sink(out: Box<dyn Write + Send>) -> bool {
+        OUT.set(Mutex::new(out)).is_ok()
     }
 
-    fn write_all(out: &mut dyn Write, bytes: &[u8]) {
-        match SINK.get() {
-            Some(sink) => {
-                if let Ok(mut s) = sink.lock() {
-                    let _ = s.write_all(bytes);
-                    let _ = s.flush();
-                }
+    /// Write one escape, and flush it, on the calling thread.
+    ///
+    /// Synchronously, and not through a queue drained by another thread. A queue is right for a
+    /// caller that owns the terminal and only wants encoding to stay off the write path, but it is
+    /// wrong for a caller that then **waits for the terminal's answer**: the request would still
+    /// be sitting in the queue while the wait begins, so nothing has been asked and the only
+    /// possible outcome is a timeout. Writing here means the escape is on the wire before the
+    /// future that awaits its acknowledgement exists.
+    pub(crate) fn send(bytes: Vec<u8>) {
+        IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+        match OUT.get() {
+            Some(out) => {
+                let mut out = out.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = out.write_all(&bytes);
+                let _ = out.flush();
             }
             None => {
-                let _ = out.write_all(bytes);
+                let mut out = io::stdout();
+                let _ = out.write_all(&bytes);
                 let _ = out.flush();
             }
         }
+        IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
     }
-
-    #[dynamic]
-    static mut W_TX: Sender<Vec<u8>> = {
-        let (tx, rx) = mpsc::channel::<Vec<u8>>();
-        std::thread::spawn(move || {
-            // Only used when no sink is installed.
-            let mut out = io::stdout();
-            loop {
-                // Block for the first escape, then drain whatever else is
-                // queued in the same batch. One write_all + one flush per
-                // batch instead of per escape: fewer syscalls, and nothing
-                // can pile up behind a flush mid-frame.
-                let first = match rx.recv() {
-                    Ok(m) => m,
-                    Err(_) => break, // channel disconnected, all senders dropped
-                };
-                write_all(&mut out, &first);
-                IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
-                while let Ok(more) = rx.try_recv() {
-                    write_all(&mut out, &more);
-                    IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
-                }
-            }
-        });
-        tx
-    };
-
-    pub(crate) fn send(bytes: Vec<u8>) {
-        let tx = W_TX.write();
-        IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
-        tx.send(bytes).expect("tgp writer thread died");
-        drop(tx);
-    }
-}
-
-/// Send every TGP escape to `sink` instead of this process's stdout.
-///
-/// For a wrapper that owns multiple writers of one terminal: install its locked
-/// stdout here so escapes and the wrapped command's output interleave correctly.
-/// Returns false if a sink was already set.
-pub fn set_output_sink(sink: Arc<Mutex<dyn std::io::Write + Send>>) -> bool {
-    writer::set_sink(sink)
 }
 
 /// Number of escape sequences produced but not yet flushed to the pty.
@@ -407,7 +364,7 @@ impl Controller {
     /// only writer, so there is nothing to share and nothing to strip out of the
     /// input.
     pub fn init(stdin: impl std::io::Read + Send + 'static) -> Arc<Controller> {
-        Self::init_with_sink(stdin, std::io::sink(), writer::stdout())
+        Self::start(stdin, std::io::sink())
     }
 
     /// [`Controller::init`], that also hands back the input the replies are mixed with.
@@ -423,32 +380,34 @@ impl Controller {
         stdin: impl std::io::Read + Send + 'static,
         forward: impl std::io::Write + Send + 'static,
     ) -> Arc<Controller> {
-        Self::init_with_sink(stdin, forward, writer::stdout())
+        Self::start(stdin, forward)
     }
 
-    /// [`Controller::init_with_forwarding`], with somewhere else to write escapes.
+    /// Read this terminal in, splitting off the keyboard the command should see.
     ///
-    /// `sink` receives every escape as one whole batch, which is what lets a wrapper
-    /// put it under the same lock as its own output: an escape that landed in the
-    /// middle of a line another writer was printing would be two commands the
-    /// terminal obeys in halves.
+    /// A terminal's input is two streams that arrived on one descriptor: this library's own
+    /// replies to the escapes it wrote, and everything else, which is the user typing. Only this
+    /// side can tell them apart, so it is this side that splits them — once, here, rather than in
+    /// every caller.
     ///
-    /// Call it **once per process**. The destination is global because
-    /// [`Message::send`] can be reached without a controller — it is `Message` that
-    /// knows how to encode itself, and a `Message` holds no reference to whoever
-    /// made it — so there is one writer and one place to configure it. A second call
-    /// returns `false` and changes nothing; the first caller wins, since moving the
-    /// destination mid-stream would split one image's escapes across two.
-    pub fn init_with_sink(
+    /// `input` is every byte that was not a reply, in order, unchanged, and it is left blocking:
+    /// its reader forwards it to the command's stdin and has nothing else to do while it waits.
+    ///
+    /// Escapes go to this process's stdout, written and flushed on the calling thread. No sink, no
+    /// pipe, no queue: a transfer that is awaited has to be on the wire before the wait starts, or
+    /// the terminal is never asked and the wait can only time out.
+    pub fn init_with_pipe(
+        stdin: impl std::io::Read + Send + 'static,
+    ) -> std::io::Result<(Arc<Controller>, std::io::PipeReader)> {
+        let (input, writing_input) = std::io::pipe()?;
+        let controller = Self::start(stdin, writing_input);
+        Ok((controller, input))
+    }
+
+    fn start(
         stdin: impl std::io::Read + Send + 'static,
         forward: impl std::io::Write + Send + 'static,
-        sink: Arc<Mutex<dyn std::io::Write + Send>>,
     ) -> Arc<Controller> {
-        // TODO: this belongs to `Controller::new` once a `Message` can reach the
-        // controller that made it, which is what removes the need for a global.
-        if !writer::set_sink(sink) {
-            log_reply_error("a graphics sink was already installed; the first one is in use");
-        }
         // The router is about to read replies off this terminal, which it cannot do
         // while the line discipline is holding them.
         take_terminal_raw();
@@ -1950,12 +1909,8 @@ impl Message {
         // CRITICAL: this is not supposed to be here.
         //
         // Every caller passes `false`, so every command asks the terminal for a
-        // reply, and nothing in `tui` reads those replies: the router would have
-        // to read this process's stdin, which is the keyboard the proxy forwards,
-        // so reading it would eat the user's keystrokes. The acks are therefore
-        // expected to be consumed by whatever is between us and the terminal --
-        // a multiplexer feeding our own pane's input -- and dropped. That is a
-        // gamble, and a rework of the reply path is what replaces it.
+        // reply, which is correct: the router reads this process's stdin, and the
+        // acks are what completes an awaited transfer.
         self = self.cd_if(no_reply, 'q', 2);
         let bytes = self.into_escape();
         // Through the writer, not straight to fd 1. A wrapper that serializes
@@ -2546,20 +2501,16 @@ mod tests {
 
     /// The escape destination cannot be moved once it is set.
     ///
-    /// A second destination would split one image's escapes across two writers, so
-    /// the installer refuses. That the *installed* one receives an escape is not
-    /// asserted here: the destination is process-global and the first test to run
-    /// wins it, which makes routing order-dependent in a test binary. It is checked
-    /// where it matters instead, by a real session showing the escapes on the
-    /// terminal.
+    /// A second destination would split one image's escapes across two pipes, so the installer
+    /// refuses. That the *installed* one receives an escape is not asserted here: the destination
+    /// is process-global and the first test to run wins it, which makes routing order-dependent in
+    /// a test binary. It is checked where it matters instead, by a real session showing the
+    /// escapes on the terminal.
     #[test]
     fn the_escape_destination_cannot_be_moved() {
-        let _ = writer::set_sink(std::sync::Arc::new(std::sync::Mutex::new(
-            std::io::sink(),
-        )));
-        let second = writer::set_sink(std::sync::Arc::new(std::sync::Mutex::new(
-            std::io::sink(),
-        )));
-        assert!(!second, "a second destination must be refused");
+        let (_reader, first) = std::io::pipe().expect("a pipe");
+        assert!(writer::set_out(first), "the first destination must be taken");
+        let (_other, second) = std::io::pipe().expect("a pipe");
+        assert!(!writer::set_out(second), "a second destination must be refused");
     }
 }

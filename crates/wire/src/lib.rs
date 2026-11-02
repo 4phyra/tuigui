@@ -9,9 +9,10 @@
 //! - [`unix`] is the first **channel**: one path, both halves. Here rather than in a binary
 //!   because both ends of a session use it, and the two ends are separate crates.
 //!
-//! Keeping them apart is what lets a channel be added without touching the conversation, and
-//! the conversation change without touching any channel.
+//! Three layers and nothing else: the screen is not a shared thing. Each side writes the
+//! terminal it owns, and the escapes one side draws with go into a pipe that side reads.
 
+pub mod drain;
 pub mod message;
 pub mod transport;
 pub mod unix;

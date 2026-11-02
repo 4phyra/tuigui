@@ -20,6 +20,19 @@ use std::sync::Weak;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
+/// What a program says, as the two streams it says it on.
+///
+/// Held as handles rather than as a path to a file: the caller is the side that shows
+/// them, and a file is one answer to "where do these go" that is not the caller's to
+/// choose. Both are read to their end by whoever takes them, which is also what keeps the
+/// program from blocking on a full pipe.
+pub struct Spoken {
+    /// What the program writes to standard output.
+    pub stdout: std::process::ChildStdout,
+    /// What the program writes to standard error.
+    pub stderr: std::process::ChildStderr,
+}
+
 /// Where a window is and how big it is, in cells, and the cells it draws into.
 ///
 /// The rectangle is on the pane, whose origin is `(0, 0)`, so it is already the
@@ -47,11 +60,15 @@ pub trait WindowingServer {
     /// kills the handle.
     fn root_window(&self) -> Option<Weak<dyn StatefulWindow>>;
 
-    /// Start the session's program. A session whose program is not its own to
-    /// start — the dummy's, or a session attached to one already running —
-    /// starts nothing.
-    fn spawn(&mut self, _path: &std::path::Path) -> std::io::Result<()> {
-        Ok(())
+    /// Start the session's program, and hand back what it says.
+    ///
+    /// A session whose program is not its own to start — the dummy's, or a session
+    /// attached to one already running — starts nothing and gives back nothing.
+    fn spawn(
+        &mut self,
+        _path: &std::path::Path,
+    ) -> std::io::Result<Option<(std::process::ChildStdout, std::process::ChildStderr)>> {
+        Ok(None)
     }
 
     /// One turn of the session: accept what arrived, dispatch what the
@@ -80,7 +97,10 @@ impl WindowingServer for Box<dyn WindowingServer> {
         (**self).root_window()
     }
 
-    fn spawn(&mut self, path: &std::path::Path) -> std::io::Result<()> {
+    fn spawn(
+        &mut self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Option<(std::process::ChildStdout, std::process::ChildStderr)>> {
         (**self).spawn(path)
     }
 
@@ -125,7 +145,11 @@ pub trait StatefulWindow: WidgetRef + Send + Sync {
     /// Encoding is the window's own business because the stream is: an encoder's
     /// state is the pictures it has already sent, so it belongs beside the pixels
     /// it encodes.
-    fn capture(&self, link: &wire::transport::Connection) -> Result<(), Error>;
+    ///
+    /// `z` is the window's place in the stack, `0` furthest away: raising a window
+    /// is not a new picture but it is a new place in the order, so the order is
+    /// sent with every frame rather than announced once.
+    fn capture(&self, link: &wire::transport::Connection, z: u32) -> Result<(), Error>;
 
     /// Ask this window to draw at `size` pixels instead of its current one.
     ///

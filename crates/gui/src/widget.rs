@@ -1,48 +1,23 @@
 //! The pane the client draws, and the session it draws from.
 //!
 //! ```text
-//!   widget.rs          this: the widget, the Session, and the fixed sockets
-//!   widget/state.rs    where the session is, and the steps that move it along
-//!   widget/popup.rs    what is open over it
+//!   widget.rs          this: the widget, the Session, and the screens
+//!   widget/stage.rs    the program running: its link, its windows, and the screen up
 //! ```
 
-mod popup;
-mod state;
+mod dock;
+mod stage;
 
-pub use popup::PopupState;
-pub use state::State;
+pub use dock::HEIGHT as DOCK_HEIGHT;
+pub use stage::{Page, Props, Stage};
 
+use codecs::CodecId;
+use compositor::WindowingServer;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, StatefulWidget, Widget as _};
-use codecs::CodecId;
-use crate::compositor::WindowingServer;
-
-use std::sync::Arc;
-
-use crate::DebugOptions;
-
-/// What the session holds while a step is running.
-///
-/// A step consumes the state it is given, so there has to be something in the session's
-/// place for as long as it takes. This is that something, and it is a failure rather than
-/// a state: if it is ever drawn, a step did not return the state it moved to, which is a
-/// bug and reads as one.
-const INTERNAL_ERROR: &str = "internal error: a step did not return its state";
-
-/// The ways a session can be reached.
-///
-/// One per transport: what the client can dial, in the order the list offers them. Only
-/// the first is built, and the rest are named here anyway so the choice a user is making is
-/// visible as a choice rather than as a single button.
-pub const CONNECTIONS: [&str; 4] = [
-    "Unix Socket",
-    "SSH Socket",
-    "Peer to Peer",
-    "Reverse SSH",
-];
 
 /// The socket a Unix Socket session dials.
 ///
@@ -56,20 +31,13 @@ pub fn socket_path() -> std::path::PathBuf {
     std::path::Path::new(&dir).join("tuigui.sock")
 }
 
-/// The picture's anchor, filled across the display area.
-///
-/// The server replaces every one of these with an image placeholder, so the fill is not
-/// decoration: it is the address of the picture, and this is the only thing the terminal
-/// has to be told for the image to have somewhere to be.
-pub const FILL: char = '❋';
-
 /// This terminal's input, boxed so a caller may hand in its own.
 ///
 /// The session holds one of these for its whole life, and `Gui::run` is generic
 /// over what it was given, so the handle is boxed rather than named.
 pub type Input = Box<dyn std::io::Read + Send>;
 
-/// One session: where it is, and what is open over it.
+/// One session: where it is, and which screen it is showing.
 ///
 /// `T` is the window session this one composites; it is chosen once, where the
 /// session is created, from the debug options.
@@ -80,26 +48,10 @@ pub struct Session<T: WindowingServer> {
     /// has to be something in its place while the step runs, and a failure is the only
     /// honest thing to put there. A step that never returns its next state leaves the
     /// failure behind, and the pane shows it.
-    pub state: Result<State<T>, String>,
-    /// What is open over it.
-    pub popup_state: PopupState,
-    /// The buttons along the bottom.
-    pub footer: Footer,
-    /// The program to run, once a socket has been dialed.
-    pub program: std::path::PathBuf,
-    /// The codec the session streams with, chosen at the command line and
-    /// announced on the wire before any frame.
-    pub codec: CodecId,
-    /// The window session waiting to be composited: taken when the dial
-    /// comes up, and started then.
-    pub server: Option<T>,
-    /// The switches this pane runs with (`--dbg-*`).
-    pub debug: Arc<DebugOptions>,
-    /// The compositor's output size, which is also the program's window size.
-    ///
-    /// Fixed when the session starts: the compositor's output being the window is what
-    /// the MVP fixes, so this is read once and reused for every later step.
-    pub size: (u32, u32),
+    pub stage: Result<Stage<T>, String>,
+    /// The dock, which is what gets a session started and what switches screens once
+    /// there is one. It shares the stage above as its state, so a button press is the swap.
+    pub dock: dock::Dock<T>,
     /// This terminal's input, as parsed events.
     ///
     /// The reader thread owns the parsing and the reading; this end only
@@ -108,57 +60,76 @@ pub struct Session<T: WindowingServer> {
     pub input_receiver: std::sync::mpsc::Receiver<termina::Event>,
 }
 
-impl<T: WindowingServer> Session<T> {
-    /// Start a session over a terminal's input.
+impl Session<Box<dyn WindowingServer>> {
+    /// Start a session: the window session this machine composites, chosen from the
+    /// switches the client was started with, and the socket the other side dials.
     ///
-    /// The receive end is taken here, not later, so nothing typed while the
-    /// session connects is lost: the events wait in the channel until a state
-    /// reads them.
-    pub fn new(
-        program: std::path::PathBuf,
+    /// Built here rather than by the caller because it is the session's own part: the
+    /// caller says which program, how big, and how to encode, and everything a running
+    /// window needs is assembled around that. A dummy session draws windows nobody is
+    /// running; a wayland one is a compositor in this process, one output.
+    ///
+    /// The socket is bound and announced before the first frame is drawn, so the advert
+    /// that frame puts on screen is one that answers.
+    pub async fn new(
+        dummy: bool,
         size: (u32, u32),
-        input_receiver: std::sync::mpsc::Receiver<termina::Event>,
         codec: CodecId,
-        server: T,
-        debug: Arc<DebugOptions>,
-    ) -> Self {
-        Self {
-            state: Ok(State::ConnSelect),
-            popup_state: PopupState::None,
-            footer: Footer,
-            program,
-            codec,
-            server: Some(server),
-            debug,
-            size,
+        stdin: Input,
+        program: String,
+    ) -> std::io::Result<Self> {
+        // Read and parsed on a thread of its own: a read of the raw terminal blocks until
+        // the pane has something to say, and the draw loop cannot sit in that read. The
+        // events wait in the channel until a frame drains them, so nothing typed while the
+        // session connects is lost.
+        let input_receiver = crate::inputs::start(std::io::BufReader::new(stdin))?;
+        let server: Box<dyn WindowingServer> = if dummy {
+            Box::new(compositor::windowing::dummy::DummyServer::default())
+        } else {
+            Box::new(compositor::windowing::wayland::WaylandServer::new(
+                wayland::Options {
+                    resolution: size,
+                    dpi: 1.0,
+                    use_x11: false,
+                },
+                codec,
+            )?)
+        };
+        Ok(Self {
+            stage: Ok(Stage::new(server, codec, Page::default())),
+            dock: dock::Dock::new(socket_path(), program).await?,
             input_receiver,
-        }
+        })
     }
 
     /// Whether the session has ended.
     pub fn done(&self) -> bool {
-        match &self.state {
+        match &self.stage {
             // Failed, or finished: either way there is nothing left to do.
             Err(_) => true,
-            Ok(state) => state.done(),
+            // A stage with nothing running yet has not ended: the dock is still working on
+            // being reachable.
+            Ok(stage) => stage.finished(),
         }
+    }
+
+    /// Whether the alternate screen is where this session draws.
+    ///
+    /// Asked by the caller because the terminals are the caller's: the session knows which
+    /// screen it wants, and the two — one three rows at the cursor, one the whole screen —
+    /// are built and owned where the writer is.
+    pub fn is_alternate(&self) -> bool {
+        self.stage.as_ref().is_ok_and(Stage::showing_stream)
     }
 }
 
 /// The client itself: a widget over [`Session`].
+///
+/// `better_default` rather than std's derive, for the same reason as the dock: std would
+/// ask for `T: Default` because `T` is a parameter, and a window session is a running
+/// compositor rather than something with a default.
+#[derive(better_default::Default)]
 pub struct GuiWidget<T: WindowingServer>(std::marker::PhantomData<T>);
-
-impl<T: WindowingServer> GuiWidget<T> {
-    pub fn new() -> Self {
-        GuiWidget(std::marker::PhantomData)
-    }
-}
-
-impl<T: WindowingServer> Default for GuiWidget<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl<T: WindowingServer> StatefulWidget for GuiWidget<T> {
     type State = Session<T>;
@@ -171,114 +142,66 @@ impl<T: WindowingServer> StatefulWidget for GuiWidget<T> {
     /// divided. Every stage below it lands inside the frame it belongs to.
     #[tracing::instrument(name = "frame", skip_all)]
     fn render(self, area: Rect, buf: &mut Buffer, session: &mut Session<T>) {
-        // The bottom line holds the buttons, and the rest belongs to the session. Split
-        // once, so the state and the buttons agree about where the content ends.
-        let [content, footer] =
-            Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
+        // The dock is the last three rows and the content is what is above them. On the
+        // inline terminal those three rows are the whole area, so the content is empty and
+        // drawing into it draws nothing; on the fullscreen one the stream gets the rest.
+        //
+        // A terminal with no room above the dock has no layout to give it: there is no
+        // frame that satisfies it, and this is not a size to invent one for.
+        let content = Rect {
+            height: area
+                .height
+                .checked_sub(dock::HEIGHT)
+                .expect("this terminal has no room above the dock"),
+            ..area
+        };
+        let dock_area = Rect {
+            y: area.bottom() - dock::HEIGHT,
+            height: dock::HEIGHT,
+            ..area
+        };
 
         // The terminal's own report of itself, read once here because this is the call
         // that draws: the grid says how many cells the pane is, and `ws_xpixel`/
         // `ws_ypixel` say how many pixels, which is the size the session's program is
-        // configured at. It is read rather than kept because a terminal changes shape
-        // without anything here being told: a font that grew keeps the grid and changes
-        // the picture.
-        //
-        // The read failing is a pane that cannot ask its own terminal what it is, and
-        // there is no size to draw at that is not invented: the session could only go on
-        // drawing at a size nobody measured.
+        // configured at. Read rather than kept, because a terminal changes shape without
+        // anything here being told: a font that grew keeps the grid and changes the
+        // picture.
         let winsize = rustix::termios::tcgetwinsize(std::io::stdin())
             .expect("the terminal must report its own size");
 
-        // Where the session is may change because of drawing this frame: the async step is
-        // driven here, and it draws itself where it stands.
-        //
-        // The state is taken out and the result put back, which is why the session holds a
-        // `Result`: what goes in its place while the step runs is the failure a state that
-        // never comes back deserves, and a step that does not return leaves exactly that
-        // on screen for the next frame to draw.
-        let taken = std::mem::replace(&mut session.state, Err(INTERNAL_ERROR.to_string()));
-        session.state = taken.and_then(|state| {
-            // Driven by the **tokio** runtime, not by a bare block-on, and that is the
-            // point: the step awaits tokio IO and tokio timers, and a runtime must be
-            // polled for either to make progress. `pollster::block_on` drives the future
-            // itself and nothing else, so a timer registered with the runtime never
-            // expires and a socket does not wake this thread when it becomes writable --
-            // the future returns `Pending`, nobody unparks, and the thread spins forever
-            // on a step that will never finish.
-            //
-            // `block_in_place` first, because this *is* a runtime worker thread and the
-            // draw is synchronous: it tells the runtime to move other tasks elsewhere
-            // while this one blocks, which is what makes blocking here safe.
-            let result = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(state.render(
-                    content,
+        // The program's frame. Its own `render` is where the work is: it takes the input
+        // that arrived, advances the windows, and draws them when they are the thing on
+        // screen. The size and the input channel go in as its state, because a `render` is
+        // handed an area and a buffer and nothing else.
+        match &mut session.stage {
+            Ok(stage) => {
+                let mut props = Props {
                     winsize,
-                    buf,
-                    session,
-                ))
-            });
-            result
-        });
+                    events: &session.input_receiver,
+                };
+                StatefulWidget::render(stage, content, buf, &mut props);
+            }
+            // A failure is drawn here and not by a step: the pane is this widget's, and a
+            // step that drew its own failure would be drawing in a place it does not own.
+            Err(message) => {
+                log::error!("{message}");
+                ratatui::widgets::Clear.render(content, buf);
+                buf.set_style(content, Style::new().bg(Color::Rgb(0x40, 0, 0)));
+                let lines: Vec<Line> = std::iter::once(Line::from("the session failed"))
+                    .chain(message.lines().map(Line::from))
+                    .collect();
+                Paragraph::new(lines).centered().render(content, buf);
+            }
+        }
 
-        // Whether the step failed just now or failed on an earlier frame, the pane says
-        // why. This is the one place a failure is drawn: a step hands its failure back
-        // rather than drawing it, because the pane is this widget's and not the step's.
+        // The dock, under the screen: the one part of the pane that is the same in every
+        // state, and the one thing a user can press to leave a screen whose content takes
+        // the keyboard. It shares the stage as its state, so a press is the swap itself.
         //
-        // Cleared first, because centred text only writes the cells it sits on: whatever
-        // the frame before this one drew — the advert, "connecting to ..." — would still be
-        // there around it, and two states' words on one screen read as neither.
-        if let Err(message) = &session.state {
-            log::error!("{message}");
-            ratatui::widgets::Clear.render(content, buf);
-            buf.set_style(content, Style::new().bg(Color::Rgb(0x40, 0, 0)));
-            let lines: Vec<Line> = std::iter::once(Line::from("the session failed"))
-                .chain(message.lines().map(Line::from))
-                .collect();
-            Paragraph::new(lines).centered().render(content, buf);
-        }
-
-        // The footer, then the panel over the session, never instead of it.
-        session.footer.render(footer, buf, session.popup_state);
-        session.popup_state.render(content, buf);
-    }
-}
-
-/// The line of buttons along the bottom.
-///
-/// Its own struct with a `render` rather than a loop inside the widget, because this line
-/// is the one part of the pane that is the same in every state: what pressing one into
-/// opens is a panel, which is not the session's business.
-pub struct Footer;
-
-impl Footer {
-    /// Draw the buttons on `area`, marking whichever panel is open.
-    ///
-    /// The spinner on the right is a liveness light: it turns once a second, so a pane
-    /// that is drawing but not sending frames can be told apart from a loop that has
-    /// stopped. It says nothing about the session's health — only that the draw is
-    /// happening.
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, open: PopupState) {
-        buf.set_style(area, Style::new().bg(Color::Rgb(0x28, 0x28, 0x28)));
-        let mut x = 1u16;
-        for (index, label) in popup::BUTTONS.iter().enumerate() {
-            let style = if open.is_open_for(index) {
-                Style::new().fg(Color::Black).bg(Color::Rgb(0xff, 0x69, 0xb4))
-            } else {
-                Style::new().fg(Color::Gray)
-            };
-            buf.set_string(area.x + x, area.y, format!(" {label} "), style);
-            x += label.len() as u16 + 3;
-        }
-
-        // The spinner, one cell in from the right edge.
-        if let Some(cell) = area.right().checked_sub(2) {
-            let frame = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() / 1000)
-                .unwrap_or(0);
-            const SPIN: [char; 4] = ['◐', '◓', '◑', '◒'];
-            let spin = SPIN[(frame % SPIN.len() as u128) as usize];
-            buf.set_string(cell, area.y, spin.to_string(), Style::new().fg(Color::DarkGray));
-        }
+        // Borrowed field by field rather than through a method: the dock and the stage are
+        // different fields of one struct, so two mutable borrows of them at once are two
+        // distinct places and the compiler accepts both.
+        StatefulWidget::render(&mut session.dock, dock_area, buf, &mut session.stage);
     }
 }

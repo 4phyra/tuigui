@@ -58,8 +58,6 @@ pub struct Options {
     /// logical size times this, so the capture scales that back to the output
     /// instead of assuming the two are the same.
     pub dpi: f64,
-    /// Draw a software cursor overlay on captured frames.
-    pub show_cursor: bool,
     /// Spawn an XWayland server so X11-only clients can render through the
     /// session. When false, only native Wayland clients are supported
     /// (`DISPLAY` is left unset).
@@ -84,9 +82,9 @@ pub struct WaylandServer {
     socket: ListeningSocket,
     /// Absolute path of the listening socket, for `WAYLAND_DISPLAY`.
     socket_name: PathBuf,
-    /// Private per-session runtime dir holding our socket. The child's
-    /// `XDG_RUNTIME_DIR` points here so it can only discover our socket, never
-    /// the host compositor's. Removed on drop.
+    /// Private per-session dir holding our socket, made inside the caller's
+    /// `XDG_RUNTIME_DIR` so a client that resolves its display name finds it there.
+    /// Removed on drop.
     runtime_dir: PathBuf,
     /// The wl_output global, kept alive for the session's lifetime.
     _output_global: GlobalId,
@@ -116,7 +114,7 @@ impl WaylandServer {
         let output_global = output.create_global::<State>(&dh);
 
         // The globals, the seat with its keyboard and pointer, and the output.
-        let state = State::new(&dh, output, options.resolution, options.dpi, options.show_cursor)?;
+        let state = State::new(&dh, output, options.resolution, options.dpi)?;
 
         // The loop that sources ride on; XWayland's source joins when asked.
         let event_loop =
@@ -137,17 +135,23 @@ impl WaylandServer {
         })
     }
 
-    /// A private runtime dir, isolated from the caller's (Hyprland's). The
-    /// child gets this as `XDG_RUNTIME_DIR` so the only Wayland socket it
-    /// can auto-discover is ours; the host compositor simply isn't there.
+    /// A private runtime dir holding the session's socket, inside the caller's
+    /// `XDG_RUNTIME_DIR`.
+    ///
+    /// Inside `XDG_RUNTIME_DIR` and not under `/tmp`, because that is the one place a
+    /// Wayland client looks: every toolkit resolves a display name against it, whatever
+    /// `WAYLAND_DISPLAY` says. A socket in `/tmp` is reachable by its absolute path and by
+    /// nothing else, which is why a program that looks the name up for itself reports "we
+    /// don't have any display" while holding the path.
+    ///
+    /// `TMPDIR` is not used for this: it is whatever launched us, and under a shell it is
+    /// a per-shell directory a grandchild does not inherit.
     fn new_runtime_dir() -> Result<PathBuf, CompError> {
-        // `/tmp` and not `temp_dir()`: `TMPDIR` is whatever launched us, and under a
-        // shell that is a per-shell directory that a grandchild does not inherit. The
-        // socket's path travels to the child as an absolute path, so it has to be a
-        // path every process can reach — and `/tmp` is the one that is.
-        let runtime_dir = Path::new("/tmp").join(format!(
-            "wayland-{}-{}",
-            std::process::id(),
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        let runtime_dir = base.join(format!(
+            "tuigui-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
@@ -305,7 +309,10 @@ impl WaylandServer {
     /// window: the caller learns about both by advancing the server and asking
     /// `root_tree` again, which is what makes the loop the caller's to own.
     #[tracing::instrument(name = "server.spawn", skip_all)]
-    pub fn spawn(&mut self, path: &std::path::Path) -> std::io::Result<()> {
+    pub fn spawn(
+        &mut self,
+        path: &std::path::Path,
+    ) -> std::io::Result<(std::process::ChildStdout, std::process::ChildStderr)> {
         tracing::info!(path = %path.display(), "spawning client");
 
         // The command that can reach both display stacks, scrubbed of
@@ -335,31 +342,33 @@ impl WaylandServer {
             self.socket_name.exists()
         );
 
-        // A program's own diagnostics go to a file, not the pane: this process owns the
-        // terminal, and a toolkit's warnings written to stdout would land in the middle
-        // of the screen the pane is drawing on.
-        //
-        // Descriptors rather than pipes: a pipe can fill, and a program blocked writing
-        // to one is a program that never draws. A file never blocks.
-        let chatter = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/tuigui-client.log")
-            .map_err(|e| std::io::Error::other(format!("opening the client log: {e}")))?;
-        let chatter_err = chatter
-            .try_clone()
-            .map_err(|e| std::io::Error::other(format!("cloning the client log: {e}")))?;
-        command.stdout(std::process::Stdio::from(chatter));
-        command.stderr(std::process::Stdio::from(chatter_err));
-        let child = command
+        // The program's words come back to the caller rather than going to a file: the
+        // caller is the side that shows them, and it drains both streams for as long as
+        // the program runs. Draining is what makes a pipe safe here — one nobody reads
+        // fills, and a program blocked writing to a full one never draws.
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+        let mut child = command
             .spawn()
             .map_err(|e| std::io::Error::other(format!("{}: {e}", path.display())))?;
+
+        // Taken before the child is handed on: `Child` is what the session keeps, and a
+        // pipe is only readable through the handle taken out of it.
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("the program's stdout was not a pipe"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| std::io::Error::other("the program's stderr was not a pipe"))?;
 
         // The child becomes the session's root client; its connection
         // attaches at the next step.
         self.state
             .attach_root_client(child)
-            .map_err(|e| std::io::Error::other(e.to_string()))
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        Ok((stdout, stderr))
     }
 
     /// Advance the session: accept new clients, drain their input mailboxes,
