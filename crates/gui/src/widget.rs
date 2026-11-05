@@ -72,6 +72,7 @@ impl Session {
         codec: CodecId,
         stdin: Input,
         program: String,
+        scale: f64,
     ) -> std::io::Result<Self> {
         // Read and parsed on a thread of its own: a read of the raw terminal blocks until
         // the pane has something to say, and the draw loop cannot sit in that read. The
@@ -82,7 +83,7 @@ impl Session {
             wayland::Options {
                 resolution: size,
                 default_window_size: (size.0 / 2, size.1 / 2),
-                dpi: 1.0,
+                dpi: scale,
                 use_x11: false,
             },
             codec,

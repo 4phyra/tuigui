@@ -144,18 +144,23 @@ impl XdgShellHandler for State
 
         // Sized by its positioner, which is the one place a client states a size: a menu is as
         // big as its program said it would be, and that is the size it is drawn at until it
-        // commits something.
+        // commits something. A positioner states everything in the parent's **logical** units,
+        // and the compositor places and measures in physical pixels, so both the size and the
+        // offset are multiplied by the session's scale on the way in.
+        let physical = |logical: i32| ((f64::from(logical) * self.output_scale).round() as u32).max(1);
         let win = Window::new(
             UnifiedSurface::Popup(surface.clone()),
-            (
-                geometry.size.w.max(1) as u32,
-                geometry.size.h.max(1) as u32,
-            ),
+            (physical(geometry.size.w), physical(geometry.size.h)),
+            self.output_scale,
         );
-        let mut win = win;        // Where it sits inside the parent, in the parent's own pixels. Clamped at zero: a
-        // negative offset is legal — a menu may hang off the left edge — but nothing draws
+        let mut win = win;
+        // Where it sits inside the parent, in the parent's own **physical** pixels. Clamped at
+        // zero: a negative offset is legal — a menu may hang off the left edge — but nothing draws
         // outside the picture it is composited into.
-        win.offset = Some((geometry.loc.x.max(0), geometry.loc.y.max(0)));
+        let scaled = |logical: i32| {
+            ((f64::from(logical.max(0)) * self.output_scale).round() as i32).max(0)
+        };
+        win.offset = Some((scaled(geometry.loc.x), scaled(geometry.loc.y)));
         let win = Arc::new(win);
 
         // The serial of the configure just sent, so the client's ack can be matched to it.
@@ -222,18 +227,27 @@ impl XdgShellHandler for State
 /// The admission common to both client kinds: configure, activate, and build
 /// the window that will hold the surface.
 ///
-/// `size` is the size this side proposes, which is its own decision and never the client's: an
-/// xdg toplevel has no way to state one. A root window is proposed the output's resolution
-/// because it fills the pane; every other window is proposed `default_window_size` and is free
-/// to commit at whatever size it likes instead.
+/// `physical_size` is the size this side proposes, which is its own decision and never the
+/// client's: an xdg toplevel has no way to state one. A root window is proposed the output's
+/// resolution because it fills the pane; every other window is proposed `default_window_size`
+/// and is free to commit at whatever size it likes instead. What the configure carries is the
+/// **logical** size, so the program lays its interface out `logical_scale` times larger than the
+/// physical box.
 fn admit(
     surface: &ToplevelSurface,
-    size: (u32, u32),
+    physical_size: (u32, u32),
+    logical_scale: f64,
     serial: Serial,
 ) -> Window {
-    let win = Window::new(UnifiedSurface::Toplevel(surface.clone()), size);
+    let win = Window::new(
+        UnifiedSurface::Toplevel(surface.clone()),
+        physical_size,
+        logical_scale,
+    );
+    let logical = |px: u32| ((f64::from(px) / logical_scale).round() as i32).max(1);
+    let (width, height) = (logical(physical_size.0), logical(physical_size.1));
     surface.with_pending_state(|pending| {
-        pending.size = Some((size.0 as i32, size.1 as i32).into());
+        pending.size = Some((width, height).into());
         pending.states.set(xdg_toplevel::State::Activated);
     });
     surface.send_configure();
@@ -260,7 +274,7 @@ fn admit_into_root_client(state: &mut State, surface: ToplevelSurface)
     } else {
         state.server_size
     };
-    let win = admit(&surface, size, serial);
+    let win = admit(&surface, size, state.output_scale, serial);
 
     let mut tree = root.root_window.write().unwrap();
     let target = match tree.as_ref() {
@@ -313,7 +327,12 @@ fn admit_into_sub(state: &mut State, surface: ToplevelSurface)
     let serial = state.next_serial();
     let client = surface.wl_surface().client().expect("seen above");
     let sub = client.get_data::<SubClient>().expect("seen above");
-    let win = Arc::new(admit(&surface, state.default_window_size, serial));
+    let win = Arc::new(admit(
+        &surface,
+        state.default_window_size,
+        state.output_scale,
+        serial,
+    ));
 
     let mut tree = sub.root_window.write().unwrap();
     let target = match tree.as_ref() {

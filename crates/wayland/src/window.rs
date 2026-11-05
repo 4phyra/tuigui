@@ -146,6 +146,13 @@ pub struct Window {
     /// and a handle to it handed out is a lock the holder has to remember to release.
     #[getter(skip)]
     pub(crate) size: Mutex<(u32, u32)>,
+    /// How large this window's own interface is drawn relative to a physical pixel.
+    ///
+    /// The session's, taken once when the window was minted: a property of the output, not
+    /// something a window chooses, and not something that changes. It is what turns the
+    /// **physical** size the compositor asks for into the **logical** size a configure carries,
+    /// because the client multiplies back by the same scale when it allocates its buffer.
+    pub(crate) scale: f64,
 }
 
 impl Window {
@@ -154,8 +161,15 @@ impl Window {
     pub fn size(&self) -> (u32, u32) {
         *self.size.lock().unwrap_or_else(|e| e.into_inner())
     }
-    /// A window that is `size` pixels until its program commits something else.
-    pub(crate) fn new(surface: UnifiedSurface, size: (u32, u32)) -> Self {
+    /// A window that is `physical_size` pixels until its program commits something else.
+    ///
+    /// `logical_scale` is the session's: how large its programs draw themselves relative to a
+    /// physical pixel, which is what turns the compositor's physical ask into a logical configure.
+    pub(crate) fn new(
+        surface: UnifiedSurface,
+        physical_size: (u32, u32),
+        logical_scale: f64,
+    ) -> Self {
         Window {
             surface,
             frame: watch::channel(None).0,
@@ -170,7 +184,8 @@ impl Window {
             new_popups: broadcast::channel(8).0,
             keys: Mutex::new(VecDeque::new()),
             pointers: Mutex::new(VecDeque::new()),
-            size: Mutex::new(size),
+            size: Mutex::new(physical_size),
+            scale: logical_scale,
         }
     }
 
@@ -238,19 +253,30 @@ impl Window {
         Some((frame.pixels, frame.size))
     }
 
-    /// Ask this window to draw at `size` pixels instead of its current one.
-    /// The client answers by committing a buffer at whatever size it chose.
+    /// Ask this window to draw at `size` **physical** pixels instead of its current one.
+    ///
+    /// The client answers by committing a buffer at whatever size it chose. What is sent is the
+    /// logical size, because that is what a configure carries: the interface a program lays out is
+    /// `size / scale` across, and its buffer comes back at `size` because it multiplies by the
+    /// scale it was told about separately. Handing it `size` directly would ask for an interface
+    /// that fills the box at one pixel per unit, which is the downscaled picture this conversion
+    /// exists to avoid.
     ///
     /// Only a toplevel can be asked: a popup's size comes from its positioner, which the client
     /// owns. Asking one would be proposing a size it has no way to accept.
-    pub fn set_size(&self, size: (u32, u32)) {
+    pub fn set_size(&self, physical: (u32, u32)) {
         let Some(toplevel) = self.surface.toplevel() else {
-            log::info!("compositor: a popup was asked for {:?}; its positioner owns its size", size);
+            log::info!("compositor: a popup was asked for {physical:?}; its positioner owns its size");
             return;
         };
-        log::info!("compositor: asking the program for {:?}", size);
+        let logical = |px: u32| ((f64::from(px) / self.scale).round() as i32).max(1);
+        let (width, height) = (logical(physical.0), logical(physical.1));
+        log::info!(
+            "compositor: asking the program for {width}x{height} logical ({physical:?} physical, scale {})",
+            self.scale
+        );
         toplevel.with_pending_state(|pending| {
-            pending.size = Some((size.0 as i32, size.1 as i32).into());
+            pending.size = Some((width, height).into());
         });
         toplevel.send_configure();
     }

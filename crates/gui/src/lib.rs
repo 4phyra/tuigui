@@ -55,6 +55,14 @@ pub struct Gui {
     /// The codec the session streams with.
     #[command(flatten)]
     pub streaming: StreamingOptions,
+    /// How much larger the program's own interface should be drawn than a physical pixel.
+    ///
+    /// The pane is measured in physical pixels and a program lays its interface out in logical
+    /// ones; this is what turns one into the other, so a session at 2 asks its program for half
+    /// as many units across and the interface comes out twice the size. The program's buffer is
+    /// still the pane's size, so it is both larger *and* sharper — the picture is not stretched.
+    #[arg(long, default_value_t = 2.0)]
+    pub scale: f64,
     /// The diagnostic switches, which belong to the client.
     #[command(flatten)]
     pub debug: DebugOptions,
@@ -209,6 +217,7 @@ impl Gui {
             self.streaming.codec(),
             input,
             self.program.display().to_string(),
+            self.scale,
         )
         .await?;
 
