@@ -54,6 +54,11 @@ pub enum Message {
     /// carry one it had never heard of. What it does name is the window the frame belongs to,
     /// because a session holds more than one and a decoder is per window: without the surface
     /// there is no way to know which stream this stretch continues.
+    ///
+    /// Sent once per window per frame whether or not there are new pixels: the box and the rank
+    /// are what place the picture, and they change without the picture changing — a window being
+    /// dragged moves while its program draws nothing. `bytes` of `None` is therefore a placement
+    /// of the picture the far side already has.
     Frame {
         /// The cells of the window this frame draws.
         surface: SurfaceId,
@@ -71,7 +76,12 @@ pub enum Message {
         cols: u32,
         rows: u32,
         /// The codec's bytes, opaque to the link.
-        bytes: Vec<u8>,
+        ///
+        /// `None` when the program drew nothing since the last frame, or when the codec is
+        /// holding a frame back: the picture the far side already has is what belongs in this
+        /// box. Not an empty vec — the two cases mean the same thing here, and `Some(vec![])`
+        /// would be a third one to answer for.
+        bytes: Option<Vec<u8>>,
     },
     /// Something failed.
     ///
@@ -271,7 +281,7 @@ mod tests {
                 z: 0,
                 cols: 80,
                 rows: 24,
-                bytes: b"raw frame bytes".to_vec(),
+                bytes: Some(b"raw frame bytes".to_vec()),
             },
             // Not text, so a codec that assumed UTF-8 would show up here.
             Message::Frame {
@@ -283,7 +293,19 @@ mod tests {
                 z: 9,
                 cols: 1,
                 rows: 1,
-                bytes: vec![0x00, 0xff, 0x1b, 0x9b],
+                bytes: Some(vec![0x00, 0xff, 0x1b, 0x9b]),
+            },
+            // No pixels at all: a frame that only moves the picture already on the far side.
+            Message::Frame {
+                surface: SurfaceId {
+                    symbol: '▒',
+                    fg: (7, 8, 9),
+                    bg: (10, 11, 12),
+                },
+                z: 1,
+                cols: 12,
+                rows: 5,
+                bytes: None,
             },
             Message::OpenWindow {
                 surface: SurfaceId {

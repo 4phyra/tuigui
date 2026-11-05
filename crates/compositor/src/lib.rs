@@ -1,8 +1,8 @@
 //! The programs running in a compositor of ours, drawn into the pane as windows.
 //!
 //! The video path decodes a file; this one runs programs. Each program gets a
-//! Wayland session of its own — a compositor in this process, one output — and
-//! the pixels it commits are read straight out of that compositor's buffer.
+//! session of its own — a compositor in this process, one output — and the windows
+//! it opens are placed here as boxes of cells.
 //!
 //! # What is whose
 //!
@@ -15,20 +15,26 @@
 //! event does to it — is [`widgets::decorated_window`]'s business. This module is
 //! only the stack: which window is in front, which one has the keyboard, and the
 //! pass that offers an event to each of them in turn.
-
-use std::sync::{Arc, Weak};
+//!
+//! # What is not
+//!
+//! The pictures. A window is asked for one and takes its own: whatever a frame
+//! becomes after the pixels exist — a codec, a message, a socket — belongs to
+//! whoever implements [`AgnosticWindow`], because only that side has a link to
+//! send it down. This crate names no codec and no wire.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Color;
 use ratatui::widgets::Widget;
 
-use crate::widgets::decorated_window::DecoratedWindow;
+use crate::widgets::decorated_window::{DecoratedWindow, WindowState};
+use crate::widgets::frame::Frame;
 
 pub mod widgets;
 pub mod windowing;
 
-pub use windowing::{StatefulWindow, WindowState, WindowingServer};
+pub use windowing::{Compositable, Error, WindowingServer};
 
 /// The pointer, as the pane draws it.
 ///
@@ -43,17 +49,28 @@ const CURSOR: char = '➤';
 pub struct Compositor<T: WindowingServer> {
     /// The session the windows live in. Dropping it ends them.
     windowing: T,
-    /// Every window, in stacking order: the session's root first, so it is at the
-    /// bottom of the pane, and the windows above it in the order they were raised,
-    /// so the frontmost is last. Each one carries its own chrome and the drag it
-    /// is in the middle of, so an entry outlives the frame that drew it.
+    /// Every window, in stacking order, each with the windows its program placed inside it.
     ///
-    /// Bottom first is what makes an input event one back-to-front walk: the
-    /// frontmost window is the last of the vector, and the root — which fills the
-    /// pane — is the first.
-    windows: Vec<DecoratedWindow>,
-    /// The window a key belongs to.
-    focused: Option<Weak<dyn StatefulWindow>>,
+    /// The outer order is the stack: the session's root first, so it is at the bottom of the
+    /// pane, and the windows above it in the order they were raised, so the frontmost is last.
+    /// Each inner slice starts with the window itself and continues with its popups — a menu
+    /// belongs to the window it hangs off, so it is next to it rather than beside it.
+    ///
+    /// That pairing is what makes everything else one rule. Flattened, the sequence is the draw
+    /// order: a popup is over its parent and under the next window. Reversed, it is the hit order:
+    /// the topmost thing is found first. Enumerated, the index is the rank. And a popup's place is
+    /// its parent's box plus its own offset, read from the two entries side by side.
+    ///
+    /// Each one carries its own chrome and the drag it is in the middle of, so an entry outlives
+    /// the frame that drew it.
+    windows: Vec<Vec<DecoratedWindow>>,
+    /// The window a key belongs to, as its place in the stack: which group, and which entry in
+    /// that group. A position rather than a handle, because the stack is what holds the windows —
+    /// a handle would have to be kept in step with it, and an index cannot go stale while the
+    /// stack is what is being read.
+    ///
+    /// `(0, 0)` until something is clicked: the root, which is the program itself.
+    focused: (usize, usize),
     /// The pane's rectangle as of the last render, in cells.
     pane: Rect,
     /// Where the pointer last was, in cells of the pane.
@@ -71,7 +88,7 @@ impl<T: WindowingServer> Compositor<T> {
         Self {
             windowing,
             windows: Vec::new(),
-            focused: None,
+            focused: (0, 0),
             pane: Rect::ZERO,
             pointer: None,
         }
@@ -83,6 +100,15 @@ impl<T: WindowingServer> Compositor<T> {
     /// still waiting, which is what `is_running` answers.
     pub fn finished(&self) -> bool {
         !self.windowing.is_running()
+    }
+
+    /// The session, for the side that owns more of it than this crate does.
+    ///
+    /// What a window's pictures are sent down is that side's business, so it is that
+    /// side which hands the session its connection. This crate cannot do it: it does
+    /// not know what a connection is.
+    pub fn windowing_mut(&mut self) -> &mut T {
+        &mut self.windowing
     }
 
     /// Start the session's program, so it connects to this compositor.
@@ -119,30 +145,46 @@ impl<T: WindowingServer> Compositor<T> {
                 // Where the pointer is, in cells of the pane, kept for the draw that
                 // comes after this event: the cursor is painted last, over everything.
                 self.pointer = Some(Position::new(mouse.column, mouse.row));
-                // Back to front: the frontmost window is the last of the vector,
-                // so the walk finds the one nearest the user first. The root sits
-                // at index 0 and fills the pane, so it is found when no window
-                // above it wanted the event.
-                let Some(focus) = self
-                    .windows
-                    .iter_mut()
-                    .rposition(|window| window.handle_mouse(*mouse, pane, winsize).is_none())
-                else {
+                // Back to front, and innermost first within a group: a popup is over the window
+                // that holds it, so a menu is offered the event before the window it hangs off,
+                // and the root last because it fills the pane. The answer is the pair — which
+                // group, and which entry in it — because the group is what gets raised.
+                //
+                // A group's first entry is the window, whose box is already on the pane; the
+                // rest are its popups, whose boxes are offsets *inside* that box. So the parent's
+                // corner is the origin for everything after it.
+                let mut found = None;
+                for (index, group) in self.windows.iter_mut().enumerate().rev() {
+                    for inner in (0..group.len()).rev() {
+                        let area = place(group, inner);
+                        if group[inner]
+                            .handle_mouse(*mouse, pane, area, winsize)?
+                            .is_none()
+                        {
+                            found = Some((index, inner));
+                            break;
+                        }
+                    }
+                    if found.is_some() {
+                        break;
+                    }
+                }
+                let Some(focus) = found else {
                     return Ok(());
                 };
                 // What claimed the event is what the keyboard talks to, the root
                 // included: the root is the pane, so over the pane is over the
                 // program. This is set before the raise below because the two are
                 // different decisions, and the root takes focus without ever coming up.
-                self.focused = Some(Arc::downgrade(&self.windows[focus].window));
-                // Index 0 is the root, which is the pane itself: raising it would
-                // cover its own windows, so it stays where it is. Anything else
-                // comes forward.
-                if focus == 0 {
+                self.focused = focus;
+                // The first group is the root, which is the pane itself: raising it would
+                // cover its own windows, so it stays where it is. Anything else comes
+                // forward, with its popups: they are part of it.
+                if focus.0 == 0 {
                     return Ok(());
                 }
 
-                let window = self.windows.remove(focus);
+                let window = self.windows.remove(focus.0);
                 self.windows.push(window);
             }
             _ => {}
@@ -151,10 +193,10 @@ impl<T: WindowingServer> Compositor<T> {
     }
 
     /// One frame of the session: step it forward, catch the stack up with what
-    /// it offers now, and send every window's picture down `link`.
+    /// it offers now, and ask every window for its picture.
     ///
-    /// Stepping first is what makes the captures worth taking: the pixels sent
-    /// here are the ones the programs committed during this step.
+    /// Stepping first is what makes the frames worth taking: what a window hands back
+    /// here is what its program drew during this step.
     ///
     /// `winsize` is the terminal's own report of itself, read once per frame by the
     /// caller: it is the only place the pane's size in **pixels** comes from, and
@@ -163,47 +205,56 @@ impl<T: WindowingServer> Compositor<T> {
     #[tracing::instrument(name = "compositor.frame", skip_all)]
     pub fn frame(
         &mut self,
-        link: &wire::transport::Connection,
         timeout: std::time::Duration,
         winsize: rustix::termios::Winsize,
-    ) {
+    ) -> Result<(), Error> {
         self.windowing.advance(timeout);
 
-        let root = match self.windowing.root_window().and_then(|root| root.upgrade()) {
-            Some(root) => root,
-            None => {
-                // No session root yet: nothing to sync, nothing to capture. Said out loud
-                // because it is indistinguishable from a session whose windows never draw.
-                log::debug!(
-                    "compositor: no root window (ready: {}, windows: {})",
-                    self.windowing.is_ready(),
-                    self.windows.len()
-                );
-                return;
-            }
-        };
-        self.maybe_resize_root(&root, winsize);
-        self.sync(root);
-
-        // Each window encodes its own picture: the pixels are that window's, and
-        // so is the encoder, which is the pictures it has already sent. A window
-        // that has not drawn has nothing to send, which is not a failure — the
-        // next frame that commits carries a picture.
+        // Synced first, so the root has a placement to resize: the stack is what holds where a
+        // window sits, and the root is a window like any other until it is minted.
         //
-        // Its place in the stack goes with the frame: this vector *is* the order,
-        // bottom first, so a window's index is its rank with `0` furthest away.
-        // Raising a window changes that order without changing its picture, which
-        // is why the rank travels per frame rather than being announced once.
-        for (z, window) in self.windows.iter().enumerate() {
-            match window.window.capture(link, z as u32) {
-                Ok(()) | Err(windowing::Error::NotReady) => {}
-                Err(e) => log::warn!("a frame was not sent: {e}"),
+        // No root is not a failure and not a reason to stop: a session whose program has not
+        // connected has nothing to draw, and one whose windows are already on the pane still has
+        // to be stepped and sent.
+        if self.windows.is_empty() {
+            if let Some(root) = self.windowing.root_window() {
+                self.populate_root(root);
             }
-            // After the capture, never before it: a configure changes the size the
-            // window's next picture is expected at, so sending it first would leave the
-            // frame just encoded labelled with a size it does not have.
-            window.maybe_set_size(winsize);
         }
+        self.cleanup();
+        self.populate_windows(winsize)?;
+        self.populate_popups(winsize)?;
+        self.maybe_resize_root(winsize)?;
+
+        // Each window takes its own picture: the pixels are that window's, and so is
+        // whatever it does with them — a window whose side streams encodes and sends, and
+        // one whose side does not has nothing to do. A window that has not drawn has
+        // nothing to take, which is not a failure: the next frame that commits carries a
+        // picture.
+        //
+        // Its place in the stack goes with the frame: the outer order is the stack, and each
+        // window is followed by its popups, so flattening the two is the draw order and one
+        // count over it ranks everything. A menu ends up in front of the window it hangs off
+        // and behind the next window, with no arithmetic of its own.
+        // The ask first, then the picture: a resize happened between frames — a drag, a pane that
+        // changed — and the window has to be told before its picture is taken, or the picture
+        // taken is the old size and writing it back into the box undoes the drag.
+        for window in self.windows.iter_mut().flatten() {
+            window.maybe_set_size(winsize)?;
+        }
+
+        for (rank, entry) in self.windows.iter_mut().flatten().enumerate() {
+            // The box is this side's decision, and it stays it: what the program answers about
+            // its own size is never read back into the box. The two do not agree, and cannot —
+            // the terminal reports a cell as whole pixels and the program lays out from its own
+            // font metrics — so a size fed back is always a little under or over the box that
+            // produced it, and asking for it again moves the window further every frame. The
+            // program is told the box, every frame, and the box is what the pane draws.
+            entry
+                .window
+                .frame(rank as u32, (entry.state.area.width, entry.state.area.height))?;
+        }
+        Ok(())
     }
 
     /// The root is the pane, so a change of pane is a change of the root window's
@@ -218,11 +269,7 @@ impl<T: WindowingServer> Compositor<T> {
     /// program at the cell count instead gives it a window of `80x24` pixels for
     /// the pane to stretch over `80x24` cells.
     #[tracing::instrument(name = "compositor.resize", skip_all)]
-    fn maybe_resize_root(
-        &mut self,
-        root: &Arc<dyn StatefulWindow>,
-        winsize: rustix::termios::Winsize,
-    ) {
+    fn maybe_resize_root(&mut self, winsize: rustix::termios::Winsize) -> Result<(), Error> {
         let pixels = (u32::from(winsize.ws_xpixel), u32::from(winsize.ws_ypixel));
         // A terminal that reports no pixels is one that cannot say, and it is not
         // an error: the grid is still known, so the program is configured at one
@@ -236,91 +283,168 @@ impl<T: WindowingServer> Compositor<T> {
             _ => pixels,
         };
 
-        let was = root.state().area;
+        // The root is the bottom of the stack, so it is the first group's first entry: it is
+        // the one window whose box is the pane rather than something put on it.
+        let Some(root) = self.windows.first_mut().and_then(|group| group.first_mut()) else {
+            return Ok(());
+        };
+        let was = root.state.area;
         if was != self.pane {
             // Worth a line every time it happens: the root is what the session
             // hears about its own size, and a root that disagrees with the pane is
             // a window drawn in the wrong place with nothing to show for it.
+            //
+            // The countdown is armed too: the program has just been told a new size, so the
+            // picture it sends next answers the pane as it was.
             log::info!(
                 "compositor: the pane is {:?} cells ({pixels:?} pixels), so the root goes from {:?} to it",
                 self.pane,
                 was
             );
-            root.set_state(WindowState {
-                area: self.pane,
-                ..root.state()
-            });
+            root.state.area = self.pane;
         }
 
         // The output is told the size the pane is, every frame: a backend that is
         // already that size does nothing, so an untouched terminal costs no
         // configure, and a terminal that changed without changing its grid is
         // still caught.
-        root.set_size(pixels);
+        root.window.set_size(pixels)?;
         self.windowing.set_size(pixels);
+        Ok(())
     }
 
     /// The window a key belongs to when nothing is focused: the root, which is
     /// the program itself and sits at the bottom of the stack.
-    pub(crate) fn root_window(&self) -> Option<Arc<dyn StatefulWindow>> {
-        let root = self.windows.first()?;
-        Some(root.window.clone())
+    pub(crate) fn root_window(&self) -> Option<&dyn Compositable> {
+        let root = self.windows.first()?.first()?;
+        Some(root.window.as_ref())
     }
 
-    /// The window a key belongs to, if it is still alive.
-    pub(crate) fn focused_window(&self) -> Option<Arc<dyn StatefulWindow>> {
-        self.focused.as_ref().and_then(|focused| focused.upgrade())
+    /// The window a key belongs to, by its place in the stack. `None` when that place is empty,
+    /// which is a window that has been closed since it was clicked.
+    pub(crate) fn focused_window(&self) -> Option<&dyn Compositable> {
+        let (group, inner) = self.focused;
+        Some(self.windows.get(group)?.get(inner)?.window.as_ref())
     }
 
-    /// Bring the stack up to date with the session: drop what died, add what is
-    /// new, keep everything else as it is, chrome and drag included.
-    #[tracing::instrument(name = "compositor.sync", skip_all)]
-    fn sync(&mut self, root: Arc<dyn StatefulWindow>) {
-        // Bottom first, which is the order the stack is kept in: the root, then
-        // everything under it, each window after the one it was opened from.
-        let mut offered = vec![root.clone()];
-        offered.extend(collect(&root));
-
-        // A weak handle's only identity is the pointer, so that is how two reads
-        // of one window are told apart. What the retain keeps is what the stack
-        // already had; what it takes out of `offered` is what the stack has yet to
-        // see, which is all that is left to add.
-        self.windows.retain(|window| {
-            let Some(seen) = offered
-                .iter()
-                .position(|new| Arc::ptr_eq(new, &window.window))
-            else {
-                return false;
-            };
-
-            offered.remove(seen);
-            true
-        });
-
-        // Whatever is left is new, and goes on top, in the order it was offered:
-        // the root first if it is the one missing, which leaves it at index 0.
-        //
-        for window in offered {
-            let root = Arc::ptr_eq(&window, &root);
-            // A window appearing is the event worth a line: what it is, where it
-            // was put, and whether it wears chrome.
-            log::info!(
-                "compositor: a window arrived, {} at {:?}",
-                if root { "the root" } else { "opened" },
-                window.state().area
-            );
-            // New windows get focus: a window that just appeared is the one the user
-            // asked for by opening it, and so the one they are about to type into.
-            self.focused = Some(Arc::downgrade(&window));
-            self.windows.push(DecoratedWindow::new(window, root));
+    /// Bring the stack up to date with the session: drop what is over.
+    ///
+    /// One question per window, asked of the window itself: a handle outlives the window it names,
+    /// so nothing else can say whether it is still there. A group goes with its window — its popups
+    /// are part of it — and its own entries are checked too, because a popup can be dismissed while
+    /// the window that opened it stays.
+    #[tracing::instrument(name = "compositor.cleanup", skip_all)]
+    fn cleanup(&mut self) {
+        for group in self.windows.iter_mut() {
+            group.retain(|entry| entry.window.is_alive());
         }
-
-        if self.windows.is_empty() {
-            log::debug!("compositor: the stack is empty after sync");
-        } else {
-            log::debug!("compositor: {} window(s) in the stack", self.windows.len());
-        }
+        self.windows.retain(|group| !group.is_empty());
     }
+
+    /// Attach the popups every window has gained since the last frame.
+    ///
+    /// A popup goes into the group of the window that opened it, because it is part of that window:
+    /// it is drawn over it, and its box is an offset inside it, so moving the window moves the
+    /// popup with no bookkeeping. Where it sits is what its own program asked for, in cells.
+    #[tracing::instrument(name = "compositor.popups", skip_all)]
+    fn populate_popups(&mut self, winsize: rustix::termios::Winsize) -> Result<(), Error> {
+        for group in self.windows.iter_mut() {
+            // Every entry can open popups, not only the window: a menu can open a submenu. Walking
+            // the group in order is what places them, because a popup's parent is always an entry
+            // already in it — the window first, then the popup it hangs off.
+            let mut inner = 0;
+            while inner < group.len() {
+                let popups = group[inner].window.get_new_popups();
+                for popup in popups {
+                    // The offset is inside the parent's own cells, and the box stored is the
+                    // parent's corner plus it, so a submenu chains through its parent.
+                    let (x, y) = popup.offset_cells(winsize)?.ok_or(Error::Gone)?;
+                    let (width, height) = popup.size_cells(winsize)?;
+                    let parent = group[inner].state.area;
+                    group.push(DecoratedWindow::new(
+                        popup,
+                        Some(Frame::bare()),
+                        WindowState {
+                            area: Rect::new(
+                                parent.x.saturating_add(x),
+                                parent.y.saturating_add(y),
+                                width,
+                                height,
+                            ),
+                        },
+                    ));
+                }
+                inner += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Put the session's root on the stack, the first frame there is one.
+    ///
+    /// The root is nobody's child, so nothing announces it: it is the window the session itself
+    /// hands over, and the one whose box is the pane rather than a place on it.
+    #[tracing::instrument(name = "compositor.root", skip_all)]
+    fn populate_root(&mut self, root: Box<dyn Compositable>) {
+        self.focused = (0, 0);
+        let area = self.pane;
+        self.windows.push(vec![DecoratedWindow::new(
+            root,
+            None,
+            WindowState { area },
+        )]);
+    }
+
+    /// Add the windows the session has gained since the last frame, each as a group of its own.
+    ///
+    /// A child is a window the compositor places, so it starts at the smallest box the chrome can
+    /// be drawn in rather than at an offset its program chose.
+    #[tracing::instrument(name = "compositor.windows", skip_all)]
+    fn populate_windows(&mut self, winsize: rustix::termios::Winsize) -> Result<(), Error> {
+        for index in 0..self.windows.len() {
+            // Read first, then extend: `extend` holds `self.windows` mutably for its whole
+            // argument, so the window that answers has to be asked before that borrow is taken.
+            let children = self.windows[index][0].window.get_new_children();
+            let (pane, focused) = (self.pane, (index, self.windows[index].len()));
+            let placed = children
+                .into_iter()
+                .map(|child| {
+                    // Centred in the pane: its size is its own answer — the session configured it
+                    // at one when it was admitted — so the corner that puts it in the middle is
+                    // known before it has drawn anything.
+                    //
+                    // A window that just appeared is the one the user asked for by opening it, and
+                    // so the one they are about to type into.
+                    self.focused = focused;
+                    log::info!("compositor: a window arrived");
+                    let (width, height) = child.size_cells(winsize)?;
+                    Ok(DecoratedWindow::new(
+                        child,
+                        Some(Frame::with_bar()),
+                        WindowState {
+                            area: Rect::new(
+                                pane.x + pane.width.saturating_sub(width) / 2,
+                                pane.y + pane.height.saturating_sub(height) / 2,
+                                width,
+                                height,
+                            ),
+                        },
+                    ))
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            self.windows.extend(placed.into_iter().map(|window| vec![window]));
+        }
+        Ok(())
+    }
+}
+
+/// Where one entry of a group sits on the pane.
+///
+/// Its own box, always: a popup's stored box is already the pane's cells, because whoever placed
+/// it added the corner of the window it hangs off. Chaining that here would add a parent's corner
+/// twice — and for a window, which hangs off nothing, add its own corner to itself.
+fn place(group: &[DecoratedWindow], inner: usize) -> Rect {
+    group[inner].state.area
 }
 
 /// The compositor as the pane draws it: every window, bottom of the stack first.
@@ -333,9 +457,11 @@ impl<T: WindowingServer> Widget for &mut Compositor<T> {
             log::info!("compositor: the pane is {area:?}, was {:?}", self.pane);
         }
         self.pane = area;
-        for window in self.windows.iter_mut() {
-            let window_area = window.window.state().area;
-            window.render(window_area, buf);
+        for group in self.windows.iter_mut() {
+            for inner in 0..group.len() {
+                let place = place(group, inner);
+                group[inner].render(place, buf);
+            }
         }
         // The pointer last, over every window: it belongs to the pane rather than to any
         // one of them, and a window drawn after it would cover it.
@@ -352,74 +478,5 @@ impl<T: WindowingServer> Widget for &mut Compositor<T> {
                 }
             }
         }
-    }
-}
-
-/// How deep the walk may go, and how many windows it may visit.
-///
-/// A session's tree is a few windows at most — a program, and what it opens. These are not sizes
-/// anything legitimate approaches; they are the point at which the walk stops rather than
-/// trusting the tree to be a tree. A window reachable from itself, or two windows that opened
-/// each other, recurses until the stack gives out, and nothing about that failure names the
-/// window that caused it.
-const WALK_DEPTH: usize = 32;
-const WALK_BUDGET: usize = 256;
-
-/// Walk a window's children into `out`, each before its own: a window is
-/// drawn under the windows it opened.
-#[tracing::instrument(name = "compositor.collect", skip_all)]
-fn collect(window: &Arc<dyn StatefulWindow>) -> Vec<Arc<dyn StatefulWindow>> {
-    let mut out = Vec::new();
-    let mut left = WALK_BUDGET;
-    walk(window, 0, &mut left, &mut out);
-    out
-}
-
-/// [`collect`]'s recursion, with the two limits it needs to terminate on a tree that is not one.
-fn walk(
-    window: &Arc<dyn StatefulWindow>,
-    depth: usize,
-    left: &mut usize,
-    out: &mut Vec<Arc<dyn StatefulWindow>>,
-) {
-    // The smallest a window may be, in cells: below this the chrome alone would
-    // take more room than the window has.
-    const MIN: (u16, u16) = (10, 10);
-
-    if depth >= WALK_DEPTH || *left == 0 {
-        log::warn!(
-            "compositor: the window tree is deeper than {WALK_DEPTH} or wider than {WALK_BUDGET}; \
-             the walk stopped here"
-        );
-        return;
-    }
-    *left -= 1;
-
-    // A dummy session opens windows at a fraction of its own, so a window opened
-    // late is smaller than the chrome can be drawn in: it is grown to the floor,
-    // and its next read says so.
-    let area = window.state().area;
-    if area.width < MIN.0 || area.height < MIN.1 {
-        window.set_state(WindowState {
-            area: Rect::new(
-                area.x,
-                area.y,
-                area.width.max(MIN.0),
-                area.height.max(MIN.1),
-            ),
-            ..window.state()
-        });
-    }
-    for child in window.get_children() {
-        let Some(child) = child.upgrade() else {
-            continue;
-        };
-        // Already placed: a window reachable by two paths is one window, and the stack must
-        // not hold it twice.
-        if out.iter().any(|known| Arc::ptr_eq(known, &child)) {
-            continue;
-        }
-        walk(&child, depth + 1, left, out);
-        out.push(child);
     }
 }

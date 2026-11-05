@@ -107,6 +107,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "io-util", "net", "proce
 # over `tokio-retry` because its handler sees each error, so an error that is plainly
 # permanent can be passed on instead of retried.
 futures-retry = "0.6"
+# A queue that is read without ever being waited on, and is `Sync` as a plain value: a window
+# hands its holder the children it has gained, and the holder takes them at its own pace.
+flume = "0.11"
 # Messages on the wire are rkyv archives of the enum's own shape: serialized
 # into bytes, read back with validation. `bytecheck` is what validates an
 # archive before it is trusted; without it a corrupted length would be a lie
@@ -143,7 +146,7 @@ default = []
 # Profile the session. Forwards to the two halves, which are the ones that
 # install the subscriber — this crate only starts them. `just trace` builds
 # with it; a plain build links no profiler at all.
-tracy = ["tui/tracy", "gui/tracy"]
+tracy = ["tui/tracy", "gui/tracy", "dep:log", "dep:rustix"]
 
 [[bin]]
 name = "tuigui"
@@ -154,3 +157,8 @@ tui = { workspace = true }
 gui = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
+# Only the profiled build carries it: the one thing here that needs it is naming this process
+# for the two listings, and a build without a profiler has no second listing to tell apart.
+log = { workspace = true, optional = true }
+# `prctl(PR_SET_NAME)`: the kernel's name for this process, which a process list shows.
+rustix = { workspace = true, features = ["thread"], optional = true }

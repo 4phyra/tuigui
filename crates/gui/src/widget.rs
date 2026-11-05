@@ -12,7 +12,6 @@ pub use dock::HEIGHT as DOCK_HEIGHT;
 pub use stage::{Page, Props, Stage};
 
 use codecs::CodecId;
-use compositor::WindowingServer;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -38,20 +37,17 @@ pub fn socket_path() -> std::path::PathBuf {
 pub type Input = Box<dyn std::io::Read + Send>;
 
 /// One session: where it is, and which screen it is showing.
-///
-/// `T` is the window session this one composites; it is chosen once, where the
-/// session is created, from the debug options.
-pub struct Session<T: WindowingServer> {
+pub struct Session {
     /// Where the session is, or what went wrong getting there.
     ///
     /// A `Result` and not a state, because a step consumes the state it is given: there
     /// has to be something in its place while the step runs, and a failure is the only
     /// honest thing to put there. A step that never returns its next state leaves the
     /// failure behind, and the pane shows it.
-    pub stage: Result<Stage<T>, String>,
+    pub stage: Result<Stage, String>,
     /// The dock, which is what gets a session started and what switches screens once
     /// there is one. It shares the stage above as its state, so a button press is the swap.
-    pub dock: dock::Dock<T>,
+    pub dock: dock::Dock,
     /// This terminal's input, as parsed events.
     ///
     /// The reader thread owns the parsing and the reading; this end only
@@ -60,19 +56,18 @@ pub struct Session<T: WindowingServer> {
     pub input_receiver: std::sync::mpsc::Receiver<termina::Event>,
 }
 
-impl Session<Box<dyn WindowingServer>> {
-    /// Start a session: the window session this machine composites, chosen from the
-    /// switches the client was started with, and the socket the other side dials.
+impl Session {
+    /// Start a session: the window session this machine composites, and the socket the
+    /// other side dials.
     ///
     /// Built here rather than by the caller because it is the session's own part: the
     /// caller says which program, how big, and how to encode, and everything a running
-    /// window needs is assembled around that. A dummy session draws windows nobody is
-    /// running; a wayland one is a compositor in this process, one output.
+    /// window needs is assembled around that. The session is a compositor in this
+    /// process, one output.
     ///
     /// The socket is bound and announced before the first frame is drawn, so the advert
     /// that frame puts on screen is one that answers.
     pub async fn new(
-        dummy: bool,
         size: (u32, u32),
         codec: CodecId,
         stdin: Input,
@@ -83,20 +78,17 @@ impl Session<Box<dyn WindowingServer>> {
         // events wait in the channel until a frame drains them, so nothing typed while the
         // session connects is lost.
         let input_receiver = crate::inputs::start(std::io::BufReader::new(stdin))?;
-        let server: Box<dyn WindowingServer> = if dummy {
-            Box::new(compositor::windowing::dummy::DummyServer::default())
-        } else {
-            Box::new(compositor::windowing::wayland::WaylandServer::new(
-                wayland::Options {
-                    resolution: size,
-                    dpi: 1.0,
-                    use_x11: false,
-                },
-                codec,
-            )?)
-        };
+        let server = crate::windowing::PlatformWindowing::new(
+            wayland::Options {
+                resolution: size,
+                default_window_size: (size.0 / 2, size.1 / 2),
+                dpi: 1.0,
+                use_x11: false,
+            },
+            codec,
+        )?;
         Ok(Self {
-            stage: Ok(Stage::new(server, codec, Page::default())),
+            stage: Ok(Stage::new(server, Page::default())),
             dock: dock::Dock::new(socket_path(), program).await?,
             input_receiver,
         })
@@ -125,14 +117,13 @@ impl Session<Box<dyn WindowingServer>> {
 
 /// The client itself: a widget over [`Session`].
 ///
-/// `better_default` rather than std's derive, for the same reason as the dock: std would
-/// ask for `T: Default` because `T` is a parameter, and a window session is a running
-/// compositor rather than something with a default.
-#[derive(better_default::Default)]
-pub struct GuiWidget<T: WindowingServer>(std::marker::PhantomData<T>);
+/// No state of its own and no parameter: there is one session, so the widget is the
+/// type and `Session` is all it needs.
+#[derive(Default)]
+pub struct GuiWidget;
 
-impl<T: WindowingServer> StatefulWidget for GuiWidget<T> {
-    type State = Session<T>;
+impl StatefulWidget for GuiWidget {
+    type State = Session;
 
     /// One frame.
     ///
@@ -141,7 +132,7 @@ impl<T: WindowingServer> StatefulWidget for GuiWidget<T> {
     /// capture, the encode — so this is where the profiler's timeline should be
     /// divided. Every stage below it lands inside the frame it belongs to.
     #[tracing::instrument(name = "frame", skip_all)]
-    fn render(self, area: Rect, buf: &mut Buffer, session: &mut Session<T>) {
+    fn render(self, area: Rect, buf: &mut Buffer, session: &mut Session) {
         // The dock is the last three rows and the content is what is above them. On the
         // inline terminal those three rows are the whole area, so the content is empty and
         // drawing into it draws nothing; on the fullscreen one the stream gets the rest.

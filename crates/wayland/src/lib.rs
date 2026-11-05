@@ -49,6 +49,12 @@ use crate::state::State;
 pub struct Options {
     /// The output's resolution in pixels. The terminal's, always.
     pub resolution: (u32, u32),
+    /// The size a window is drawn at before its program has committed anything, in pixels.
+    ///
+    /// Sent as the first configure of every window the compositor places, so a client that
+    /// honours it commits at exactly this size and the two never disagree. A window whose
+    /// program chose otherwise replaces it on its first commit.
+    pub default_window_size: (u32, u32),
     /// The scale the output advertises to its clients: how large a client's
     /// elements look in the pane. A client that honours this draws its content
     /// at this many times the logical size, so the same interface is legible
@@ -114,7 +120,13 @@ impl WaylandServer {
         let output_global = output.create_global::<State>(&dh);
 
         // The globals, the seat with its keyboard and pointer, and the output.
-        let state = State::new(&dh, output, options.resolution, options.dpi)?;
+        let state = State::new(
+            &dh,
+            output,
+            options.resolution,
+            options.default_window_size,
+            options.dpi,
+        )?;
 
         // The loop that sources ride on; XWayland's source joins when asked.
         let event_loop =
@@ -407,11 +419,15 @@ impl WaylandServer {
 
         {
             let _dispatch = tracing::info_span!("wayland.step.event_loop").entered();
-            // A zero wait, not `None`. `None` is calloop's "wait without a duration limit",
-            // which parks this call until a client says something — and since this loop is
-            // what steps the session, that stops everything from drawing. Zero takes what has
-            // arrived since the last step and returns, so the caller's tick is the only pace.
-            if let Err(e) = event_loop.dispatch(Some(Duration::ZERO), state) {
+            // A ceiling on how fast the caller's loop can turn. Not zero: a free-running loop
+            // wakes for every mouse motion the terminal reports — any-event tracking sends one
+            // per pixel — and pays a full step for each, so the pane stops redrawing while the
+            // pointer moves rather than because of it.
+            //
+            // Not `None` either, which calloop reads as "wait without a duration limit": that
+            // parks this call until a client speaks, and since this loop is what steps the
+            // session, nothing draws at all.
+            if let Err(e) = event_loop.dispatch(Some(Duration::from_millis(2)), state) {
                 log::warn!("the event loop did not dispatch: {e}");
             }
         }

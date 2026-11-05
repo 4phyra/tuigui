@@ -51,6 +51,13 @@ pub struct State {
     pub seat: Seat<Self>,
     pub display_handle: DisplayHandle,
     pub server_size: (u32, u32),
+    /// The size a window is drawn at before its program has said how big it wants to be, in
+    /// pixels.
+    ///
+    /// A toplevel states no size of its own — xdg-shell has no "I would like to be this big" —
+    /// so until it commits a buffer this is the only size there is. A popup is the exception:
+    /// its positioner carries a size, and it is adopted at that instead.
+    pub default_window_size: (u32, u32),
     /// The last serial this session handed out; bumped by [`State::next_serial`].
     serial: u64,
     /// The root client, once the caller spawned it: its process, its root
@@ -94,6 +101,7 @@ impl State {
         dh: &DisplayHandle,
         output: smithay::output::Output,
         server_size: (u32, u32),
+        default_window_size: (u32, u32),
         output_scale: f64,
     ) -> Result<Self, CompError> {
         let mut seat_state = SeatState::new();
@@ -123,6 +131,7 @@ impl State {
             seat: seat.clone(),
             display_handle: dh.clone(),
             server_size,
+            default_window_size,
             serial: 0,
             root_client: None,
             output_scale,

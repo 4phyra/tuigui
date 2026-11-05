@@ -107,20 +107,6 @@ pub struct DebugOptions {
     /// visible: pink cells mean the mask works and the picture is the problem.
     #[arg(long = "dbg-pink-placeholders")]
     pub pink_placeholders: bool,
-    /// Profile this half of the session, so a frame can be looked at rather than
-    /// guessed at.
-    ///
-    /// Turns on the Tracy client, which is what turns this crate's spans into
-    /// zones the profiler can show. Off unless it is asked for: the client is a
-    /// compiled library with a background thread of its own, and a session
-    /// nobody is looking at should not carry it.
-    ///
-    /// Present only in a build with the `tracy` feature — the client is a
-    /// compiled library, so a build without one has nothing to turn on and offers
-    /// no way to ask for one either.
-    #[cfg(feature = "tracy")]
-    #[arg(long = "dbg-trace-tui")]
-    pub trace_tui: bool,
 }
 
 impl Tui {
@@ -145,10 +131,12 @@ impl Tui {
         // place left. Installed unconditionally, because the failures this exists for are
         // the ones nobody asked to reproduce.
         install_logger();
+        // Unconditional in a build that carries the profiler: a switch would have to be set
+        // before the interesting session started, and the session worth profiling is the one
+        // that is not already being profiled. Without the feature this is not compiled at all,
+        // so a plain build carries no client and no way to ask for one.
         #[cfg(feature = "tracy")]
-        if self.debug.trace_tui {
-            install_tracing()?;
-        }
+        install_tracing()?;
         let _raw = Raw::install()?;
 
         // One set of switches, shared: the pty's proxy reads them on its forwarding

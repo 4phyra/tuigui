@@ -9,6 +9,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // this command's.
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() == Some(tuigui::INTERNAL_CLIENT_FLAG) {
+        #[cfg(feature = "tracy")]
+        tuigui::name_process("gui (client)");
         // A program name has to be put back before clap sees the rest. `parse_from`
         // treats its first element as `argv[0]` and skips it, so passing the runnable
         // directly made clap read the runnable's path as the program name and then
@@ -18,6 +20,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    #[cfg(feature = "tracy")]
+    tuigui::name_process("tui (server)");
     let config = tuigui::TuiGui::parse();
     config.run().await
 }

@@ -18,6 +18,9 @@ crossterm = { workspace = true }
 derive_deref = { workspace = true }
 derive-getters = { workspace = true }
 thiserror = { workspace = true }
+# Spans, so the protocol's own steps are zones in the profiler: a frame costs a transmit and
+# a wait for the terminal's answer, and both happen inside this crate.
+tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

@@ -138,6 +138,15 @@ pub fn writer_in_flight() -> u64 {
     writer::IN_FLIGHT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Direct every later escape to `out`.
+///
+/// Call it **once per process**: the destination is global because a command can be built and
+/// sent without reaching the controller that made it, so there is one writer and one place to
+/// configure it. `false` means it was already set, which is what a second call gets.
+pub fn set_sink(out: Box<dyn std::io::Write + Send>) -> bool {
+    writer::set_sink(out)
+}
+
 pub trait Restorable: std::fmt::Debug {
     fn restore(&mut self, renew_dependents: bool) -> Res<()>;
     // fn renew_one();
@@ -1043,6 +1052,7 @@ impl<F: Format + 'static> ImageRequest<F> {
     /// The returned image holds the placement handle, so [`DynImage::displace`] and
     /// [`DynImage::delete`] see it — the placement was made by a command that also
     /// carried pixels, but it is an ordinary placement afterwards.
+    #[tracing::instrument(name = "tgp.transplace", skip_all)]
     pub fn transplace(self, id: Id, placement: PlacementRequest) -> PendingTransfer<F> {
         let placement_id = placement.placement_id.unwrap_or_else(id::alloc);
         let reply = self.exec_transplace(id, &placement, placement_id);
@@ -1231,6 +1241,10 @@ impl<F: Format> DynImage<F> {
 
     /// Wait until all pending operations related to the image are done and their status collected
     /// In cases of errors, the first one is being returned
+    ///
+    /// `#[instrument]` rather than a span the caller enters: the wait is the terminal's answer
+    /// arriving, and a caller that wrapped it would be timing a future it did not write.
+    #[tracing::instrument(name = "tgp.sync", skip_all)]
     pub fn sync<'a>(&'a mut self) -> PendingSync<'a> {
         PendingSync {
             pending: &mut self.pending,
@@ -1248,6 +1262,7 @@ impl<F: Format> DynImage<F> {
         self.held.clone()
     }
 
+    #[tracing::instrument(name = "tgp.place", skip_all)]
     pub fn place(&mut self, request: PlacementRequest) -> PlacementHandle {
         let id = request.placement_id.unwrap_or_else(id::alloc);
         let (fut, handle) = request.place(self.id.assigned(), id, "p");
@@ -2509,8 +2524,14 @@ mod tests {
     #[test]
     fn the_escape_destination_cannot_be_moved() {
         let (_reader, first) = std::io::pipe().expect("a pipe");
-        assert!(writer::set_out(first), "the first destination must be taken");
+        assert!(
+            writer::set_sink(Box::new(first)),
+            "the first destination must be taken"
+        );
         let (_other, second) = std::io::pipe().expect("a pipe");
-        assert!(!writer::set_out(second), "a second destination must be refused");
+        assert!(
+            !writer::set_sink(Box::new(second)),
+            "a second destination must be refused"
+        );
     }
 }

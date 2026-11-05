@@ -147,14 +147,19 @@ pub fn framed_write<S: AsyncWrite>(stream: S) -> FramedWrite<S, MessageCodec> {
 /// Sending and receiving go through the transport, which holds the codec and any
 /// routing: a socket writes a length prefix, a transport carrying several peers decides
 /// which one a message is for. Nothing here decides either.
+///
+/// Cloning is sharing: the handle is refcounted because one link is read by one side and
+/// written by another — a session reading what its peer says while a frame is still being
+/// written down it — and those two are one channel, not two of them.
+#[derive(Clone)]
 pub struct Connection {
-    transport: Box<dyn Transport>,
+    transport: std::sync::Arc<dyn Transport>,
 }
 
 impl Connection {
     pub fn new(transport: impl Transport + 'static) -> Self {
         Self {
-            transport: Box::new(transport),
+            transport: std::sync::Arc::new(transport),
         }
     }
 

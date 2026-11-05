@@ -241,7 +241,17 @@ impl State {
             // the pane means by focusing it. Compared against the surface, so a click
             // on a different window moves the keyboard to it.
             if let Some(kbd) = self.seat.get_keyboard() {
-                if kbd.current_focus().as_ref() != Some(focus) {
+                // A popup cannot hold the keyboard: it belongs to the window that opened it and
+                // dies with its menu. Moving focus onto one is this side giving the keyboard to a
+                // surface with no claim to it, and the client reads that as a press somewhere
+                // else — the menu closes instead of the item activating.
+                let popup = smithay::wayland::compositor::with_states(focus, |states| {
+                    states
+                        .data_map
+                        .get::<smithay::wayland::shell::xdg::XdgPopupSurfaceData>()
+                        .is_some()
+                });
+                if !popup && kbd.current_focus().as_ref() != Some(focus) {
                     kbd.set_focus(self, Some(focus.clone()), serial);
                 }
             }

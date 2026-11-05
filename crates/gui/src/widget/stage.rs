@@ -19,7 +19,7 @@ use wire::transport::Connection;
 
 use compositor::Compositor;
 
-use compositor::WindowingServer;
+use crate::windowing::PlatformWindowing;
 
 /// How long a quiet session is paused before the window is looked at again.
 ///
@@ -57,11 +57,8 @@ impl RingBuffer {
 /// screen: a program keeps running while the logs screen is up, and its window keeps
 /// drawing into a buffer nobody is looking at. What changes is `screen`, which is a move
 /// within this type rather than a change of it.
-pub struct Stage<T: WindowingServer> {
-    pub compositor: Compositor<T>,
-    /// The codec this session streams with, announced on the wire before the first frame:
-    /// the other side builds its decoder from it rather than assuming one.
-    pub codec: codecs::CodecId,
+pub struct Stage {
+    pub compositor: Compositor<PlatformWindowing>,
     pub page: Page,
 }
 
@@ -104,7 +101,7 @@ pub struct Props<'a> {
     pub events: &'a std::sync::mpsc::Receiver<termina::Event>,
 }
 
-impl<'a, T: WindowingServer> StatefulWidget for &'a mut Stage<T> {
+impl<'a> StatefulWidget for &'a mut Stage {
     type State = Props<'a>;
 
     /// One frame of the running program: deliver input, advance it, and draw it.
@@ -137,7 +134,9 @@ impl<'a, T: WindowingServer> StatefulWidget for &'a mut Stage<T> {
                 }
             }
 
-            self.compositor.frame(connection, QUIET, props.winsize);
+            self.compositor
+                .frame(QUIET, props.winsize)
+                .expect("a frame could not be taken");
             // The draw is not decoration: each window's cells are filled with its surface,
             // and those cells are what the other side scans for to find where a picture
             // goes. A frame that did not draw is a frame with nothing to place.
@@ -146,16 +145,14 @@ impl<'a, T: WindowingServer> StatefulWidget for &'a mut Stage<T> {
     }
 }
 
-impl<T: WindowingServer> Stage<T> {
+impl Stage {
     /// A stage over a window session, starting on `screen`.
     ///
     /// The compositor is built from the server rather than passed in: what a caller has is
-    /// a session — wayland, dummy, or later a remote one — and the compositor over it is
-    /// this type's own part.
-    pub fn new(server: T, codec: codecs::CodecId, page: Page) -> Self {
+    /// a session, and the compositor over it is this type's own part.
+    pub fn new(server: PlatformWindowing, page: Page) -> Self {
         Self {
             compositor: Compositor::new(server),
-            codec,
             page,
         }
     }

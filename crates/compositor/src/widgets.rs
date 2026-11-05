@@ -4,3 +4,5 @@
 pub mod bar;
 pub mod decorated_window;
 pub mod frame;
+
+pub use decorated_window::{DecoratedWindow, WindowState, cell_size, cells, pixels};

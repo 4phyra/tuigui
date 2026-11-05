@@ -3,37 +3,24 @@
 //!
 //! A **session** runs one program and gives back what it draws. Its windows
 //! form a tree: the root window, and the windows the program opened after it,
-//! each opening more. The backends live beside this module — [`wayland`] and
-//! [`dummy`] — and this module is the traits they implement, plus the state
-//! the compositor keeps about a window.
+//! each opening more. This module is the traits a backend implements, plus the
+//! state the compositor keeps about a window; the backends live with whoever
+//! owns the way a picture travels, which is the client rather than this crate.
 //!
 //! Deliberately absent: keycodes and button codes. Those are per-platform
 //! (evdev on Linux, a virtual keycode on macOS), so the vocabulary here is
 //! logical — a key, a button, a wheel step — and the backend owns the mapping.
+//!
+//! Also absent: the link. What a window's picture is encoded with and where it
+//! goes is the backend's business, so a window is asked for a frame and answers
+//! in whatever way its own side can. Nothing here names a codec, a socket or a
+//! message.
 
-pub mod dummy;
 pub mod event_map;
-pub mod wayland;
 
-use std::sync::Weak;
+use ratatui::widgets::StatefulWidgetRef;
 
-use ratatui::layout::Rect;
-use ratatui::widgets::WidgetRef;
-
-/// Where a window is and how big it is, in cells, and the cells it draws into.
-///
-/// The rectangle is on the pane, whose origin is `(0, 0)`, so it is already the
-/// screen rectangle. The surface is the window's identity: what a frame is
-/// addressed by, and what the other side scans the pane for. Nothing here is the
-/// pointer's business: which gesture is in flight belongs to the compositor, in
-/// [`InputMode`](super::window::InputMode).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct WindowState {
-    /// The window's rectangle on the pane, in cells.
-    pub area: Rect,
-    /// The cells this window's picture goes into.
-    pub surface: wire::message::SurfaceId,
-}
+use crate::widgets::WindowState;
 
 /// The window session as a whole: what a program runs in.
 ///
@@ -42,10 +29,12 @@ pub struct WindowState {
 /// backend with no real program behind it — a debug one that only draws — is
 /// as good a session as a wayland one.
 pub trait WindowingServer {
-    /// The root window: the program's main one, as a weak handle. `None`
-    /// while it has not been built; the session dropping the window is what
-    /// kills the handle.
-    fn root_window(&self) -> Option<Weak<dyn StatefulWindow>>;
+    /// The root window: the program's main one, owned. `None` while it has not been built.
+    ///
+    /// Asked for on every frame rather than kept: the session is what holds its windows, so
+    /// answering here is a lookup, and a root that went away is an answer of `None` instead of a
+    /// slot that has to be kept in step.
+    fn root_window(&mut self) -> Option<Box<dyn Compositable>>;
 
     /// Start the session's program, and hand back what it says.
     ///
@@ -80,7 +69,7 @@ pub trait WindowingServer {
 }
 
 impl WindowingServer for Box<dyn WindowingServer> {
-    fn root_window(&self) -> Option<Weak<dyn StatefulWindow>> {
+    fn root_window(&mut self) -> Option<Box<dyn Compositable>> {
         (**self).root_window()
     }
 
@@ -114,7 +103,7 @@ impl WindowingServer for Box<dyn WindowingServer> {
 /// A window keeps its own state, so a later read reads where the compositor
 /// put it. Children are handed out as weak handles, so the compositor can
 /// keep a registry of what it has seen and prune what died.
-pub trait StatefulWindow: WidgetRef + Send + Sync {
+pub trait Compositable: StatefulWidgetRef<State = WindowState> + Send + Sync {
     /// Queue one key event for delivery to this window.
     ///
     /// Keys and pointer events arrive through separate methods because UI Events
@@ -126,42 +115,138 @@ pub trait StatefulWindow: WidgetRef + Send + Sync {
     /// Queue one pointer event for delivery to this window.
     fn pointer_input(&self, event: ui_events::pointer::PointerEvent) -> Result<(), Error>;
 
-    /// What the window last drew, encoded and sent: one frame, addressed by the
-    /// cells it draws into. `NotReady` until it has drawn at least once.
+    /// Take whatever this window drew since the last call, and do with it what this
+    /// window's side does with a picture.
     ///
-    /// Encoding is the window's own business because the stream is: an encoder's
-    /// state is the pictures it has already sent, so it belongs beside the pixels
-    /// it encodes.
+    /// What the pixels are, which codec they travel in and which socket they leave by are
+    /// the backend's: a backend that streams is the only kind that has any of them, and a
+    /// backend that does not sends nothing here. A window asked may stream a frame, save one
+    /// or drop it.
     ///
-    /// `z` is the window's place in the stack, `0` furthest away: raising a window
-    /// is not a new picture but it is a new place in the order, so the order is
-    /// sent with every frame rather than announced once.
-    fn capture(&self, link: &wire::transport::Connection, z: u32) -> Result<(), Error>;
+    /// Taking is what lets the client draw again, so nothing here may hold a picture: every
+    /// call hands the pixels on or lets them go.
+    ///
+    /// `rank` is where the window sits in the stack, bottom first, because nothing on the
+    /// screen says which window is in front of another: that is this crate's answer, and it
+    /// travels with the frame it applies to.
+    ///
+    /// `cells` is the box the pane gave it, in cells. A picture is placed by the far side on
+    /// a grid of cells, and how many is not the window's to know: its own program draws at a
+    /// pixel size the compositor asked for, which is a different number.
+    ///
+    /// Nothing is answered: how big the window is, is a separate question, asked of
+    /// [`Compositable::size_cells`]. A picture and a size are not the same fact — a frame with no
+    /// new pixels still has a size, and one taken here would have to say what a picture with
+    /// nothing in it measures.
+    fn frame(&self, rank: u32, cells: (u16, u16)) -> Result<(), Error>;
+
+    /// How big this window is, in pixels: what its program last committed, or the size it was
+    /// adopted at before it drew.
+    ///
+    /// This is what a backend can answer, because a surface is a picture and its own program drew
+    /// it. Not the frame it just sent: taking a picture empties the offer of one, and the size
+    /// outlives that.
+    fn size_px(&self) -> Result<(u32, u32), Error>;
+
+    /// How big this window is, in cells: the unit the pane lays out in.
+    ///
+    /// Derived from [`Compositable::size_px`] through the same conversion the ask uses, so a
+    /// program that followed a configure exactly answers with the box it was given. A backend
+    /// only answers pixels, so there is no way for one to convert twice or to disagree about
+    /// what a cell is.
+    fn size_cells(
+        &self,
+        winsize: rustix::termios::Winsize,
+    ) -> Result<(u16, u16), Error> {
+        Ok(crate::widgets::cells(self.size_px()?, winsize))
+    }
 
     /// Ask this window to draw at `size` pixels instead of its current one.
     ///
-    /// The client decides whether to follow: its next commit is the answer.
-    fn set_size(&self, size: (u32, u32));
+    /// The client decides whether to follow: its next commit is the answer. Fails for a window
+    /// that is over, which is the one thing an ask cannot do anything about.
+    fn set_size(&self, size: (u32, u32)) -> Result<(), Error>;
 
-    // TODO: use get_state -> &mut State instead
-    /// The window's state: its rectangle on the pane.
-    fn state(&self) -> WindowState;
+    /// Whether this window is a popup: a menu, a tooltip, a dropdown.
+    ///
+    /// The distinction that decides whether it can be resized at all, because a popup's size is
+    /// its client's positioner's, not this side's, and asking it for another is asking a question
+    /// it has no way to answer. A dialog is a toplevel, however much it looks like a small window,
+    /// and is placed and resized like one.
+    fn is_popup(&self) -> bool;
 
-    /// Put the window somewhere else, or make it another size.
-    fn set_state(&self, state: WindowState);
+    /// Where this window sits inside the one that opened it, in that parent's **pixels**.
+    ///
+    /// This is what a backend can answer, because it is what a window's own program asks: a popup
+    /// is positioned against its parent's surface, and a surface is a picture. `Ok(None)` means
+    /// the window was not placed by its own client, which is every window the compositor puts
+    /// somewhere — a toplevel asks to be, rather than saying where. `Err` is the window being
+    /// over, which is a different answer and must not be read as "not a popup".
+    fn offset_px(&self) -> Result<Option<(i32, i32)>, Error> {
+        Ok(None)
+    }
 
-    /// Every window this one opened after it, as weak handles. Always all of
-    /// them: the caller keeps what it has not seen before — told apart by the
-    /// pointer, not by bookkeeping — and prunes the ones that died.
-    fn get_children(&self) -> Vec<Weak<dyn StatefulWindow>>;
+    /// Where this window sits inside its parent, in cells.
+    ///
+    /// The unit the pane lays out in, derived from [`Compositable::offset_px`] and the terminal's
+    /// own report of how big a cell is. A backend only answers the pixel half, so there is no way
+    /// for one to convert twice or to disagree about what a cell is.
+    fn offset_cells(
+        &self,
+        winsize: rustix::termios::Winsize,
+    ) -> Result<Option<(u16, u16)>, Error> {
+        let Some((x, y)) = self.offset_px()? else {
+            return Ok(None);
+        };
+        let (width, height) = crate::widgets::cell_size(winsize);
+        Ok(Some((
+            (x.max(0) as u32 / width) as u16,
+            (y.max(0) as u32 / height) as u16,
+        )))
+    }
+
+    /// The windows this one has gained since it was last asked.
+    ///
+    /// Only the new ones: the holder keeps every window it has already been told about, so a list
+    /// of all of them would make it work out which are new on every frame. Reading is what empties
+    /// this, which is why it is a call and not a field.
+    ///
+    /// Owned, because the caller keeps them: a window exists here only as the handle the
+    /// compositor was handed.
+    ///
+    /// A popup is **not** here: it is one of [`Compositable::get_new_popups`], because where it
+    /// sits is part of this window rather than a place the compositor chose. Two lists and not one
+    /// with a flag, so neither reader has to filter.
+    ///
+    /// `&mut` because reading is what drains it: a backend keeps the queue that reports these, and
+    /// a second read of the same window answers with what has arrived since the first.
+    fn get_new_children(&mut self) -> Vec<Box<dyn Compositable>> {
+        Vec::new()
+    }
+
+    /// The windows this one's program has placed inside it since it was last asked.
+    ///
+    /// A popup belongs to the window that opened it: it is drawn over that window, moves when it
+    /// moves, and its box is measured from the window's own corner. Nothing here says where it
+    /// sits — that is [`Compositable::offset_cells`] — so the pairing is all this list is.
+    fn get_new_popups(&mut self) -> Vec<Box<dyn Compositable>> {
+        Vec::new()
+    }
+
+    /// Whether this window is still there to be drawn.
+    ///
+    /// A handle to a window can outlive it — the compositor keeps one for what it has already
+    /// placed — so the one thing that says a window is over is the window itself, answering.
+    /// False means the holder drops it, which is the window closing rather than a failure.
+    fn is_alive(&self) -> bool;
 
     /// What the window calls itself: the title its program set, or the name of
     /// the program when it set none. Shown on the bar, and nowhere else.
-    fn title(&self) -> String;
+    fn title(&self) -> Result<String, Error>;
 
     /// Ask the window to close, the way a program's own quit is asked for: the
     /// client is told, and it decides. A window whose program ignores it stays.
-    fn terminate(&self);
+    fn terminate(&self) -> Result<(), Error>;
 }
 
 /// Why a window could not do what was asked of it.
@@ -169,62 +254,22 @@ pub trait StatefulWindow: WidgetRef + Send + Sync {
 pub enum Error {
     /// The client that owned the window is gone, so nothing is listening.
     Gone,
-    /// The window exists but has not drawn yet: there is nothing to capture.
-    NotReady,
-    /// The codec could not be built for this window's size.
-    Build(String),
-    /// The codec refused the frame.
-    Encode(String),
-    /// The frame was made and the link would not take it.
-    Send(String),
+    /// The window's own side could not get the frame out: a codec that refused it, a link
+    /// that would not take it. The window is the only thing that can say which, so the
+    /// reason arrives as text rather than as variants this crate would have to know about.
+    Frame(String),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Gone => f.write_str("the window is gone"),
-            Error::NotReady => f.write_str("the window has not drawn yet"),
-            Error::Build(e) => write!(f, "the codec could not be built: {e}"),
-            Error::Encode(e) => write!(f, "the codec refused the frame: {e}"),
-            Error::Send(e) => write!(f, "the frame could not be sent: {e}"),
+            Error::Frame(e) => write!(f, "the frame could not be sent: {e}"),
         }
     }
 }
 
 impl std::error::Error for Error {}
-
-/// How long one message is given to leave this side.
-///
-/// A message is a write to another process, which may be busy with the one
-/// before it. Bounded so a link that stopped draining is reported rather than
-/// waited on: without it the frame stalls with the message in hand and says
-/// nothing, which reads as a frozen pane.
-pub const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Write one message to the link from a draw, which is synchronous.
-///
-/// The blocking is what `block_in_place` makes safe: the draw runs on a runtime
-/// worker, and that call is the one that says so. Sending here rather than
-/// pushing the write onto the runtime keeps messages in the order the frames
-/// that produced them were made.
-///
-/// FIXME: this should go. A draw that blocks on a socket is a draw waiting for
-/// another process, and the frame loop should hand its messages over instead of
-/// writing them itself.
-#[tracing::instrument(name = "windowing.send", skip(link, message))]
-pub fn send(
-    link: &wire::transport::Connection,
-    message: &wire::message::Message,
-) -> Result<(), Error> {
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            tokio::time::timeout(SEND_TIMEOUT, link.send(message))
-                .await
-                .map_err(|_| Error::Send(format!("the link took nothing within {SEND_TIMEOUT:?}")))?
-                .map_err(|e| Error::Send(e.to_string()))
-        })
-    })
-}
 
 /// Delivering input is the only failure this module hands back as an I/O error:
 /// the caller writes it to the pane's log beside the reads and writes it sits

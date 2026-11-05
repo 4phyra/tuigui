@@ -38,3 +38,11 @@ gui *args:
 # runs inside the pty it creates.
 tuigui *args:
     CARGO_TARGET_DIR={{target}} cargo run --release -p tuigui --bin tuigui {{tracy}} -- {{args}}
+
+# Build and run the capybara demo, with no program, no codec and no link behind it.
+#
+# The compositor drawing itself: what it exercises is the stacking, the chrome, the dragging
+# and the resizing. No profiler here, because there is no session under it to profile, and
+# `q` or `Esc` ends it.
+dummy:
+    CARGO_TARGET_DIR={{target}} cargo run --release -p compositor --example dummy

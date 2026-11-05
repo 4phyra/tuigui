@@ -7,7 +7,8 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::Widget;
 use termina::event::{MouseButton, MouseEvent, MouseEventKind};
 
-use crate::windowing::{StatefulWindow, WindowState};
+use crate::widgets::WindowState;
+use crate::windowing::Compositable;
 
 /// Eight dots, the standard grip: the bar is what a window is moved by.
 const GRIP: char = '⣿';
@@ -41,49 +42,50 @@ impl Bar {
 
     pub fn handle_mouse(
         &mut self,
-        window: &dyn StatefulWindow,
+        window: &dyn Compositable,
+        state: &mut WindowState,
         mouse: MouseEvent,
         pane: Rect,
         area: Rect,
-    ) -> Option<MouseEvent> {
+    ) -> Result<Option<MouseEvent>, crate::Error> {
         let at = Position::new(mouse.column, mouse.row);
         let close = Self::close_area(area).filter(|close| close.contains(at));
         self.closing = close.is_some();
 
         if close.is_some() {
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-                window.terminate();
+                window.terminate()?;
             }
             // The button is not a grip: nothing drags from under it, and the
             // press does not fall through to the window either.
-            return None;
+            return Ok(None);
         }
 
         let Some(last) = self.drag else {
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) && area.contains(at) {
                 self.drag = Some(at);
-                return None;
+                return Ok(None);
             }
-            return Some(mouse);
+            return Ok(Some(mouse));
         };
         let delta = Offset::new(
             i32::from(at.x) - i32::from(last.x),
             i32::from(at.y) - i32::from(last.y),
         );
         let room = pane.resize(Size::new(pane.width, pane.height.saturating_sub(1)));
-        window.set_state(WindowState {
-            area: (window.state().area + delta).clamp(room),
-            ..window.state()
-        });
+        // Moved, not resized: the box keeps its size, so the program has nothing to answer and its
+        // next picture is still about this box, which is why no countdown is armed here.
+        state.area = (state.area + delta).clamp(room);
         self.drag = (!matches!(mouse.kind, MouseEventKind::Up(_))).then_some(at);
-        None
+        Ok(None)
     }
 }
 
 impl Widget for &Bar {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Grey on a darker grey: the bar is chrome, and every cell of it is grey
-        // unless the close button says otherwise.
+        // Grey on a darker grey: the bar is chrome, and its own colour is what tells it apart
+        // from the picture behind it. Named explicitly rather than left alone — a style that omits
+        // a background patches the cell, and the cell already holds the surface's colour.
         let style = Style::new().fg(Color::Gray).bg(Color::DarkGray);
         // Every cell is written, not just styled: the bar is drawn over whatever
         // was there, and a styled cell keeps the character it already had.

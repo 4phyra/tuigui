@@ -13,22 +13,16 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, StatefulWidget, Widget};
 use wire::transport::{BoxFuture, Connection, Transport};
 
-use super::{Page, Stage};
-use compositor::WindowingServer;
+use super::Stage;
 
 /// How many rows the dock occupies: a border, the row its content sits on, and a border.
 pub const HEIGHT: u16 = 3;
 
 /// The dock as the pane draws it: the same three rows in every state.
 ///
-/// `T` is the window session, because the dock is what gets one started and what switches
-/// its screens. The parameter carries no value — a dock holds no windows — but naming `T`
-/// here is what lets the dock's state be the session's `Result<Stage<T>, _>` while staying
-/// one definition.
-///
 /// No `Default`, and no state before [`DockState::Waiting`]: a session starts dialing
 /// rather than sitting idle, so there is nothing for a default to be.
-pub struct Dock<T: WindowingServer> {
+pub struct Dock {
     /// Which stage of being reachable the dock is in. Its own, rather than passed about: a
     /// dock that did not remember being dialed would dial again every frame.
     pub state: DockState,
@@ -37,7 +31,6 @@ pub struct Dock<T: WindowingServer> {
     /// Shown in the row once there is a link: what the pane is running is the one thing worth
     /// saying there, and it is the only text the dock has of its own.
     pub program: String,
-    _server: std::marker::PhantomData<T>,
 }
 
 /// The stages before there is a program: bound and waiting to be dialed, and dialed.
@@ -65,7 +58,7 @@ pub enum DockState {
     Paired,
 }
 
-impl<T: WindowingServer> Dock<T> {
+impl Dock {
     /// Bind a socket and announce it, so the other side can dial this pane.
     ///
     /// The address is the transport's own: it is bound here, asked for its announcement,
@@ -97,17 +90,16 @@ impl<T: WindowingServer> Dock<T> {
                 barcode,
                 waiting: Box::pin(async move { socket.accept().await }),
             },
-            _server: std::marker::PhantomData,
             program,
         })
     }
 }
 
-impl<T: WindowingServer> StatefulWidget for &mut Dock<T> {
+impl StatefulWidget for &mut Dock {
     /// The session's stage, so the dock can act on the session rather than describe it: it
     /// is what decides which screen is up, and a button that could only report a wish would
     /// put the swap one call away from the press that caused it.
-    type State = Result<Stage<T>, String>;
+    type State = Result<Stage, String>;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         // The wait moves the session before anything is drawn, so this frame shows what it
@@ -175,7 +167,7 @@ impl<T: WindowingServer> StatefulWidget for &mut Dock<T> {
     }
 }
 
-impl<T: WindowingServer> Dock<T> {
+impl Dock {
     /// Poll the wait once, and move to [`DockState::Connected`] when the other side dials.
     ///
     /// Polled rather than awaited: the frame has to finish for the announcement it drew to
@@ -185,7 +177,7 @@ impl<T: WindowingServer> Dock<T> {
     /// Polled by hand rather than with `futures::poll!`, because a `render` is not async and
     /// there is no task to be polled inside: the waker is a no-op and every frame asks again,
     /// which is all this wait needs — nothing here is waiting to be woken.
-    fn poll(&mut self, stage: &mut Result<Stage<T>, String>) {
+    fn poll(&mut self, stage: &mut Result<Stage, String>) {
         let DockState::Pairing { waiting, .. } = &mut self.state else {
             return;
         };
@@ -198,13 +190,20 @@ impl<T: WindowingServer> Dock<T> {
                 // link is what tells it which display to reach, so there was nothing to start it
                 // with until now.
                 //
+                // The session is given the connection first, because the program's windows are
+                // what send the frames: a window minted before the session knows where they go
+                // has nowhere to write, and there is no window to mint until the program runs.
+                //
                 // Started before the swap so a failure is reported as one, rather than as a
                 // stream that never draws anything.
                 let started = match stage {
-                    Ok(stage) => stage
-                        .compositor
-                        .spawn(std::path::Path::new(&self.program))
-                        .map_err(|e| format!("could not start {}: {e}", self.program)),
+                    Ok(stage) => {
+                        stage.compositor.windowing_mut().set_connection(connection.clone());
+                        stage
+                            .compositor
+                            .spawn(std::path::Path::new(&self.program))
+                            .map_err(|e| format!("could not start {}: {e}", self.program))
+                    }
                     Err(e) => Err(e.clone()),
                 };
                 match started {
@@ -233,7 +232,7 @@ impl<T: WindowingServer> Dock<T> {
     /// A failure says what went wrong rather than what step it was in, because the failure is
     /// the more useful fact. While waiting there is nothing to say: the record is what the row
     /// carries, and it is drawn by [`render_waiting`].
-    fn status<'a>(&'a self, stage: &'a Result<Stage<T>, String>) -> &'a str {
+    fn status<'a>(&'a self, stage: &'a Result<Stage, String>) -> &'a str {
         match stage {
             Err(message) => message,
             // The command is what this pane is for, so it is what the row says once the other
@@ -336,13 +335,6 @@ fn render_program(row: Rect, buf: &mut Buffer, status: &str) {
     // One cell clear of the bar.
     buf.set_string(row.x + 1, row.y, status, Style::new());
 }
-
-/// How many cells the barcode occupies.
-///
-/// Fixed, because the record is padded to this length rather than sized to its payload: a row
-/// that grew and shrank with the address would be a row that moves under the eye, and two
-/// panes could not be compared.
-const BARCODE_CELLS: usize = 13;
 
 /// Poll a future once, from a caller that has no task to be polled in.
 ///

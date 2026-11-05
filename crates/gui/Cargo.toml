@@ -25,6 +25,9 @@ wayland = { workspace = true }
 # The terminal's input parser: raw bytes from the pane go in, typed events
 # (keys, mouse, protocol responses) come out.
 termina = { workspace = true }
+# What an event becomes for a window: W3C UI Events as data, which is the shape the
+# wayland seat takes.
+ui-events = { workspace = true }
 # The codec the client encodes with, behind the trait a codec can be swapped
 # behind. Which codec it is, is announced on the wire, not assumed here.
 codecs = { workspace = true }

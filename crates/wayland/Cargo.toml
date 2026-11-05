@@ -11,6 +11,12 @@ path = "src/bin/wayland-smoke.rs"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wire = { workspace = true }
+# `watch` only: a window's last committed frame is one value with a "has it been read" bit,
+# and the channel is that in one type instead of a flag beside a lock.
+tokio = { workspace = true }
+# The queue of children a window has gained: read without waiting, and `Sync` as a value, so
+# it can sit directly on a window that is shared by reference.
+flume = { workspace = true }
 smithay = { workspace = true }
 # The input vocabulary, and the table that turns a physical key into this
 # platform's own number. `ui-events` is W3C UI Events as data — keyboard and

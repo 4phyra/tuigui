@@ -3,6 +3,9 @@
 These rules are binding for any agent/assistant working in this repository.
 They override convenience and habit. Follow them exactly.
 
+The coding style these rules assume is in [STYLE.md](STYLE.md) — read it first;
+it is the contract the code is written against.
+
 ## Builds (the user gets very annoyed at needless rebuilds)
 
 A full rebuild of `ring` / `rustls` / the TLS stack costs minutes. Avoid it.
@@ -51,12 +54,17 @@ A full rebuild of `ring` / `rustls` / the TLS stack costs minutes. Avoid it.
 
 ## Editing workflow
 
-- **Use `view`, `grep` and `edit`/`multiedit`. Never edit with another language.**
-  No `python`, no `python3`, no `perl -0pi`, no `sed -i`, no `awk` splices, no
-  heredoc-fed scripts. Python is banned outright (see Hard prohibitions); the
-  others are banned for edits because a script cannot be inspected before it
-  runs, and every time one has been used in this repo it has corrupted a file
-  (duplicated blocks, cut functions in half, missing braces).
+- **Use the builtin tools. `sed` and every other shell command used for reading
+  or editing are STRICTLY BANNED.**
+  Reading a file is `view`. Searching is `grep`/`glob`/`agent`. Editing is
+  `edit`/`multiedit`/`write`/`lsp_replace_symbol`. Anything else — `cat`, `head`,
+  `tail`, `sed`, `sed -i`, `awk`, `perl -0pi`, `python`, `python3`, heredoc-fed
+  scripts — is banned outright, whether it reads or writes. A shell command that
+  prints a file's contents is a wasted round trip and an unreadable transcript;
+  one that writes is worse, because a script cannot be inspected before it runs
+  and every time one has been used here it has corrupted a file (duplicated
+  blocks, cut functions in half, missing braces). Python is banned outright (see
+  Hard prohibitions).
 - Read the relevant context of a file before editing it. Match whitespace and
   indentation exactly.
 - For a whole function, method or type, prefer `lsp_replace_symbol`: it finds the

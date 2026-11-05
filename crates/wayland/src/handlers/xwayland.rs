@@ -67,7 +67,8 @@ impl XwmHandler for State
         };
         let was_root = {
             let tree = root.root_window.read().unwrap();
-            tree.as_ref().is_some_and(|tree| tree.surface.wl_surface == surface)
+            tree.as_ref()
+                .is_some_and(|tree| *tree.surface.wl_surface() == surface)
         };
         if was_root {
             *root.root_window.write().unwrap() = None;

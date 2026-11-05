@@ -28,6 +28,7 @@ use widget::{GuiWidget, Session};
 
 mod inputs;
 mod widget;
+mod windowing;
 
 /// The name, in the block letters a shell prints when it starts.
 ///
@@ -95,15 +96,6 @@ impl StreamingOptions {
 // same thing is a command that refuses to build at all.
 #[group(id = "gui-debug")]
 pub struct DebugOptions {
-    /// Draw the compositor itself, with no session behind it.
-    ///
-    /// No link is waited for and no program is started: the pane is the
-    /// compositor's own drawing, with a red background standing in for every
-    /// picture a session would paint underneath it. What that leaves to look
-    /// at is the compositing itself — the borders, the titles, the stacking,
-    /// the dragging.
-    #[arg(long = "dbg-dummy-windowing")]
-    pub dummy_windowing: bool,
     /// Play the runnable again from the start when it ends, forever.
     ///
     /// A clip is short and a session is not, so a run that ends after a few seconds is hard
@@ -111,20 +103,6 @@ pub struct DebugOptions {
     /// of these switches is needed at all.
     #[arg(long = "dbg-loop-video")]
     pub loop_video: bool,
-    /// Profile this half of the session, so a frame can be looked at rather than
-    /// guessed at.
-    ///
-    /// Turns on the Tracy client, which is what turns this crate's spans into
-    /// zones the profiler can show. Off unless it is asked for: the client is a
-    /// compiled library with a background thread of its own, and a session
-    /// nobody is looking at should not carry it.
-    ///
-    /// Present only in a build with the `tracy` feature — the client is a
-    /// compiled library, so a build without one has nothing to turn on and offers
-    /// no way to ask for one either.
-    #[cfg(feature = "tracy")]
-    #[arg(long = "dbg-trace-gui")]
-    pub trace_gui: bool,
 }
 
 impl Gui {
@@ -143,10 +121,12 @@ impl Gui {
         // Before anything can fail, so the first failure is in the log rather than missing
         // from it.
         let log_path = install_logger();
+        // Unconditional in a build that carries the profiler: a switch would have to be set
+        // before the interesting session started, and the session worth profiling is the one
+        // that is not already being profiled. Without the feature this is not compiled at all,
+        // so a plain build carries no client and no way to ask for one.
         #[cfg(feature = "tracy")]
-        if self.debug.trace_gui {
-            install_tracing()?;
-        }
+        install_tracing()?;
         log::info!(
             "gui {} starting, log at {}",
             self.program.display(),
@@ -225,7 +205,6 @@ impl Gui {
         // The window session, the input reader, and the dock: all of it is the session's,
         // built from the switches this client was started with.
         let mut session = Session::new(
-            self.debug.dummy_windowing,
             size,
             self.streaming.codec(),
             input,
