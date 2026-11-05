@@ -283,10 +283,28 @@ impl WaylandServer {
         let mut command = std::process::Command::new(path);
         command
             .env("WAYLAND_DISPLAY", socket_name)
-            .env_remove("WAYLAND_SOCKET")
-            .env_remove("GDK_BACKEND")
-            .env_remove("QT_QPA_PLATFORM")
-            .env_remove("HYPRLAND_INSTANCE_SIGNATURE");
+            .env("XDG_SESSION_TYPE", "wayland");
+        // Every switch a toolkit reads to *choose* a backend, removed rather than overridden:
+        // what is left is `WAYLAND_DISPLAY` naming this session, and a client that reads that
+        // has no reason to look elsewhere. A value inherited from whoever launched this process
+        // is a guess about a display stack that is not the one the program is being put in:
+        // under a multiplexer these are set for *its* compositor, and a client that honours them
+        // tries a socket that is not this session's and reports "no display" while the socket it
+        // was named sits right there.
+        for name in [
+            "WAYLAND_SOCKET",
+            "GDK_BACKEND",
+            "QT_QPA_PLATFORM",
+            "QT_QPA_PLATFORMTHEME",
+            "SDL_VIDEODRIVER",
+            "OZONE_PLATFORM",
+            "ELECTRON_OZONE_PLATFORM_HINT",
+            "CLUTTER_BACKEND",
+            "HYPRLAND_INSTANCE_SIGNATURE",
+            "SWAYSOCK",
+        ] {
+            command.env_remove(name);
+        }
         command
     }
 
@@ -353,7 +371,6 @@ impl WaylandServer {
             self.socket_name.display(),
             self.socket_name.exists()
         );
-
         // The program's words come back to the caller rather than going to a file: the
         // caller is the side that shows them, and it drains both streams for as long as
         // the program runs. Draining is what makes a pipe safe here — one nobody reads
