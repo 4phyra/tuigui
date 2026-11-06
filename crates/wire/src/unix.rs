@@ -33,15 +33,6 @@ use crate::transport::{framed_read, framed_write, BoxFuture, Connection, Message
 /// Stable key for this transport, as it appears in an announcement.
 pub const NAME: &str = "unix";
 
-/// The names of the transports this build can dial.
-///
-/// A scan is built from these, so a transport is added once: implement it, and put its name
-/// here. Everything else — what it announces, how the text is found, which one answers —
-/// follows from that.
-pub fn names() -> Vec<&'static str> {
-    vec![NAME]
-}
-
 /// A unix socket at a known path.
 ///
 /// Cloneable, and the clone is the same socket: the listener and the link are behind `Arc`s,
@@ -81,6 +72,34 @@ impl UnixSocket {
             listener: Arc::new(Mutex::new(None)),
             link: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// The path this channel is at when nobody chose one.
+    ///
+    /// One fixed name under `XDG_RUNTIME_DIR`, so both halves of a session can write it down
+    /// without a scan, and not under `/tmp`: a socket there is reachable by every user on the
+    /// machine, and this is the platform's directory for exactly this. A session with no such
+    /// directory has no private place to put a socket, and a public one is not a substitute —
+    /// hence the error rather than a fallback.
+    fn socket_path() -> io::Result<PathBuf> {
+        let dir = std::env::var("XDG_RUNTIME_DIR").map_err(|e| {
+            io::Error::other(format!(
+                "the unix channel needs XDG_RUNTIME_DIR to find a private directory: {e}"
+            ))
+        })?;
+        Ok(std::path::Path::new(&dir).join("tuigui.sock"))
+    }
+
+    /// Bind at the standard path, ready to be dialed.
+    ///
+    /// The counterpart of [`crate::p2p::P2p::host`], and deliberately the same shape: a caller
+    /// choosing a channel should not have to know that one of them needs a path picked and a
+    /// listener bound while the other is a single call. Binding belongs to the channel that
+    /// needs it.
+    pub async fn host() -> io::Result<Self> {
+        let socket = Self::new(Self::socket_path()?);
+        socket.bind().await?;
+        Ok(socket)
     }
 
     /// The path this socket is at.

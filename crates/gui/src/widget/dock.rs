@@ -59,26 +59,25 @@ pub enum DockState {
 }
 
 impl Dock {
-    /// Bind a socket and announce it, so the other side can dial this pane.
+    /// Announce a transport that is already reachable, so the other side can dial it.
     ///
-    /// The address is the transport's own: it is bound here, asked for its announcement,
-    /// and the announcement is what gets drawn. Nothing in this crate formats it, which is
-    /// what keeps the text on screen and the text the far side scans for the same text.
+    /// The address is the transport's own: it is asked for its announcement, and the
+    /// announcement is what gets drawn. Nothing in this crate formats it, which is what keeps
+    /// the text on screen and the text the far side scans for the same text.
     ///
-    /// Binding happens before the first frame, because the advert has nowhere to be until
-    /// a socket answers at it: drawing one first would announce an address that refuses.
+    /// Bound by the caller, because binding is the one step the two channels do not share:
+    /// a socket has a path to listen on and an endpoint has to be minted. What is common is
+    /// everything this does — announce it, draw it, wait to be dialed.
     ///
     /// The wait for a dial is **not** held here. It used to be a future polled once per frame with
     /// a no-op waker, on the theory that re-polling was all it needed; it is not. The reactor is
     /// edge-triggered, so read readiness is delivered once, to whichever poll registered a waker,
     /// and a no-op waker throws that away. The accept then stays pending however many frames pass,
     /// which looks exactly like a deadlock: a pane waiting for a dial that has already arrived.
-    pub async fn new(path: std::path::PathBuf, program: String) -> std::io::Result<Self> {
-        let socket = wire::unix::UnixSocket::new(path);
-        socket.bind().await?;
-        let advert = socket
+    pub async fn new(transport: Box<dyn Transport>, program: String) -> std::io::Result<Self> {
+        let advert = transport
             .to_magic()
-            .ok_or_else(|| std::io::Error::other("a bound socket has no address to announce"))?;
+            .ok_or_else(|| std::io::Error::other("a bound transport has no address to announce"))?;
         log::info!("announcing {advert}");
         // The record as cells, padded to a fixed length: blank braille in front, so the row
         // is the same every frame and two panes can be compared by eye.
@@ -88,7 +87,7 @@ impl Dock {
         Ok(Self {
             state: DockState::Pairing {
                 barcode,
-                waiting: Box::pin(async move { socket.accept().await }),
+                waiting: Box::pin(async move { transport.accept().await }),
             },
             program,
         })

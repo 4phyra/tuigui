@@ -26,6 +26,12 @@ tokio-util = { version = "0.7", default-features = false, features = ["codec"] }
 rkyv = { workspace = true }
 # The codec ids a session announces, which live with the codecs they name.
 codecs = { workspace = true }
+# The second channel: a QUIC link between two endpoints, each named by a public
+# key. Its streams are `AsyncRead`/`AsyncWrite`, so the framing below carries
+# them unchanged and this file only has to say where the streams come from.
+iroh = { workspace = true }
+# An endpoint's address as the text an announcement can carry.
+iroh-tickets = { workspace = true }
 # The codec library works in `BytesMut`s, and `SinkExt::send`/`StreamExt::next`
 # are what drive the two halves of a framed link.
 bytes = "1"

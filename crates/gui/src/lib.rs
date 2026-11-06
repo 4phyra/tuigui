@@ -52,6 +52,9 @@ const BANNER: &str = r#"
 pub struct Gui {
     /// The program to run and draw.
     pub program: std::path::PathBuf,
+    /// The channel this session is reachable over.
+    #[arg(long, value_enum, default_value_t = Channel::P2p)]
+    pub channel: Channel,
     /// The codec the session streams with.
     #[command(flatten)]
     pub streaming: StreamingOptions,
@@ -66,6 +69,28 @@ pub struct Gui {
     /// The diagnostic switches, which belong to the client.
     #[command(flatten)]
     pub debug: DebugOptions,
+}
+
+/// The channel a session is reachable over.
+///
+/// One choice, not two flags, because the two are alternatives and never together: a
+/// session is dialed one way or the other, and a pair of booleans would have a fourth
+/// state — both set — that means nothing. An enum makes that state unrepresentable and
+/// lets clap reject it rather than this code having to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum Channel {
+    /// A QUIC link between two endpoints, each named by a public key.
+    ///
+    /// The default, because it is the only one that crosses a machine boundary: a
+    /// session over ssh, or with the program on a different host, has no shared
+    /// filesystem to put a socket on.
+    #[default]
+    P2p,
+    /// A unix socket on one machine.
+    ///
+    /// The cheaper one, and the one to reach for locally: no relay, no handshake beyond
+    /// the greeting, and access enforced by the kernel at `connect` time.
+    Unix,
 }
 
 /// The codec a session streams with: the one choice a session is used with.
@@ -215,6 +240,7 @@ impl Gui {
         let mut session = Session::new(
             size,
             self.streaming.codec(),
+            self.channel,
             input,
             self.program.display().to_string(),
             self.scale,

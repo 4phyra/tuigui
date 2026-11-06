@@ -14,5 +14,6 @@
 
 pub mod drain;
 pub mod message;
+pub mod p2p;
 pub mod transport;
 pub mod unix;
