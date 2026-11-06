@@ -65,6 +65,18 @@ pub struct Server<F: Format> {
     terminal: vt100::Parser,
     /// What is on the screen, as the command drew it.
     scanner: Scanner,
+    /// A dial that is in flight.
+    ///
+    /// On the struct rather than awaited where it starts, because the length of a dial is
+    /// not this side's to bound: a unix socket answers in microseconds, and reaching an
+    /// endpoint over a relay is hole punching, which is seconds of another machine's time.
+    /// Awaiting it in the loop would stall the loop — the read that forwards the command's
+    /// output, and the rewrite that draws it — for as long as the network took, and the
+    /// pane would simply stop.
+    ///
+    /// `None` when nothing is being dialed, which is the state between a client leaving and
+    /// the next announcement.
+    dialing: Option<tokio::task::JoinHandle<io::Result<wire::transport::Connection>>>,
 }
 
 impl<F: Format> Server<F> {
@@ -92,6 +104,7 @@ impl<F: Format> Server<F> {
             filter: crate::filter::Filter::default(),
             terminal: vt100::Parser::new(rows, cols, 0),
             scanner: Scanner::new(rows, cols),
+            dialing: None,
         })
     }
 
@@ -152,18 +165,38 @@ impl<F: Format> Server<F> {
                     // than the longest, a session has to carry the announcement it came from, and the
                     // dial has to skip the ones already attached — a client that has answered is no
                     // longer listening, so greeting it again is a wait nothing ends.
-                    if self.sessions.is_empty() {
+                    if self.sessions.is_empty() && self.dialing.is_none() {
                         if let Some(announced) = self.scanner.scan_barcode() {
-                            match announced.connect().await {
-                                Ok(connection) => self.sessions.push(Session::new(
-                                    connection,
-                                    self.debug.clone(),
-                                    self.controller.clone(),
-                                )),
-                                Err(e) => {
-                                    tracing::warn!("could not reach an announced client: {e}")
-                                }
-                            }
+                            // Spawned, not awaited. The dial is the other machine's time to
+                            // answer, and this loop has a pane to keep drawing while it waits:
+                            // a read that returns here would be a screen frozen for as long as
+                            // reaching the endpoint took. The handle is kept and polled below,
+                            // so the loop still learns the outcome — it just does not stand
+                            // still to hear it.
+                            self.dialing = Some(tokio::task::spawn(async move {
+                                announced.connect().await
+                            }));
+                        }
+                    }
+                    // A dial that finished. Polled rather than waited on for the same reason
+                    // it was spawned: the answer is a fact the loop can collect whenever it
+                    // next comes round.
+                    if self.dialing.as_ref().is_some_and(|dial| dial.is_finished()) {
+                        let dial = self.dialing.take().expect("checked above");
+                        // A panicked dial is this side's bug, and the panic is what carries
+                        // it: a `JoinError` turned into a string would be a failure with no
+                        // backtrace, and the tasks here are small enough that one panicking is
+                        // worth seeing whole.
+                        match dial.await.expect("a dial should not panic") {
+                            Ok(connection) => self.sessions.push(Session::new(
+                                connection,
+                                self.debug.clone(),
+                                self.controller.clone(),
+                            )),
+                            // Reported and retried rather than fatal: the announcement stays on
+                            // the screen, so the next pass offers the same client again, and a
+                            // failure to reach one that is still starting is the ordinary case.
+                            Err(e) => tracing::warn!("could not reach an announced client: {e}"),
                         }
                     }
                 }

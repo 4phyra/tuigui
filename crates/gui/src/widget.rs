@@ -18,18 +18,6 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, StatefulWidget, Widget as _};
 
-/// The socket a Unix Socket session dials.
-///
-/// One fixed name, so a user and a server can both write it down without a scan, and it is
-/// the server's to bind.
-///
-/// Under `XDG_RUNTIME_DIR` and not `/tmp`: a socket in `/tmp` is reachable by every user on
-/// the machine, and this is the platform's directory for exactly this.
-pub fn socket_path() -> std::path::PathBuf {
-    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    std::path::Path::new(&dir).join("tuigui.sock")
-}
-
 /// This terminal's input, boxed so a caller may hand in its own.
 ///
 /// The session holds one of these for its whole life, and `Gui::run` is generic
@@ -57,19 +45,24 @@ pub struct Session {
 }
 
 impl Session {
-    /// Start a session: the window session this machine composites, and the socket the
+    /// Start a session: the window session this machine composites, and the channel the
     /// other side dials.
     ///
     /// Built here rather than by the caller because it is the session's own part: the
-    /// caller says which program, how big, and how to encode, and everything a running
-    /// window needs is assembled around that. The session is a compositor in this
-    /// process, one output.
+    /// caller says which program, how big, how to encode and how to be reached, and
+    /// everything a running window needs is assembled around that. The session is a
+    /// compositor in this process, one output.
     ///
-    /// The socket is bound and announced before the first frame is drawn, so the advert
+    /// The channel is bound and announced before the first frame is drawn, so the advert
     /// that frame puts on screen is one that answers.
+    ///
+    /// Binding is the one step the two channels do not share, which is why it is here and
+    /// not in [`Dock::new`]: a socket picks a path and listens on it, and an endpoint is
+    /// minted. Everything after it — announce, draw, wait to be dialed — is common.
     pub async fn new(
         size: (u32, u32),
         codec: CodecId,
+        channel: crate::Channel,
         stdin: Input,
         program: String,
         scale: f64,
@@ -88,9 +81,13 @@ impl Session {
             },
             codec,
         )?;
+        let transport: Box<dyn wire::transport::Transport> = match channel {
+            crate::Channel::P2p => Box::new(wire::p2p::P2p::host().await?),
+            crate::Channel::Unix => Box::new(wire::unix::UnixSocket::host().await?),
+        };
         Ok(Self {
             stage: Ok(Stage::new(server, Page::default())),
-            dock: dock::Dock::new(socket_path(), program).await?,
+            dock: dock::Dock::new(transport, program).await?,
             input_receiver,
         })
     }
