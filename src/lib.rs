@@ -53,6 +53,13 @@ impl TuiGui {
     /// and it sits next to the code that passes it on.
     fn client_args(&self) -> Vec<String> {
         let mut args = Vec::new();
+        // The unix channel, always, and not a switch this command accepts: `tuigui` starts the
+        // client inside its own pty, so the two ends are this machine by construction and there
+        // is no second machine for a key to be worth reaching. Naming it rather than leaving it
+        // to the client's default is what keeps the cheap channel the one a local session uses —
+        // the default has to be the remote-capable one, since a bare `gui` may be anywhere.
+        args.push("--channel".into());
+        args.push("unix".into());
         // The codec is a choice the client process is told about, because the
         // announcement on the wire is its to make. Neither flag means the
         // client's own default, which is JPEG.

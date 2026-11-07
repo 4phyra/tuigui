@@ -121,6 +121,20 @@ rkyv = { version = "0.8", features = ["alloc", "bytecheck"] }
 # to be bounded, because a program that writes faster than it is read would
 # otherwise be a program that grows this process without limit.
 ringbuf = "0.6"
+# The second transport: QUIC between two endpoints identified by a public key,
+# with hole punching and a relay fallback underneath. Chosen over hand-rolled
+# UDP because a session has to survive NAT, and over plain ssh because the
+# channel has to be dialable from the side that did not start it.
+#
+# `default-features = false` drops `portmapper` (UPnP/NAT-PMP, a second set of
+# sockets and a daemon to talk to) and keeps `tls-ring`, which is the QUIC
+# handshake itself. Relay and hole punching are what this is here for; nothing
+# else is.
+iroh = { version = "1", default-features = false, features = ["tls-ring"] }
+# The string an endpoint's address becomes. A ticket is how an `EndpointAddr`
+# crosses a channel that carries text: base32 after a kind prefix, which is
+# exactly the shape an announcement already has.
+iroh-tickets = "1"
 
 # internal
 easytgp = { path = "crates/easytgp" }

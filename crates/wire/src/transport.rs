@@ -56,6 +56,19 @@ pub fn announcement_prefix(name: &str) -> String {
     announcement(name, "")
 }
 
+/// The names of the transports this build can dial.
+///
+/// A scan is built from these, so a transport is added once: implement it, and put its name
+/// here. Everything else — what it announces, how the text is found, which one answers —
+/// follows from that.
+///
+/// Here rather than on any one transport, because a list of channels is a fact about the
+/// seam: put it under `unix` and adding a second channel would mean editing the first one's
+/// file, which reads as though that channel owned the decision.
+pub fn names() -> Vec<&'static str> {
+    vec![crate::unix::NAME, crate::p2p::NAME]
+}
+
 /// A future a transport returns, boxed so it can be a trait method.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

@@ -18,6 +18,7 @@ use cellcode::{Cell as CodeCell, Rgb};
 use wire::message::SurfaceId;
 use wire::transport::{ANNOUNCE_SEPARATOR, Transport};
 use wire::unix::UnixSocket;
+use wire::p2p::P2p;
 
 /// A window's top-left cell, in cells from the top left of the screen.
 pub type Position = (u16, u16);
@@ -125,11 +126,20 @@ fn consider(best: &mut Option<Box<dyn Transport>>, run: &mut Vec<CodeCell>) {
 }
 
 /// The channel an announcement names, if it names one this build can dial.
+///
+/// Every transport is offered the text, in the order [`wire::transport::names`] lists them,
+/// and the one whose name matches builds itself. That is why a transport's parse is a
+/// `from_magic` on the trait rather than a function here: a channel is added by
+/// implementing it and naming it, not by teaching the scan about it.
 fn announcement(text: &str) -> Option<Box<dyn Transport>> {
     let (name, address) = text.split_once(ANNOUNCE_SEPARATOR)?;
-    let transport = UnixSocket::from_magic(name, address)?;
+    let transport: Box<dyn Transport> = match name {
+        wire::unix::NAME => Box::new(UnixSocket::from_magic(name, address)?),
+        wire::p2p::NAME => Box::new(P2p::from_magic(name, address)?),
+        _ => return None,
+    };
     log::info!("a client announced itself over {}", transport.name());
-    Some(Box::new(transport))
+    Some(transport)
 }
 
 /// The braille cell a terminal cell holds, if it holds one.
