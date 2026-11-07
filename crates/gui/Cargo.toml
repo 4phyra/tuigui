@@ -14,6 +14,9 @@ cellcode = { workspace = true }
 # capture that turns it into a frame. The client composites; it does not know how a
 # window is driven.
 compositor = { workspace = true }
+# The dock's screen switch: a tab strip that walks its band from one screen to the other, so
+# the same furniture a pane's own components use is what tells the user which screen is up.
+tuigui_components = { workspace = true }
 # `unstable-widget-ref`: a window draws itself through a shared reference, so
 # a window is a `WidgetRef` rather than a `Widget` consumed by the draw.
 ratatui = { workspace = true, features = ["unstable-widget-ref"] }
@@ -40,6 +43,9 @@ ringbuf = { workspace = true }
 # `Default` on a widget that names the type of its state without storing one: std's derive
 # would demand `T: Default` of the window session, which a `Box<dyn WindowingServer>` is not.
 better_default = { workspace = true }
+# `Deref` on the type that wraps a session's `Result`, so every caller of the stage still reads
+# `session.stage` as the result it is while the trait is implemented on the wrapper.
+derive_deref = { workspace = true }
 # `poll!`, for the two steps that must not block: the dial and the program's start have
 # to let their frame finish before anything they drew can reach the terminal.
 futures = "0.3"

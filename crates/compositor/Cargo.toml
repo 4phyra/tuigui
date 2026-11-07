@@ -24,6 +24,9 @@ rustix = { workspace = true }
 log = { workspace = true }
 # Spans, for the frames this crate produces.
 tracing = { workspace = true }
+# The close button on a window's bar is the same cross a pane's furniture uses, and sharing it is
+# what keeps the two from drifting apart.
+tuigui_components = { workspace = true }
 
 [dev-dependencies]
 # The capybara demo image, converted to ANSI cells: what the dummy window draws.

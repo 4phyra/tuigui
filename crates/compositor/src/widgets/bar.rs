@@ -6,6 +6,7 @@ use ratatui::layout::{Offset, Position, Rect, Size};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Widget;
 use termina::event::{MouseButton, MouseEvent, MouseEventKind};
+use tuigui_components::{cross, Cross};
 
 use crate::widgets::WindowState;
 use crate::windowing::Compositable;
@@ -13,15 +14,11 @@ use crate::windowing::Compositable;
 /// Eight dots, the standard grip: the bar is what a window is moved by.
 const GRIP: char = '⣿';
 
-/// The button that asks the window to close, drawn on its last cell.
-const CLOSE: char = '✕';
-
 #[derive(Default)]
 pub struct Bar {
     drag: Option<Position>,
-    /// Whether the pointer is over the close button, which is the whole of what
-    /// makes it red: a press is one event, and it would have nothing to warn about.
-    closing: bool,
+    /// The close button: the same cross a pane's furniture uses, so the two cannot drift apart.
+    close: Cross,
     /// What the window calls itself, as of the frame being drawn. Held here rather
     /// than read in `render`, because a `Widget` is handed an area and nothing
     /// else.
@@ -34,10 +31,13 @@ impl Bar {
         self.title = title;
     }
 
-    /// Where the close button sits, when the bar has the room for one. One cell in
-    /// from the right edge, so it is not flush against the frame's own column.
+    /// Where the close button sits, when the bar has the room for one.
+    ///
+    /// One cell in from the right edge, and as wide as a cross is: the glyph alone is
+    /// a target a pointer has to hit exactly.
     fn close_area(area: Rect) -> Option<Rect> {
-        (area.width > 3).then(|| Rect::new(area.right() - 2, area.y, 1, 1))
+        (area.width > cross::WIDTH + 2)
+            .then(|| Rect::new(area.right() - 1 - cross::WIDTH, area.y, cross::WIDTH, 1))
     }
 
     pub fn handle_mouse(
@@ -49,16 +49,22 @@ impl Bar {
         area: Rect,
     ) -> Result<Option<MouseEvent>, crate::Error> {
         let at = Position::new(mouse.column, mouse.row);
-        let close = Self::close_area(area).filter(|close| close.contains(at));
-        self.closing = close.is_some();
-
-        if close.is_some() {
-            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        // The cross is offered this frame's one event, which is what `handle_events` is for: the
+        // same state machine and the same drawing as a pane's cross, driven by whatever event
+        // model the caller has.
+        if let Some(close) = Self::close_area(area) {
+            let mut events = vec![termina::Event::Mouse(mouse)];
+            self.close.handle_events(close, &mut events);
+            // A click — pressed and let go inside the box — is what closes. The cross answers that
+            // once, so this does not have to remember the last frame to notice the edge.
+            if self.close.was_released() {
                 window.terminate()?;
             }
-            // The button is not a grip: nothing drags from under it, and the
-            // press does not fall through to the window either.
-            return Ok(None);
+            // The button is not a grip: a press on it, and anything at all while it is held, are
+            // the cross's rather than the bar's.
+            if close.contains(at) || self.close.is_held() {
+                return Ok(None);
+            }
         }
 
         let Some(last) = self.drag else {
@@ -112,12 +118,7 @@ impl Widget for &Bar {
         }
 
         if let Some(close) = close {
-            if let Some(cell) = buf.cell_mut((close.x, close.y)) {
-                cell.set_char(CLOSE).set_style(style);
-                if self.closing {
-                    cell.set_fg(Color::Red);
-                }
-            }
+            Widget::render(&self.close, close, buf);
         }
     }
 }

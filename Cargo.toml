@@ -44,7 +44,12 @@ ffmpeg-sidecar = { version = "2", default-features = false }
 rstar = "0.13"
 rayon = "1"
 ndarray = "0.16"
-ratatui = "0.30"
+# An inline viewport is written above with `Terminal::insert_before`. The `scrolling-regions`
+# feature is what makes that path usable here: without it, `insert_before` finishes by clearing the
+# viewport, and that clear asks the terminal where its cursor is — a reply that arrives on stdin,
+# which this process's input reader thread owns, so it times out and the viewport is left unpainted.
+# With the feature it scrolls the rows above the viewport instead and never asks.
+ratatui = { version = "0.30", features = ["scrolling-regions"] }
 # The terminal engine: parses a child's bytes into a grid and keeps the state a
 # byte-level rewritter would have to track by hand.
 vt100 = "0.18"

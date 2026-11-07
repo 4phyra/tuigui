@@ -13,7 +13,7 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, StatefulWidget, Widget};
 use wire::transport::{BoxFuture, Connection, Transport};
 
-use super::Stage;
+use super::{Page, Stage};
 
 /// How many rows the dock occupies: a border, the row its content sits on, and a border.
 pub const HEIGHT: u16 = 3;
@@ -31,6 +31,16 @@ pub struct Dock {
     /// Shown in the row once there is a link: what the pane is running is the one thing worth
     /// saying there, and it is the only text the dock has of its own.
     pub program: String,
+    /// The screen switch, at the right of the row.
+    ///
+    /// A tab strip rather than two hand-drawn labels: the band is what says which screen is up,
+    /// and it moves when the other is pressed.
+    tabs: tuigui_components::Tabs,
+    /// The way out, to the right of the switch.
+    ///
+    /// A cross rather than a key, because leaving is what a user reaches for with the pointer, and
+    /// it belongs beside the tabs that got them here.
+    cross: tuigui_components::Cross,
 }
 
 /// The stages before there is a program: bound and waiting to be dialed, and dialed.
@@ -53,9 +63,11 @@ pub enum DockState {
         /// just drew to reach the terminal and cause the dial.
         waiting: BoxFuture<'static, std::io::Result<Connection>>,
     },
-    /// Dialed. Nothing else: the link is the stage's, and it is handed over as soon as the
-    /// other side answers.
-    Paired,
+    /// The program is running and its window is being streamed.
+    ///
+    /// The dial and the start are one step: the link exists to carry the program's frames, so a
+    /// dock between the two would be a state nobody could act on.
+    Streaming,
 }
 
 impl Dock {
@@ -90,25 +102,50 @@ impl Dock {
                 waiting: Box::pin(async move { transport.accept().await }),
             },
             program,
+            tabs: tuigui_components::Tabs::new(
+                vec![
+                    ("Logs".to_string(), None, tuigui_components::CORAL),
+                    (
+                        "Windows".to_string(),
+                        Some(termina::event::KeyCode::Char('w')),
+                        tuigui_components::VIOLET,
+                    ),
+                ],
+                1,
+            ),
+            cross: tuigui_components::Cross::new(),
         })
     }
 }
 
-impl StatefulWidget for &mut Dock {
-    /// The session's stage, so the dock can act on the session rather than describe it: it
-    /// is what decides which screen is up, and a button that could only report a wish would
-    /// put the swap one call away from the press that caused it.
-    type State = Result<Stage, String>;
+/// What the dock is handed for one frame: the session, and the input that arrived.
+pub struct DockProps<'a> {
+    /// The session, so the dock can act on it rather than describe it.
+    pub stage: &'a mut Result<Stage, String>,
+    /// This frame's input: the terminal's own events, the same list the screen above was shown.
+    pub events: &'a mut Vec<termina::Event>,
+    /// Seconds since the previous frame, which is what paces everything animated.
+    pub delta: f32,
+}
 
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        // The wait moves the session before anything is drawn, so this frame shows what it
-        // moved to rather than what it was.
-        self.poll(state);
+impl<'a> StatefulWidget for &'a mut Dock {
+    type State = DockProps<'a>;
 
-        Block::bordered()
-            .border_type(ratatui::widgets::BorderType::Rounded)
-            .border_style(Style::new().fg(Color::DarkGray))
-            .render(area, buf);
+    fn render(self, area: Rect, buf: &mut Buffer, props: &mut Self::State) {
+        // The wait moves the session before anything is drawn, so this frame shows what it moved
+        // to rather than what it was. A dial starts the program and switches the page: the link
+        // goes in first, because a window minted before the session knows where its frames go has
+        // nowhere to write, and there is no window to mint until the program runs.
+        if let Some(connection) = self.poll(props.stage) {
+            let stage = props
+                .stage
+                .as_mut()
+                .expect("the session cannot go away while it is dialing");
+            stage
+                .from_init_to_streaming(connection, &self.program)
+                .expect("the program could not be started");
+            self.state = DockState::Streaming;
+        }
 
         // The row inside the border, which is the whole of the dock's content: the box is
         // three rows because a box is what makes it read as furniture under a screen.
@@ -119,111 +156,116 @@ impl StatefulWidget for &mut Dock {
             height: 1,
         };
 
-        // The two screens as buttons, at the right edge, the one that is up marked. Nothing
-        // presses them yet: a press needs the mouse and the dock does not read the terminal.
-        const LOGS: &str = " Logs ";
-        const WINDOWS: &str = " Windows ";
-        const BUTTONS: [(&str, bool); 2] = [(LOGS, false), (WINDOWS, true)];
+        // The cross sits one cell in from the row's right edge, with the strip's own trailing gap
+        // the only thing between them.
+        let width = self.tabs.width().min(inner.width);
+        let close = Rect::new(
+            inner
+                .right()
+                .saturating_sub(tuigui_components::cross::WIDTH)
+                .saturating_sub(1),
+            inner.y,
+            tuigui_components::cross::WIDTH,
+            1,
+        );
+        // The strip's own width includes the gap after its last tab, so the cross starts where
+        // that gap ends: the two are neighbours with nothing between them.
+        let tabs = Rect::new(close.x.saturating_sub(width), inner.y, width, 1);
 
-        let buttons_width: u16 = BUTTONS.iter().map(|(label, _)| label.len() as u16).sum();
-        let buttons_x = inner.right().saturating_sub(buttons_width);
+        // Taking the input comes first, and the way out is the one answer that changes what this
+        // frame draws at all: a press on the cross ends the session, and the caller stops drawing
+        // this dock. Drawing first would paint the furniture over a screen the user has left.
+        self.tabs.handle_events(tabs, props.events);
+        self.cross.handle_events(close, props.events);
+        if self.cross.was_released() {
+            // The session is always there: a dock only exists inside one.
+            props.stage
+                .as_mut()
+                .expect("a dock cannot outlive its session")
+                .from_any_to_exiting();
+            return;
+        }
+
+        Block::bordered()
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::new().fg(Color::DarkGray))
+            .render(area, buf);
+
+        // The strip moves its band and reports which tab it was; what the page becomes is the
+        // session's to say. A press the session cannot honour — Windows before there is a link to
+        // carry it — leaves the page where it is, so the band is put back on the page that is
+        // really showing. The page is the truth here; the strip only draws it.
+        if let Ok(stage) = props.stage {
+            if let Some(chosen) = self.tabs.chosen() {
+                if chosen != stage.get_page().tab() {
+                    match stage.get_page() {
+                        Page::Stream { .. } => drop(stage.from_streaming_to_logs()),
+                        Page::Logs { .. } | Page::Init => stage.from_logs_to_streaming(),
+                        // Already over: the frame that asked is the one this was drawn on, and
+                        // there is no screen after it to move to.
+                        Page::Exiting { .. } => unreachable!("a press was read after the session ended"),
+                    }
+                }
+            }
+            self.tabs.set_active(stage.get_page().tab());
+        }
+        Widget::render(&self.tabs, tabs, buf);
+        Widget::render(&self.cross, close, buf);
+        // The strip is advanced by the frame's own length, so the move plays at the same speed
+        // whatever rate this pane happens to draw at.
+        self.tabs.step(props.delta);
 
         // Everything left of the buttons is the state's to draw, so a long line is cut off
         // rather than drawn over them.
         let row = Rect {
-            width: buttons_x.saturating_sub(inner.x),
+            width: tabs.x.saturating_sub(inner.x),
             ..inner
         };
 
         match &self.state {
             DockState::Pairing { barcode, .. } => {
-                render_waiting(inner, row, barcode, buf, self.status(state))
+                render_waiting(inner, row, barcode, buf, self.status(props.stage))
             }
-            DockState::Paired => render_program(row, buf, self.status(state)),
+            DockState::Streaming => render_program(row, buf, self.status(props.stage)),
         }
 
         // The light, always: on the dock's own top border, because what it says — this pane is
-        // waiting, or it is paired — is true in every state. Only the word beside it and the
+        // waiting, paired, or streaming — is true in every state. Only the word beside it and the
         // colour it breathes in change, so the mark itself never appears or disappears.
         let (said, colour) = match self.state {
             DockState::Pairing { .. } => ("pairing", (0xFF, 0x69, 0xB4)),
-            DockState::Paired => ("paired", (0x69, 0xFF, 0xB4)),
+            DockState::Streaming => ("streaming", (0xFF, 0x7F, 0x50)),
         };
         light(area, buf, said, colour);
-
-        let showing_stream = state.as_ref().is_ok_and(Stage::showing_stream);
-        let mut x = buttons_x;
-        for (label, screen) in BUTTONS {
-            let style = match screen == showing_stream {
-                true => Style::new()
-                    .fg(Color::Black)
-                    .bg(Color::Rgb(0xff, 0x69, 0xB4)),
-                false => Style::new().fg(Color::DarkGray),
-            };
-            buf.set_string(x, inner.y, label, style);
-            x += label.len() as u16;
-        }
     }
 }
 
 impl Dock {
-    /// Poll the wait once, and move to [`DockState::Connected`] when the other side dials.
+    /// Poll the wait once. A pending wait is the normal answer for every frame until the other
+    /// side dials.
     ///
     /// Polled rather than awaited: the frame has to finish for the announcement it drew to
-    /// reach the other side, and the dial only starts once it has. A poll that is pending is
-    /// the normal case for every frame until then.
+    /// reach the other side, and the dial only starts once it has.
     ///
     /// Polled by hand rather than with `futures::poll!`, because a `render` is not async and
     /// there is no task to be polled inside: the waker is a no-op and every frame asks again,
     /// which is all this wait needs — nothing here is waiting to be woken.
-    fn poll(&mut self, stage: &mut Result<Stage, String>) {
+    fn poll(&mut self, stage: &mut Result<Stage, String>) -> Option<Connection> {
         let DockState::Pairing { waiting, .. } = &mut self.state else {
-            return;
+            return None;
         };
-        match poll_once(waiting.as_mut()) {
-            std::task::Poll::Ready(Ok(connection)) => {
-                log::info!("dialed by the other side");
-
-                // The program starts now, and not before: a client that ran before there was a
-                // link would draw into a compositor whose frames had nowhere to go — and the
-                // link is what tells it which display to reach, so there was nothing to start it
-                // with until now.
-                //
-                // The session is given the connection first, because the program's windows are
-                // what send the frames: a window minted before the session knows where they go
-                // has nowhere to write, and there is no window to mint until the program runs.
-                //
-                // Started before the swap so a failure is reported as one, rather than as a
-                // stream that never draws anything.
-                let started = match stage {
-                    Ok(stage) => {
-                        stage.compositor.windowing_mut().set_connection(connection.clone());
-                        stage
-                            .compositor
-                            .spawn(std::path::Path::new(&self.program))
-                            .map_err(|e| format!("could not start {}: {e}", self.program))
-                    }
-                    Err(e) => Err(e.clone()),
-                };
-                match started {
-                    Ok(()) => {
-                        if let Ok(stage) = stage {
-                            stage.swap(connection);
-                        }
-                        self.state = DockState::Paired;
-                    }
-                    Err(e) => {
-                        log::error!("{e}");
-                        *stage = Err(e);
-                    }
-                }
-            }
+        let connection = match poll_once(waiting.as_mut()) {
+            std::task::Poll::Ready(Ok(connection)) => connection,
             std::task::Poll::Ready(Err(e)) => {
                 log::error!("could not be dialed: {e}");
                 *stage = Err(format!("could not be dialed: {e}"));
+                return None;
             }
-            std::task::Poll::Pending => {}
-        }
+            // The normal case for every frame until the other side answers.
+            std::task::Poll::Pending => return None,
+        };
+        log::info!("dialed by the other side");
+        Some(connection)
     }
 
     /// What the row says: the program this pane was started for, once there is a link.
@@ -238,7 +280,7 @@ impl Dock {
             // side has been reached — before that the row is the record's.
             Ok(_) => match self.state {
                 DockState::Pairing { .. } => "",
-                DockState::Paired => &self.program,
+                DockState::Streaming => &self.program,
             },
         }
     }

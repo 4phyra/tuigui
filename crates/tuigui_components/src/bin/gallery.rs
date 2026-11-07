@@ -16,10 +16,11 @@ use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
-use ratatui::widgets::StatefulWidget;
+use ratatui::widgets::Widget;
 use termina::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use termina::Parser;
-use tuigui_components::{cross, Button, Cross, Events, Tabs};
+use tuigui_components::events::take_key;
+use tuigui_components::{cross, Button, Cross, Tabs};
 
 /// The screens the tab strip chooses between.
 const TABS: [(&str, Color); 3] = [
@@ -86,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Drawn before anything is read: the read blocks until the terminal says something, so a
     // gallery that waited for a first event would show an empty pane until the user guessed.
     terminal.draw(|frame| {
-        gallery.draw(frame.area(), frame.buffer_mut(), &mut Events::default());
+        gallery.draw(frame.area(), frame.buffer_mut(), &mut Vec::new());
     })?;
 
     // When the current stop frame started being shown, and whether the last frame drawn was
@@ -112,14 +113,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let ready = wait(wait_for)?;
-        let mut events = Events::default();
+        let mut events = Vec::new();
         if ready {
             match read_once(&mut parser, &mut bytes, &mut events) {
                 Ok(false) => {}
                 Ok(true) => {
-                    if events
-                        .take_key(|key| is_quit(key) && key.kind == KeyEventKind::Press)
-                        .is_some()
+                    if take_key(&mut events, |key| {
+                        is_quit(key) && key.kind == KeyEventKind::Press
+                    })
+                    .is_some()
                     {
                         break Ok(());
                     }
@@ -142,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // started stays on its first. Either way the hold begins now, so the frame that
                 // was just drawn is shown for the whole of `FRAME`.
                 if moving {
-                    gallery.step();
+                    gallery.step(FRAME.as_secs_f32());
                 }
                 since = std::time::Instant::now();
             }
@@ -169,11 +171,11 @@ struct Gallery {
     pressed: Vec<std::rc::Rc<std::cell::Cell<bool>>>,
     /// What the last press was, as the line under the list says it.
     last: String,
-    /// The cross, and the two things it reports. Its slots are read after the frame, like the
-    /// buttons'.
+    /// The cross. What a press means is the gallery's to read from it after the frame.
     cross: Cross,
-    cross_pressed: std::rc::Rc<std::cell::Cell<bool>>,
-    cross_released: std::rc::Rc<std::cell::Cell<bool>>,
+    /// Whether the cross was held after the last frame, so a press and a release are each reported
+    /// once rather than every frame the cross stays down.
+    cross_was_held: bool,
 }
 
 impl Gallery {
@@ -193,30 +195,22 @@ impl Gallery {
             })
             .collect::<Vec<_>>();
         let (pressed, buttons): (Vec<_>, Vec<_>) = buttons.into_iter().unzip();
-        let cross_pressed = std::rc::Rc::new(std::cell::Cell::new(false));
-        let cross_released = std::rc::Rc::new(std::cell::Cell::new(false));
-        let pressed_slot = std::rc::Rc::clone(&cross_pressed);
-        let released_slot = std::rc::Rc::clone(&cross_released);
         Self {
             tabs: Tabs::new(
                 TABS.iter()
-                    .map(|(name, colour)| ((*name).to_string(), *colour))
+                    .map(|(name, colour)| ((*name).to_string(), None, *colour))
                     .collect(),
                 0,
             ),
             buttons,
             pressed,
             last: "nothing pressed yet".into(),
-            cross: Cross::new(
-                move || pressed_slot.set(true),
-                move || released_slot.set(true),
-            ),
-            cross_pressed,
-            cross_released,
+            cross: Cross::new(),
+            cross_was_held: false,
         }
     }
 
-    fn draw(&mut self, area: Rect, buf: &mut Buffer, events: &mut Events) {
+    fn draw(&mut self, area: Rect, buf: &mut Buffer, events: &mut Vec<Event>) {
         // The column is as tall as its elements plus the gaps between them, and it starts
         // where centring it leaves it: the list is laid out before anything is drawn, so a
         // frame that is too small clips rather than drawing a skewed list.
@@ -232,32 +226,23 @@ impl Gallery {
         // Each element is centred on its own row, so a narrow button sits under a wide strip
         // rather than against its left edge.
         let width = self.tabs.width().min(area.width);
-        StatefulWidget::render(
-            &mut self.tabs,
-            Rect::new(centred(area, width), y, width, TABS_HEIGHT),
-            buf,
-            events,
-        );
+        let tabs_area = Rect::new(centred(area, width), y, width, TABS_HEIGHT);
+        self.tabs.handle_events(tabs_area, events);
+        Widget::render(&self.tabs, tabs_area, buf);
         y = y.saturating_add(TABS_HEIGHT + SEPARATION);
 
         for button in &mut self.buttons {
             let width = button.width().min(area.width);
-            StatefulWidget::render(
-                button,
-                Rect::new(centred(area, width), y, width, BUTTON_HEIGHT),
-                buf,
-                events,
-            );
+            let row = Rect::new(centred(area, width), y, width, BUTTON_HEIGHT);
+            button.handle_events(row, events);
+            Widget::render(&*button, row, buf);
             y = y.saturating_add(BUTTON_HEIGHT + SEPARATION);
         }
         // The cross on a row of its own, three cells wide: the glyph is the target, and the block
         // it becomes while held needs the cells either side of it.
-        StatefulWidget::render(
-            &mut self.cross,
-            Rect::new(centred(area, cross::WIDTH), y, cross::WIDTH, LINE_HEIGHT),
-            buf,
-            events,
-        );
+        let cross_area = Rect::new(centred(area, cross::WIDTH), y, cross::WIDTH, LINE_HEIGHT);
+        self.cross.handle_events(cross_area, events);
+        Widget::render(&self.cross, cross_area, buf);
         y = y.saturating_add(LINE_HEIGHT + SEPARATION);
 
         // The answer, in the same column: which tab is up, and what was last pressed.
@@ -276,9 +261,9 @@ impl Gallery {
         self.tabs.is_moving()
     }
 
-    /// Advance the strip by one stop frame, on the frame clock.
-    fn step(&mut self) {
-        self.tabs.step();
+    /// Advance the strip by the time that passed, on the frame clock.
+    fn step(&mut self, delta: f32) {
+        self.tabs.step(delta);
     }
 
     /// Take what each button's closure recorded during the frame.
@@ -289,13 +274,16 @@ impl Gallery {
                 self.last = format!("pressed {name}");
             }
         }
-        // The cross reports both ends of a press, so the line can say which one just happened.
-        if self.cross_pressed.replace(false) {
+        // The cross keeps its own state, so the line is what tells the two ends of a press apart:
+        // held on the frame it goes down, let go on the frame it comes up.
+        let held = self.cross.is_held();
+        if held && !self.cross_was_held {
             self.last = "cross pressed".into();
         }
-        if self.cross_released.replace(false) {
+        if !held && self.cross_was_held {
             self.last = "cross released".into();
         }
+        self.cross_was_held = held;
     }
 }
 
@@ -312,26 +300,17 @@ fn centred(area: Rect, width: u16) -> u16 {
 fn read_once(
     parser: &mut Parser,
     bytes: &mut [u8; 256],
-    events: &mut Events,
+    events: &mut Vec<Event>,
 ) -> std::io::Result<bool> {
     let read = std::io::stdin().read(bytes)?;
     parser.parse(&bytes[..read], true);
 
     let mut arrived = false;
     while let Some(event) = parser.pop() {
-        match event {
-            Event::Key(key) => {
-                events.keypresses.push(key);
-                arrived = true;
-            }
-            // Only the last pointer event is kept: a pointer's history is where it is now, so
-            // drawing every motion between two frames would draw the same answer repeatedly.
-            Event::Mouse(mouse) => {
-                events.mouse_hits = Some(mouse);
-                arrived = true;
-            }
-            _ => {}
-        }
+        // Everything the parser made is kept: the widgets take what they act on, and a widget
+        // that wanted a key would have nothing to look at if only the mouse were kept.
+        events.push(event);
+        arrived = true;
     }
     Ok(arrived)
 }

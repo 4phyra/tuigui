@@ -1,66 +1,71 @@
-//! The input a widget is handed for one frame: the keys it may act on, and the click that
-//! landed somewhere on the pane.
+//! What a widget does with one frame's input.
 //!
-//! The caller decides which widget gets what. A widget takes only the parts it acts on and
-//! leaves the rest, so one `Events` can be offered to several widgets in turn and whatever
-//! is left over afterwards is what nobody wanted.
+//! The input is the terminal's own [`Event`]s, drained once by the caller: there is no second
+//! vocabulary here, only the four questions a widget asks of that list. A widget takes the
+//! events it acts on and leaves the rest, so the same list can be offered to several widgets in
+//! turn and whatever is left over afterwards is what nobody wanted.
 
 use ratatui::layout::{Position, Rect};
-use termina::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use termina::event::{Event, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 
-/// One frame's input.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Events {
-    /// Every key pressed since the last frame, in the order they arrived.
-    pub keypresses: Vec<KeyEvent>,
-    /// The pointer's last event, if there was one.
-    pub mouse_hits: Option<MouseEvent>,
+/// The pointer's last event, if this frame has one.
+fn pointer(events: &[Event]) -> Option<MouseEvent> {
+    events.iter().rev().find_map(|event| match event {
+        Event::Mouse(mouse) => Some(*mouse),
+        _ => None,
+    })
 }
 
-impl Events {
-    /// Whether the pointer is over `area`.
-    ///
-    /// Read rather than taken: pointing at a widget is not the widget's to consume, and a
-    /// button that swallowed the motion would not know it was under the pointer next frame.
-    pub fn hovering(&self, area: Rect) -> bool {
-        self.mouse_hits
-            .is_some_and(|mouse| area.contains(Position::new(mouse.column, mouse.row)))
-    }
+/// Where the pointer is, if it said anything this frame.
+///
+/// `None` is not "the pointer left": a frame with no mouse event is a frame in which the pointer
+/// did not move, so a widget must keep what it last heard rather than treat the silence as an exit.
+pub fn pointer_at(events: &[Event]) -> Option<Position> {
+    pointer(events).map(|mouse| Position::new(mouse.column, mouse.row))
+}
 
-    /// Take the left click inside `area`, if this frame's event is one.
-    ///
-    /// Taking it is what stops the click reaching a widget further down: the widget that
-    /// was pressed is the one that acted.
-    pub fn take_press(&mut self, area: Rect) -> Option<Position> {
-        let mouse = self.mouse_hits?;
-        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            return None;
+/// Take the left press inside `area`.
+///
+/// Taking it is what stops the press reaching a widget further down: the widget that was
+/// pressed is the one that acted.
+pub fn take_press(events: &mut Vec<Event>, area: Rect) -> Option<Position> {
+    let at = events.iter().position(|event| match event {
+        Event::Mouse(mouse) => {
+            matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                && area.contains(Position::new(mouse.column, mouse.row))
         }
-        let at = Position::new(mouse.column, mouse.row);
-        if !area.contains(at) {
-            return None;
-        }
-        self.mouse_hits = None;
-        Some(at)
-    }
+        _ => false,
+    })?;
+    let Event::Mouse(mouse) = events.remove(at) else {
+        return None;
+    };
+    Some(Position::new(mouse.column, mouse.row))
+}
 
-    /// Take the release of the left button, wherever it happened.
-    ///
-    /// Not limited to `area`: a press that is dragged off a widget still ends when the button is
-    /// let go, and a widget that only heard about releases inside its own box would stay held
-    /// down forever.
-    pub fn take_release(&mut self) -> Option<Position> {
-        let mouse = self.mouse_hits?;
-        if !matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
-            return None;
-        }
-        self.mouse_hits = None;
-        Some(Position::new(mouse.column, mouse.row))
-    }
+/// Take the release of the left button, wherever it happened.
+///
+/// Not limited to an area: a press that is dragged off a widget still ends when the button is
+/// let go, and a widget that only heard about releases inside its own box would stay held down
+/// forever.
+pub fn take_release(events: &mut Vec<Event>) -> Option<Position> {
+    let at = events.iter().position(|event| match event {
+        Event::Mouse(mouse) => matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)),
+        _ => false,
+    })?;
+    let Event::Mouse(mouse) = events.remove(at) else {
+        return None;
+    };
+    Some(Position::new(mouse.column, mouse.row))
+}
 
-    /// Take the first keypress `want` accepts, leaving the others for whoever looks next.
-    pub fn take_key(&mut self, want: impl Fn(&KeyEvent) -> bool) -> Option<KeyEvent> {
-        let at = self.keypresses.iter().position(want)?;
-        Some(self.keypresses.remove(at))
-    }
+/// Take the first keypress `want` accepts, leaving the others for whoever looks next.
+pub fn take_key(events: &mut Vec<Event>, want: impl Fn(&KeyEvent) -> bool) -> Option<KeyEvent> {
+    let at = events.iter().position(|event| match event {
+        Event::Key(key) => want(key),
+        _ => false,
+    })?;
+    let Event::Key(key) = events.remove(at) else {
+        return None;
+    };
+    Some(key)
 }

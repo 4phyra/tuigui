@@ -3,9 +3,10 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::StatefulWidget;
+use ratatui::widgets::Widget;
+use termina::event::Event;
 
-use crate::events::Events;
+use crate::events::{pointer_at, take_press, take_release};
 
 /// How many blank columns sit on each side of the label.
 const PADDING: u16 = 1;
@@ -29,6 +30,8 @@ pub struct Button {
     /// Whether the button is being held down, which outlives the frame the press arrived on:
     /// a press and the release that ends it are two events, usually two frames, always in pairs.
     held: bool,
+    /// Whether the pointer was over it in the events last taken.
+    hovered: bool,
 }
 
 impl Button {
@@ -38,6 +41,7 @@ impl Button {
             colour,
             on_click: Box::new(on_click),
             held: false,
+            hovered: false,
         }
     }
 
@@ -83,22 +87,31 @@ fn brighter(colour: Color) -> Color {
     Color::Rgb(lift(r), lift(g), lift(b))
 }
 
-impl StatefulWidget for &mut Button {
-    type State = Events;
-
-    fn render(self, area: Rect, buf: &mut Buffer, events: &mut Self::State) {
-        let hovered = events.hovering(area);
+impl Button {
+    /// Take this frame's input for a button drawn in `area`.
+    pub fn handle_events(&mut self, area: Rect, events: &mut Vec<Event>) {
+        // A frame with no pointer event leaves the last answer alone: the pointer did not move, it
+        // did not leave.
+        if let Some(at) = pointer_at(events) {
+            self.hovered = area.contains(at);
+        }
         // Only a held button takes the release. A release is one event for the whole pane and
-        // every widget is offered the same `Events`: a widget that took it without being held
-        // would eat the release of whatever was really pressed, and that widget would stay held
+        // every widget is offered the same list: a widget that took it without being held would
+        // eat the release of whatever was really pressed, and that widget would stay held
         // forever.
-        if self.held && events.take_release().is_some() {
+        if self.held && take_release(events).is_some() {
             self.held = false;
         }
-        if events.take_press(area).is_some() {
+        if take_press(events, area).is_some() {
             self.held = true;
             (self.on_click)();
         }
+    }
+}
+
+impl Widget for &Button {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let hovered = self.hovered;
 
         // Dressed in the order the events came: a held button is dark whatever the pointer is
         // doing, and a hover on a button that is not held is the bright one.

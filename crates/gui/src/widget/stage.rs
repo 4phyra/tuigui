@@ -14,7 +14,11 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::text::Line;
 use ratatui::widgets::{StatefulWidget, Widget};
+use ringbuf::traits::{Consumer as _, Observer as _, Producer as _, Split as _};
+use std::io::BufRead as _;
 use wire::transport::Connection;
 
 use compositor::Compositor;
@@ -29,27 +33,13 @@ use crate::windowing::PlatformWindowing;
 /// loop is not free-running.
 const QUIET: std::time::Duration = std::time::Duration::from_millis(16);
 
-/// Where a program's output waits while its window is on screen.
+/// How many bytes of the program's output can wait to be looked at.
 ///
-/// Read while the window is up — a program blocked on a full pipe would stop drawing —
-/// and printed when the logs screen is back.
-#[derive(Clone, Default)]
-pub struct RingBuffer;
+/// Public because the caller sizes the buffer it drains into to the ring that fills it.
+pub const RING_BUF_CAPACITY: usize = 1 << 18;
 
-impl RingBuffer {
-    pub fn push(&self, _bytes: &[u8]) {
-        todo!("a bounded, line-wise ring of what the program said")
-    }
-
-    /// Every line waiting, oldest first.
-    pub fn take(&self) -> Vec<String> {
-        todo!()
-    }
-
-    pub fn len(&self) -> usize {
-        todo!()
-    }
-}
+/// The share of the ring the stream's screen keeps free.
+const RING_BUF_FREE: f32 = 0.3;
 
 /// The running program: the windows it draws, and which screen is showing them.
 ///
@@ -74,18 +64,50 @@ pub enum Page {
     /// and nothing to print. The dock is the whole of the screen.
     #[default]
     Init,
-    /// The terminal's own screen, after a stream: every line the client has printed is
-    /// still there, and the link that streamed them is kept.
-    Logs { connection: Connection },
     /// The alternate screen, with the program's window on it.
     ///
-    /// The buffer belongs to this screen: it is the output that arrived while the window
-    /// was up, and it exists exactly as long as this screen does. Leaving the stream
-    /// drains it onto the logs screen, where it is printed.
+    /// The reading end of the program's output travels with the page, because it is drained from
+    /// wherever the page is shown and there is one of it. Nothing is printed here: the window is
+    /// what is on screen, so the ring is only emptied to keep the thread reading the pipe moving.
     Stream {
         connection: Connection,
-        buffer: RingBuffer,
+        stdout: ringbuf::HeapCons<u8>,
     },
+    /// The terminal's own screen, with the program's output being printed onto it.
+    ///
+    /// Everything the ring holds is written straight out: this is the terminal the client's own
+    /// output has always gone to, and the dock is what sits under it.
+    Logs {
+        connection: Connection,
+        stdout: ringbuf::HeapCons<u8>,
+    },
+    /// Over, and how far along the leaving is.
+    ///
+    /// Two frames, because leaving takes two: the frame that asks is still drawn on the screen it
+    /// is leaving — the dock included — and the one after has to be drawn on the logs screen to
+    /// clear what is left there. A single frame cannot do both, since which terminal it draws on
+    /// is decided before the frame's body runs.
+    ///
+    /// A page rather than a flag beside the stage, because it is the same question the others
+    /// answer — which screen is up — and here the answer is "the logs one, and then the end".
+    Exiting {
+        /// Whether the screen has been crossed: the next frame draws the logs screen and ends.
+        ready: bool,
+    },
+}
+
+impl Page {
+    /// Which of the two screens this is, as the dock's strip numbers them.
+    ///
+    /// `Init` is the logs screen: it is the terminal's own, and it is where the client has been
+    /// printing all along. The number is what a press on the strip reports, so it is the page
+    /// that says it rather than the caller counting variants.
+    pub fn tab(&self) -> usize {
+        match self {
+            Page::Stream { .. } => 1,
+            Page::Logs { .. } | Page::Init | Page::Exiting { .. } => 0,
+        }
+    }
 }
 
 /// What a frame of a running program is given that the program does not own: the
@@ -94,54 +116,140 @@ pub enum Page {
 /// Passed as the widget's state because a `render` is handed an area and a buffer and
 /// nothing else, and these are needed to do the work: without them a frame could not tell
 /// its windows how big the pane is, or what the user just pressed.
-pub struct Props<'a> {
+pub struct StageProps<'a> {
     /// The terminal's report of itself, read once per frame by the caller.
     pub winsize: rustix::termios::Winsize,
-    /// This terminal's input, drained once per frame.
-    pub events: &'a std::sync::mpsc::Receiver<termina::Event>,
+    /// This frame's input: the terminal's own events, drained once by the caller.
+    ///
+    /// Drained once and passed by reference rather than read here, because the dock is offered
+    /// the same list: an event this half consumed would never reach the half that draws the
+    /// furniture. A widget takes what it acts on and leaves the rest.
+    pub events: &'a mut Vec<termina::Event>,
+    /// Where the program's words go, for the caller to put on the screen once the frame is up.
+    ///
+    /// Filled rather than printed because the caller is the half holding the terminal: the logs
+    /// screen is the terminal underneath the dock, and the pane a frame draws is every visible row
+    /// of an inline viewport — its own top row *is* the cursor row, so a line written here would be
+    /// painted over by the next frame. The caller puts these above the viewport instead.
+    ///
+    /// Empty on every other screen: there the window is what is on screen, so a line would be a
+    /// line behind the picture, and the stream's frame keeps the ring from filling instead.
+    pub program_stdout: &'a mut Vec<u8>,
 }
 
-impl<'a> StatefulWidget for &'a mut Stage {
-    type State = Props<'a>;
 
-    /// One frame of the running program: deliver input, advance it, and draw it.
-    ///
-    /// Input first, then the capture, then the draw. In that order because a capture is
-    /// what the program committed since the last one: an event delivered after the capture
-    /// is an event the next capture answers.
-    ///
-    /// Capturing only happens on the stream's screen. On the logs screen the window is not
-    /// on the screen at all, so an encoded frame would be pixels nobody can see and a
-    /// placement the other side cannot resolve.
-    fn render(self, area: Rect, buf: &mut Buffer, props: &mut Props<'_>) {
-        while let Ok(event) = props.events.try_recv() {
-            if let Err(e) = self.compositor.input(&event, props.winsize) {
-                log::warn!("could not deliver input: {e}");
-                return;
-            }
-        }
+/// The session's screen, or the failure that replaced it.
+///
+/// A wrapper because the trait is not this crate's: `StatefulWidget` cannot be implemented for
+/// `Result`, which is not a local type. `Deref` keeps every reader of `session.stage` writing what
+/// it did: the wrapper is only here for the raw render, which is the one place that draws a
+/// failure in place of a screen.
+#[derive(derive_deref::Deref)]
+pub struct StageResult(pub Result<Stage, String>);
 
-        if let Page::Stream { connection, .. } = &self.page {
-            // Whatever the other side has said since the last frame. Read before the capture, so a
-            // message it sent in answer to the previous frame is acted on by this one.
-            //
-            // Only `Error` is handled: a reported failure is the far end saying the pane is broken,
-            // and there is nothing here that could carry on meaningfully — the placeholder is to
-            // make it impossible to miss, rather than to keep a half-working session alive.
-            while let Ok(Some(message)) = connection.recv_next() {
-                if let wire::message::Message::Error(why) = message {
-                    panic!("the server reported a failure: {why}");
+impl<'a> StatefulWidget for &'a mut StageResult {
+    type State = StageProps<'a>;
+
+    fn render(self, area: Rect, buf: &mut Buffer, props: &mut Self::State) {
+        match &mut self.0 {
+            Ok(stage) => {
+                if let Err(e) = stage.render_inner(area, buf, props) {
+                    log::warn!("{e}");
                 }
             }
-
-            self.compositor
-                .frame(QUIET, props.winsize)
-                .expect("a frame could not be taken");
-            // The draw is not decoration: each window's cells are filled with its surface,
-            // and those cells are what the other side scans for to find where a picture
-            // goes. A frame that did not draw is a frame with nothing to place.
-            Widget::render(&mut self.compositor, area, buf);
+            Err(message) => {
+                log::error!("{message}");
+                ratatui::widgets::Clear.render(area, buf);
+                buf.set_style(area, Style::new().bg(Color::Rgb(0x40, 0, 0)));
+                let lines: Vec<Line> = std::iter::once(Line::from("the session failed"))
+                    .chain(message.lines().map(Line::from))
+                    .collect();
+                ratatui::widgets::Widget::render(
+                    ratatui::widgets::Paragraph::new(lines).centered(),
+                    area,
+                    buf,
+                );
+            }
         }
+    }
+}
+
+impl Stage {
+    /// One frame, with everything that can fail left to the caller.
+    ///
+    /// Input first, then the capture, then the draw. In that order because a capture is what the
+    /// program committed since the last one: an event delivered after the capture is an event the
+    /// next capture answers.
+    ///
+    /// Capturing only happens on the stream's screen. On the logs screen the window is not on the
+    /// screen at all, so an encoded frame would be pixels nobody can see and a placement the other
+    /// side cannot resolve.
+    fn render_inner(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        props: &mut StageProps<'_>,
+    ) -> std::io::Result<()> {
+        for event in props.events.iter() {
+            self.compositor
+                .input(event, props.winsize)
+                .map_err(std::io::Error::other)?;
+        }
+
+        match &mut self.page {
+            Page::Stream { connection, stdout } => {
+                // Whatever the other side has said since the last frame. Read before the capture,
+                // so a message it sent in answer to the previous frame is acted on by this one.
+                //
+                // Only `Error` is handled: a reported failure is the far end saying the pane is
+                // broken, and there is nothing here that could carry on meaningfully — the
+                // placeholder is to make it impossible to miss, rather than to keep a half-working
+                // session alive.
+                while let Ok(Some(message)) = connection.recv_next() {
+                    if let wire::message::Message::Error(why) = message {
+                        return Err(std::io::Error::other(format!(
+                            "the server reported a failure: {why}"
+                        )));
+                    }
+                }
+
+                self.compositor
+                    .frame(QUIET, props.winsize)
+                    .map_err(std::io::Error::other)?;
+                // The draw is not decoration: each window's cells are filled with its surface, and
+                // those cells are what the other side scans for to find where a picture goes. A
+                // frame that did not draw is a frame with nothing to place.
+                Widget::render(&mut self.compositor, area, buf);
+
+                // The words are not on this screen, so nothing here wants them — but the thread
+                // reading the pipe is parked on it, and a pipe nobody drains stops the program.
+                // Room is made for that thread by dropping the oldest lines, which are the ones
+                // that would have scrolled away unseen anyway.
+                let free = (RING_BUF_CAPACITY as f32 * RING_BUF_FREE) as usize;
+                let vacant = stdout.vacant_len();
+                if vacant < free {
+                    stdout.skip(free - vacant);
+                }
+            }
+            // Over. A page that is not ready is the frame that asked to leave: nothing is drawn on
+            // it, because the screen it would be drawn on is the one being left. Flipping it ready
+            // is what lets the next frame cross to the logs screen and clear what is left there.
+            Page::Exiting { ready } => *ready = true,
+            // The program's words go into the caller's buffer: this screen *is* the terminal
+            // underneath, and only the half holding that terminal can put a line above the pane.
+            //
+            // TODO: the ring is drained into a Vec here and split into lines there, so a frame's
+            // words are copied twice before they reach the screen. Draining straight into the
+            // terminal, or handing out the ring's own slices, would do it once — worth doing if a
+            // program ever prints in bulk rather than a line at a time.
+            Page::Logs { stdout, .. } => {
+                while let Some(written) = stdout.write_into(props.program_stdout, None) {
+                    written?;
+                }
+            }
+            Page::Init => {}
+        }
+        Ok(())
     }
 }
 
@@ -157,42 +265,99 @@ impl Stage {
         }
     }
 
-    /// Swap the screen, and hand back what the stream was holding.
+    /// The first stream: a link was dialed, so the program starts and its window goes up.
     ///
-    /// Entering the stream needs the link, which only a connection can give, so it is
-    /// passed in. Leaving drains the buffer and returns the lines: the caller prints them,
-    /// because the terminal belongs to the caller and not to this type.
-    pub fn swap(&mut self, connection: Connection) -> Vec<String> {
-        match std::mem::replace(&mut self.page, Page::Init) {
-            // Leaving the stream: its buffer is the last thing it said, and it has to be
-            // printed before the screen that held it goes.
-            Page::Stream { connection, buffer } => {
-                self.page = Page::Logs { connection };
-                buffer.take()
+    /// The session is given the connection first, because the program's windows are what send the
+    /// frames: a window minted before the session knows where they go has nowhere to write, and
+    /// there is no window to mint until the program runs.
+    ///
+    /// Started before the page changes, so a failure is reported as one rather than as a stream
+    /// that never draws anything: the page stays on the logs screen and the error goes to the
+    /// caller, which is the pane that draws it.
+    ///
+    /// The program's output arrives on a thread of its own and travels with the page from then on:
+    /// the ring is handed out as its reading end, and the thread that fills it is detached because
+    /// it lives exactly as long as the pipe does — the program exiting closes it, and the read that
+    /// was parked returns end-of-file.
+    pub fn from_init_to_streaming(
+        &mut self,
+        connection: Connection,
+        program: &str,
+    ) -> Result<(), String> {
+        self.compositor
+            .windowing_mut()
+            .set_connection(connection.clone());
+        self.compositor
+            .spawn(std::path::Path::new(program))
+            .map_err(|e| format!("could not start {program}: {e}"))?;
+        let stdout = self
+            .compositor
+            .take_stdout()
+            .ok_or_else(|| format!("{program} started without an output pipe"))?;
+
+        let (mut producer, consumer) = ringbuf::HeapRb::<u8>::new(RING_BUF_CAPACITY).split();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                // Full means the frames fell behind their margin. A producer has no blocking push
+                // and no notification, so asking again and sleeping between asks is all there is.
+                while let 0 = producer.push_slice(format!("{line}\n").as_bytes()) {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
             }
-            // Entering it: a fresh buffer, because the program's output is about to have
-            // nowhere to go again.
-            Page::Logs { .. } | Page::Init => {
-                self.page = Page::Stream {
-                    connection,
-                    buffer: RingBuffer::default(),
-                };
-                Vec::new()
-            }
-        }
+        });
+
+        self.page = Page::Stream {
+            connection,
+            stdout: consumer,
+        };
+        Ok(())
     }
 
-    /// Whether the stream's screen is the one up.
-    ///
-    /// The terminal is not this type's to touch, so it answers the question and the caller
-    /// does the crossing: entering and leaving the alternate screen, and holding the mouse
-    /// only while the program is the thing on screen.
-    pub fn showing_stream(&self) -> bool {
-        matches!(self.page, Page::Stream { .. })
+    /// Back to the logs screen. The program keeps running — only the screen changes.
+    pub fn from_streaming_to_logs(&mut self) {
+        let Page::Stream { connection, stdout } = std::mem::replace(&mut self.page, Page::Init)
+        else {
+            // Nothing was streaming, so there is nothing to leave.
+            return;
+        };
+        self.page = Page::Logs { connection, stdout };
     }
 
-    /// Whether the program has ended.
+    /// Back to the program's window, after a look at the logs.
+    ///
+    /// The link is the one already in the page: the program never stopped, so there is nothing to
+    /// start and nothing to hand over.
+    pub fn from_logs_to_streaming(&mut self) {
+        let Page::Logs { connection, stdout } = std::mem::replace(&mut self.page, Page::Init)
+        else {
+            return;
+        };
+        self.page = Page::Stream { connection, stdout };
+    }
+
+    /// Over, from wherever the session was, one frame short of the crossing.
+    ///
+    /// The screen goes back first — the alternate screen is the program's, and a session that ended
+    /// on it would hand back a hole — and that takes two frames: this one asks, and the next is
+    /// drawn on the logs screen where there is something to clear.
+    pub fn from_any_to_exiting(&mut self) {
+        self.page = Page::Exiting { ready: false };
+    }
+
+    /// The page that is up.
+    pub fn get_page(&self) -> &Page {
+        &self.page
+    }
+
+    /// Whether the session is over: the program ended, or the user asked to leave and the frame
+    /// that carries the screen across has been drawn.
+    ///
+    /// A page still asking is not over: the frame that asks is drawn on the screen it is leaving,
+    /// and the one after it is the one that hands the logs screen back.
     pub fn finished(&self) -> bool {
-        self.compositor.finished()
+        matches!(self.page, Page::Exiting { ready: true }) || self.compositor.finished()
     }
 }

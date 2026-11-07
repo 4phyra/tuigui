@@ -63,10 +63,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
-use ratatui::widgets::StatefulWidget;
-use termina::event::{MouseButton, MouseEventKind};
+use ratatui::widgets::Widget;
+use termina::event::{Event, KeyCode, KeyEventKind};
 
-use crate::events::Events;
+use crate::events::{pointer_at, take_key, take_press};
 
 /// How many columns of padding sit on each side of a tab's name.
 ///
@@ -84,6 +84,12 @@ const HOVER: Color = Color::Rgb(0x3a, 0x3a, 0x3a);
 
 /// How many columns the strip keeps free at each end: the room an end tab bounces into.
 const GUTTER: u16 = 1;
+
+/// How long one stop frame of a move is held.
+///
+/// A move is drawn frame by frame rather than interpolated, and this is what a frame is worth:
+/// the walk, the bounce and the settle together are a little under a third of a second.
+const FRAME: f32 = 0.02;
 
 /// How many stop frames the band walks for. The last of them is on the tab.
 const WALK: u8 = 5;
@@ -107,6 +113,9 @@ const BOUNCE: [f32; 5] = [0.625, 0.625, 0.5, 0.25, 0.125];
 /// How many stop frames a move draws in total.
 const FRAMES: u8 = WALK + BOUNCE.len() as u8 + 1;
 
+/// How long a whole move lasts, in seconds.
+const TRAVEL: f32 = FRAME * FRAMES as f32;
+
 /// The left-aligned blocks, one per eighth of a cell: what a band's right edge is drawn with.
 const EIGHTHS: [char; 8] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
 
@@ -116,22 +125,38 @@ const EIGHTHS: [char; 8] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '�
 /// this crate's. The active tab is a band of its colour with the name cut out of it, and a click
 /// on another tab walks the band there, overshooting it before it settles.
 pub struct Tabs {
-    tabs: Vec<(String, Color)>,
+    tabs: Vec<(String, Option<KeyCode>, Color)>,
     active: usize,
     /// The tab the band is coming from. Equal to `active` at rest.
     from: usize,
     /// How many of a move's frames have been drawn. [`FRAMES`] is at rest, held there by
     /// `from == active`.
     shown: u8,
+    /// Seconds into the move being drawn.
+    ///
+    /// Kept as time rather than as a frame count, because the caller draws at whatever rate it
+    /// draws at: a countdown would run the move faster on a pane that redraws faster, and the
+    /// dock's clock is not the strip's to decide.
+    elapsed: f32,
+    /// Which tab the pointer was over in the events last taken.
+    ///
+    /// Kept rather than passed to the draw, so the drawing takes no input: the dock's screen
+    /// switch is drawn by `gui`, which is handed a frame's events rather than this crate's.
+    hovered: Option<usize>,
+    /// The tab pressed since the caller last asked.
+    chosen: Option<usize>,
 }
 
 impl Tabs {
-    pub fn new(tabs: Vec<(String, Color)>, active: usize) -> Self {
+    pub fn new(tabs: Vec<(String, Option<KeyCode>, Color)>, active: usize) -> Self {
         Self {
             tabs,
             active,
             from: active,
             shown: FRAMES,
+            elapsed: TRAVEL,
+            hovered: None,
+            chosen: None,
         }
     }
 
@@ -140,20 +165,109 @@ impl Tabs {
         self.active
     }
 
+    /// Put the band on a tab.
+    ///
+    /// The dock is the case: which screen is up is the stage's fact, not the strip's, so the strip
+    /// is told rather than asked. A tab that is already there is not a move; a different one is,
+    /// and the band walks there over the frames that follow.
+    pub fn set_active(&mut self, active: usize) {
+        if active == self.active {
+            return;
+        }
+        self.from = self.active;
+        self.active = active;
+        self.shown = 0;
+        self.elapsed = 0.0;
+    }
+
     /// Whether the band is between two tabs, which is when a caller has to keep drawing.
     pub fn is_moving(&self) -> bool {
         self.shown < FRAMES
     }
 
-    /// Advance the move by one stop frame. A no-op at rest.
+    /// Take the tab the user just pressed, if there is one.
     ///
-    /// Drawing does not do this. A frame is shown for as long as the caller says, and only the
-    /// caller knows when that is: a draw that advanced the move itself would move on every
-    /// redraw, and a redraw happens for reasons that are not time — a key, a pointer motion, a
-    /// pane that changed size — so the animation would skip frames whenever the mouse moved.
-    pub fn step(&mut self) {
-        if self.shown < FRAMES {
-            self.shown += 1;
+    /// Answered once: a press is asked for on the frame it happened and not again, so a caller
+    /// that acts on it never acts twice. The band has already moved — what the caller decides is
+    /// whether the move it asked for can be honoured, and [`set_active`](Self::set_active) is how
+    /// it says the band belongs somewhere else after all.
+    pub fn chosen(&mut self) -> Option<usize> {
+        self.chosen.take()
+    }
+
+    pub fn handle_events(&mut self, area: Rect, events: &mut Vec<Event>) {
+        // The columns run from the near gutter to the far one: a strip's first tab overshoots into
+        // the gutter behind it.
+        let left = area.x.saturating_add(GUTTER);
+        let offsets = self.offsets();
+        let boxes: Vec<Rect> = offsets
+            .iter()
+            .map(|(start, end)| {
+                Rect::new(
+                    left.saturating_add(*start),
+                    area.y,
+                    end.saturating_sub(*start),
+                    area.height,
+                )
+            })
+            .collect();
+
+        // Read, not taken: pointing at a tab is not the tab's to consume, and a strip that
+        // swallowed the motion would not know it was under the pointer next frame. A frame with
+        // no pointer event leaves the last answer alone — the pointer did not move, it did not
+        // leave.
+        if let Some(at) = pointer_at(events) {
+            self.hovered = boxes.iter().position(|tab| tab.contains(at));
+        }
+
+        // A click on a tab moves the band and is taken, so that whatever is drawn after the strip
+        // does not act on the same press. Only a press on a tab is taken: a click past the last
+        // name belongs to the row, not to the strip. The index is recorded for the caller, which
+        // may put it back when moving there is not something it can agree to.
+        for (index, tab) in boxes.into_iter().enumerate() {
+            if take_press(events, tab).is_some() {
+                self.chosen = Some(index);
+                self.set_active(index);
+                return;
+            }
+        }
+
+        // A shortcut takes its tab on the press. A terminal reports a key when it goes down and
+        // says nothing when it comes back up — there is no release event to wait for — so the
+        // press is the only moment there is.
+        let shortcuts: Vec<Option<KeyCode>> = self.tabs.iter().map(|(_, key, _)| *key).collect();
+        for (index, key) in shortcuts.iter().enumerate() {
+            let Some(key) = key else {
+                continue;
+            };
+            if take_key(events, |pressed| {
+                pressed.code == *key && matches!(pressed.kind, KeyEventKind::Press)
+            })
+            .is_some()
+            {
+                self.chosen = Some(index);
+                self.set_active(index);
+                return;
+            }
+        }
+    }
+
+    /// Advance the move by `delta` seconds. A no-op at rest.
+    ///
+    /// Drawing does not do this: a draw that advanced the move itself would move on every redraw,
+    /// and a redraw happens for reasons that are not time — a key, a pointer motion, a pane that
+    /// changed size — so the animation would skip frames whenever the mouse moved.
+    pub fn step(&mut self, delta: f32) {
+        if self.shown >= FRAMES {
+            return;
+        }
+        self.elapsed += delta;
+        // A hair over, because the times added are not exact in binary: five steps of `FRAME` sum
+        // to a shade under five frames, and the fifth would land one frame late.
+        self.shown = (self.elapsed / FRAME + 1e-3) as u8;
+        if self.shown >= FRAMES {
+            self.shown = FRAMES;
+            self.elapsed = TRAVEL;
         }
     }
 
@@ -161,7 +275,7 @@ impl Tabs {
     pub fn width(&self) -> u16 {
         self.tabs
             .iter()
-            .fold(GUTTER * 2, |total, (name, _)| {
+            .fold(GUTTER * 2, |total, (name, _, _)| {
                 total.saturating_add(span(name).saturating_add(GAP))
             })
             // The last tab has no gap after it, and the fold counted one.
@@ -179,7 +293,7 @@ impl Tabs {
         let mut start = 0u16;
         self.tabs
             .iter()
-            .map(|(name, _)| {
+            .map(|(name, _, _)| {
                 let end = start.saturating_add(span(name));
                 let range = (start, end);
                 start = end.saturating_add(GAP);
@@ -212,18 +326,16 @@ impl Tabs {
             ));
         }
 
-        // The bounce: past the tab and back onto it.
-        let past = BOUNCE
-            .get(usize::from(self.shown - WALK))
-            .copied()
-            .unwrap_or(0.0)
+        let offset = usize::from(self.shown.saturating_sub(WALK));
+        let past = BOUNCE.get(offset).copied().unwrap_or(0.0)
             * if to_start > from_start { 1.0 } else { -1.0 };
         Some((to_start + past, to_end + past))
     }
 
     /// The colour the band is drawn in, crossing from the tab it left to the one it reached.
     fn colour(&self) -> Color {
-        let (Some((_, from)), Some((_, to))) = (self.tabs.get(self.from), self.tabs.get(self.active))
+        let (Some((_, _, from)), Some((_, _, to))) =
+            (self.tabs.get(self.from), self.tabs.get(self.active))
         else {
             return Color::Reset;
         };
@@ -273,10 +385,8 @@ fn part((left, right): (f32, f32), column: i32) -> Option<(f32, bool)> {
     (covered > 0.0).then_some((covered, left <= start))
 }
 
-impl StatefulWidget for &mut Tabs {
-    type State = Events;
-
-    fn render(self, area: Rect, buf: &mut Buffer, events: &mut Self::State) {
+impl Widget for &Tabs {
+    fn render(self, area: Rect, buf: &mut Buffer) {
         // The tab space starts one gutter in, which is the room the band bounces into.
         let left = area.x.saturating_add(GUTTER);
         let offsets = self.offsets();
@@ -291,25 +401,6 @@ impl StatefulWidget for &mut Tabs {
                 )
             })
             .collect();
-
-        // A click on another tab starts a move, and is taken so that whatever is drawn after the
-        // strip does not act on the same press. Only a press on a tab is taken: a click past the
-        // last name belongs to the row, not to the strip.
-        let pressed = events
-            .mouse_hits
-            .filter(|mouse| matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)))
-            .and_then(|mouse| {
-                let at = Rect::new(mouse.column, mouse.row, 1, 1);
-                areas.iter().position(|tab| tab.intersects(at))
-            });
-        if let Some(index) = pressed {
-            events.take_press(area);
-            if index != self.active {
-                self.from = self.active;
-                self.active = index;
-                self.shown = 0;
-            }
-        }
 
         // The strip's row is filled with the plate, gutters included. This is both the clear —
         // nothing of the last frame survives where the band is no longer — and the colour a
@@ -365,12 +456,18 @@ impl StatefulWidget for &mut Tabs {
             }
         }
 
-        for ((name, tab_colour), tab) in self.tabs.iter().zip(areas.iter()) {
-            let hovered = events.hovering(*tab);
-            // A hover changes the tab's background rather than its text: it is the cell the
-            // pointer is on that has to answer, and an underline answers for one row of it.
-            if hovered && self.tabs.get(self.active).map(|(_, colour)| *colour) != Some(*tab_colour) {
+        for (index, ((name, _, tab_colour), tab)) in
+            self.tabs.iter().zip(areas.iter()).enumerate()
+        {
+            let lit = self.hovered == Some(index);
+            // A hover changes the tab's background rather than its text, but only where the band
+            // is not: the band is the answer to "which one is up", and a lit cell painted over it
+            // would punch a hole in the move as it passes.
+            if lit && self.tabs.get(self.active).map(|(_, _, colour)| *colour) != Some(*tab_colour) {
                 for x in tab.left()..tab.right() {
+                    if part(edges, i32::from(x.saturating_sub(left))).is_some() {
+                        continue;
+                    }
                     if let Some(cell) = buf.cell_mut((x, area.y)) {
                         cell.set_style(Style::new().bg(HOVER));
                     }
@@ -384,7 +481,7 @@ impl StatefulWidget for &mut Tabs {
                     // Over the band the name is cut out of it, and cut out by as much as the band
                     // covers it: a letter the band is half over is half way to the cut-out colour.
                     Style::new().fg(mix_colour(*tab_colour, Color::Black, covered))
-                } else if hovered {
+                } else if lit {
                     Style::new().fg(*tab_colour).bg(HOVER)
                 } else {
                     Style::new().fg(*tab_colour)
@@ -399,6 +496,7 @@ impl StatefulWidget for &mut Tabs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use termina::event::{MouseButton, MouseEventKind};
 
     fn area() -> Rect {
         Rect::new(0, 0, 20, 1)
@@ -407,34 +505,26 @@ mod tests {
     fn tabs(active: usize) -> Tabs {
         Tabs::new(
             vec![
-                ("one".to_string(), Color::Rgb(255, 0, 0)),
-                ("two".to_string(), Color::Rgb(0, 0, 255)),
+                ("one".to_string(), Some(KeyCode::Char('1')), Color::Rgb(255, 0, 0)),
+                ("two".to_string(), Some(KeyCode::Char('2')), Color::Rgb(0, 0, 255)),
             ],
             active,
         )
     }
 
-    fn draw(tabs: &mut Tabs, events: &mut Events) -> Buffer {
-        let mut buf = Buffer::empty(area());
-        StatefulWidget::render(tabs, area(), &mut buf, events);
-        buf
-    }
-
-    fn click(column: u16) -> Events {
-        Events {
-            keypresses: Vec::new(),
-            mouse_hits: Some(termina::event::MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column,
-                row: 0,
-                modifiers: termina::event::Modifiers::NONE,
-            }),
-        }
+    fn click(column: u16) -> Vec<Event> {
+        vec![Event::Mouse(termina::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row: 0,
+            modifiers: termina::event::Modifiers::NONE,
+        })]
     }
 
     #[test]
     fn the_band_rests_on_the_active_tab() {
-        let buf = draw(&mut tabs(1), &mut Events::default());
+        let mut buf = Buffer::empty(area());
+        Widget::render(&tabs(1), area(), &mut buf);
         // One gutter, then `one` at 1..6, a gap at 6, and `two` at 7..12 whose name starts at 8.
         assert_eq!(buf[(7, 0)].bg, Color::Rgb(0, 0, 255));
         assert_eq!(buf[(2, 0)].fg, Color::Rgb(255, 0, 0));
@@ -445,9 +535,9 @@ mod tests {
     #[test]
     fn the_walk_lands_on_the_tab() {
         let mut tabs = tabs(0);
-        draw(&mut tabs, &mut click(8));
+        tabs.handle_events(area(), &mut click(8));
         while tabs.shown < WALK - 1 {
-            draw(&mut tabs, &mut Events::default());
+            tabs.step(FRAME);
         }
         // The last frame of the walk is the tab itself, not a step short of it.
         assert_eq!(tabs.edges(), Some((6.0, 11.0)));
@@ -456,27 +546,27 @@ mod tests {
     #[test]
     fn the_walk_moves_whole_cells_only() {
         let mut tabs = tabs(0);
-        draw(&mut tabs, &mut click(8));
-        for _ in 1..WALK {
+        tabs.handle_events(area(), &mut click(8));
+        while tabs.shown < WALK - 1 {
             let (left, right) = tabs.edges().expect("a strip with tabs has edges");
             assert_eq!(left, left.round(), "a fractional walk edge: {left}");
             assert_eq!(right, right.round(), "a fractional walk edge: {right}");
-            draw(&mut tabs, &mut Events::default());
+            tabs.step(FRAME);
         }
     }
 
     #[test]
     fn the_bounce_decays_to_the_tab() {
         let mut tabs = tabs(0);
-        draw(&mut tabs, &mut click(8));
-        for _ in 1..WALK {
-            draw(&mut tabs, &mut Events::default());
+        tabs.handle_events(area(), &mut click(8));
+        while tabs.shown < WALK {
+            tabs.step(FRAME);
         }
         for expected in BOUNCE {
             let (left, right) = tabs.edges().expect("a strip with tabs has edges");
             assert_eq!(left, 6.0 + expected, "left edge of the bounce");
             assert_eq!(right, 11.0 + expected, "right edge of the bounce");
-            draw(&mut tabs, &mut Events::default());
+            tabs.step(FRAME);
         }
         // And then it is exactly on the tab.
         assert_eq!(tabs.edges(), Some((6.0, 11.0)));
@@ -495,62 +585,64 @@ mod tests {
     #[test]
     fn a_move_ends_after_every_frame() {
         let mut tabs = tabs(0);
-        draw(&mut tabs, &mut click(8));
-        for _ in 1..FRAMES {
-            assert!(tabs.is_moving());
-            draw(&mut tabs, &mut Events::default());
+        tabs.handle_events(area(), &mut click(8));
+        while tabs.is_moving() {
+            tabs.step(FRAME);
         }
+        // Stepping a strip at rest is not a move.
+        tabs.step(FRAME);
         assert!(!tabs.is_moving());
+        assert_eq!(tabs.shown, FRAMES);
     }
 
     #[test]
     fn a_cell_the_band_left_goes_back_to_the_plate() {
         let mut tabs = tabs(0);
-        let mut buf = draw(&mut tabs, &mut Events::default());
+        let mut buf = Buffer::empty(area());
+        Widget::render(&tabs, area(), &mut buf);
         assert_ne!(buf[(1, 0)].bg, PLATE);
-        draw(&mut tabs, &mut click(8));
-        for _ in 1..FRAMES {
-            buf = draw(&mut tabs, &mut Events::default());
+        // Move to the other tab and let it land: where the band was is plate again.
+        tabs.handle_events(area(), &mut click(8));
+        while tabs.is_moving() {
+            tabs.step(FRAME);
         }
+        buf.reset();
+        Widget::render(&tabs, area(), &mut buf);
         assert_eq!(buf[(1, 0)].bg, PLATE);
     }
 
     #[test]
     fn a_hovered_tab_takes_the_hover_background() {
+        let mut tabs = tabs(0);
+        let mut events = vec![Event::Mouse(termina::event::MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 8,
+            row: 0,
+            modifiers: termina::event::Modifiers::NONE,
+        })];
+        tabs.handle_events(area(), &mut events);
         let mut buf = Buffer::empty(area());
-        StatefulWidget::render(
-            &mut tabs(0),
-            area(),
-            &mut buf,
-            &mut Events {
-                keypresses: Vec::new(),
-                mouse_hits: Some(termina::event::MouseEvent {
-                    kind: MouseEventKind::Moved,
-                    column: 8,
-                    row: 0,
-                    modifiers: termina::event::Modifiers::NONE,
-                }),
-            },
-        );
-        // `two` is not active, so it answers with its background rather than with the band.
+        Widget::render(&tabs, area(), &mut buf);
+        // `two` is not active, so it answers with its background rather than with the band, and
+        // only the tab the pointer is on does: `one` is still its own colour.
         assert_eq!(buf[(8, 0)].bg, HOVER);
-        assert_eq!(buf[(3, 0)].bg, PLATE);
+        assert_ne!(buf[(3, 0)].bg, HOVER);
     }
 
     #[test]
     fn a_click_past_the_last_tab_is_left_alone() {
         let mut tabs = tabs(0);
         let mut events = click(18);
-        draw(&mut tabs, &mut events);
+        tabs.handle_events(area(), &mut events);
         assert_eq!(tabs.active(), 0);
-        assert!(events.mouse_hits.is_some());
+        assert!(!events.is_empty());
     }
 
     #[test]
     fn the_colour_crosses_rather_than_switches() {
         let mut tabs = tabs(0);
-        draw(&mut tabs, &mut click(8));
-        draw(&mut tabs, &mut Events::default());
+        tabs.handle_events(area(), &mut click(8));
+        tabs.step(FRAME);
         let halfway = tabs.colour();
         let Color::Rgb(red, _, blue) = halfway else {
             panic!("truecolour stays truecolour: {halfway:?}");
@@ -572,45 +664,5 @@ mod tests {
     fn the_strip_is_its_names_plus_a_gutter_and_the_gaps() {
         // Two five-column tabs, one gap between them, one gutter at each end.
         assert_eq!(tabs(0).width(), 13);
-    }
-
-    #[test]
-    fn dump() {
-        for (name, target) in [("right", 2usize), ("left", 0usize)] {
-            let mut tabs = Tabs::new(
-                vec![
-                    ("one".to_string(), Color::Rgb(255, 0, 0)),
-                    ("two".to_string(), Color::Rgb(0, 0, 255)),
-                    ("six".to_string(), Color::Rgb(0, 255, 0)),
-                ],
-                match name {
-                    "right" => 0,
-                    _ => 2,
-                },
-            );
-            let mut buf = Buffer::empty(area());
-            StatefulWidget::render(&mut tabs, area(), &mut buf, &mut Events::default());
-            let row = |buf: &Buffer| {
-                (0..20)
-                    .map(|x| buf[(x, 0)].symbol().to_string())
-                    .collect::<String>()
-            };
-            println!("--- moving {name}: rest edges {:?}", tabs.edges());
-            println!("{}", row(&buf));
-
-            // Click the target tab's own column.
-            let columns = [2, 7, 12];
-            let mut events = click(columns[target]);
-            for _ in 0..FRAMES {
-                StatefulWidget::render(&mut tabs, area(), &mut buf, &mut events);
-                events = Events::default();
-                let drawn = tabs.shown.saturating_sub(1);
-                tabs.shown = drawn;
-                let edges = tabs.edges();
-                tabs.shown = drawn + 1;
-                println!("f{drawn:<3} edges {edges:?}");
-                println!("{}", row(&buf));
-            }
-        }
     }
 }

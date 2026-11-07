@@ -253,7 +253,15 @@ impl Gui {
         // two terminals share through `SharedStdout`, so asking twice is asking once.
 
         let mut was_alternate = false;
+        // Where a frame's worth of the program's words is collected. One buffer for the whole run,
+        // sized to the ring that fills it: the ring caps what can arrive, so this never grows, and
+        // reusing it is what keeps a chatty program from allocating a Vec per frame.
+        let mut program_stdout = Vec::with_capacity(widget::RING_BUF_CAPACITY);
+        // The frame clock, kept here because this loop is the only place a frame exists: how long
+        // one took is what anything animated is paced by, and nothing below can measure it.
+        let mut last = std::time::Instant::now();
         loop {
+            let delta = std::mem::replace(&mut last, std::time::Instant::now()).elapsed().as_secs_f32();
             if session.is_alternate() {
                 if !was_alternate {
                     crossterm::execute!(
@@ -261,6 +269,16 @@ impl Gui {
                         crossterm::terminal::EnterAlternateScreen,
                         crossterm::event::EnableMouseCapture
                     )?;
+                    // The terminal diffs against the buffer it drew last, and that buffer belongs
+                    // to the screen it drew on. Coming back to the alternate screen whose
+                    // contents were dropped by the crossing makes that diff a lie, so the back
+                    // buffer is discarded and the whole screen drawn again.
+                    //
+                    // `resize` and not `clear`: the two do the same work for a fullscreen
+                    // viewport — clear it all, reset the back buffer — and only `clear` reads the
+                    // cursor back to restore it, which cannot be answered here. This process's
+                    // stdin is the reader thread's.
+                    secondary_terminal.resize(secondary_terminal.size()?.into())?;
                 }
 
                 was_alternate = true;
@@ -275,11 +293,45 @@ impl Gui {
                     )?;
                 }
 
+                // Cleared, or the next entry into the stream is a no-op: the screen would be the
+                // logs one and the program's window would have nowhere to land.
+                was_alternate = false;
+
                 &mut primary_terminal
             }
             .draw(|frame| {
-                frame.render_stateful_widget(GuiWidget::default(), frame.area(), &mut session)
+                frame.render_stateful_widget(
+                    GuiWidget {
+                        delta,
+                        program_stdout: &mut program_stdout,
+                    },
+                    frame.area(),
+                    &mut session,
+                )
             })?;
+
+            // After the draw. Only the screen's own frame fills this — the dock switches the page
+            // after the stage has already drawn — so anything here belongs to the screen this frame
+            // drew, and that screen is the logs one exactly when this is empty of a window.
+            //
+            // It is put on the screen here rather than in the draw because the terminal is this
+            // half's: an inline viewport starts at the cursor row, so the only place to put a line
+            // is above it, which `insert_before` scrolls open.
+            if !program_stdout.is_empty() {
+                // A line each: the thread that reads the pipe puts the terminator back on every
+                // line it takes off, so the ring's bytes are newline-separated throughout and
+                // `lines` is exactly what the program printed.
+                let text = String::from_utf8_lossy(&program_stdout);
+                let lines: Vec<&str> = text.lines().collect();
+                primary_terminal.insert_before(lines.len() as u16, |buf| {
+                    for (row, line) in lines.iter().enumerate() {
+                        buf.set_string(0, row as u16, line, ratatui::style::Style::new());
+                    }
+                })?;
+            }
+            // Emptied for the next frame. The allocation is kept, so a program that prints every
+            // frame allocates this buffer once for the whole run rather than once per frame.
+            program_stdout.clear();
 
             if session.done() {
                 // The same pair the loop leaves with, for the same reason: ending on the
