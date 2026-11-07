@@ -183,21 +183,25 @@ impl Stage {
     ///
     /// Capturing only happens on the stream's screen. On the logs screen the window is not on the
     /// screen at all, so an encoded frame would be pixels nobody can see and a placement the other
-    /// side cannot resolve.
+    /// side cannot resolve; the input there belongs to the furniture rather than the program.
     fn render_inner(
         &mut self,
         area: Rect,
         buf: &mut Buffer,
         props: &mut StageProps<'_>,
     ) -> std::io::Result<()> {
-        for event in props.events.iter() {
-            self.compositor
-                .input(event, props.winsize)
-                .map_err(std::io::Error::other)?;
-        }
-
         match &mut self.page {
             Page::Stream { connection, stdout } => {
+                // Only the screen that has the window on it hands the program its input. On the
+                // logs screen the window is not on the screen at all, so a key typed there is
+                // the furniture's — the strip's shortcut included — and forwarding it would let
+                // the program act on a press the strip already claimed.
+                for event in props.events.iter() {
+                    self.compositor
+                        .input(event, props.winsize)
+                        .map_err(std::io::Error::other)?;
+                }
+
                 // Whatever the other side has said since the last frame. Read before the capture,
                 // so a message it sent in answer to the previous frame is acted on by this one.
                 //
