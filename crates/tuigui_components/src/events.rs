@@ -44,6 +44,20 @@ impl Events {
         Some(at)
     }
 
+    /// Take the release of the left button, wherever it happened.
+    ///
+    /// Not limited to `area`: a press that is dragged off a widget still ends when the button is
+    /// let go, and a widget that only heard about releases inside its own box would stay held
+    /// down forever.
+    pub fn take_release(&mut self) -> Option<Position> {
+        let mouse = self.mouse_hits?;
+        if !matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
+            return None;
+        }
+        self.mouse_hits = None;
+        Some(Position::new(mouse.column, mouse.row))
+    }
+
     /// Take the first keypress `want` accepts, leaving the others for whoever looks next.
     pub fn take_key(&mut self, want: impl Fn(&KeyEvent) -> bool) -> Option<KeyEvent> {
         let at = self.keypresses.iter().position(want)?;

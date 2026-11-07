@@ -19,7 +19,7 @@ use ratatui::text::Line;
 use ratatui::widgets::StatefulWidget;
 use termina::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use termina::Parser;
-use tuigui_components::{Button, Events, Tabs};
+use tuigui_components::{cross, Button, Cross, Events, Tabs};
 
 /// The screens the tab strip chooses between.
 const TABS: [(&str, Color); 3] = [
@@ -32,7 +32,7 @@ const TABS: [(&str, Color); 3] = [
 const SEPARATION: u16 = 2;
 
 /// How many rows a button occupies.
-const BUTTON_HEIGHT: u16 = 3;
+const BUTTON_HEIGHT: u16 = 1;
 
 /// How many rows the tab strip occupies.
 const TABS_HEIGHT: u16 = 1;
@@ -163,13 +163,40 @@ struct Gallery {
     tabs: Tabs,
     /// One button per tab. All of them are drawn: the list shows every component the crate
     /// has, and the strip above them only says which one a session would be showing.
-    buttons: Vec<Button<'static>>,
+    buttons: Vec<Button>,
+    /// One slot per button, set by that button's own closure when it is pressed. Read and reset
+    /// by the gallery after the frame.
+    pressed: Vec<std::rc::Rc<std::cell::Cell<bool>>>,
     /// What the last press was, as the line under the list says it.
     last: String,
+    /// The cross, and the two things it reports. Its slots are read after the frame, like the
+    /// buttons'.
+    cross: Cross,
+    cross_pressed: std::rc::Rc<std::cell::Cell<bool>>,
+    cross_released: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl Gallery {
     fn new() -> Self {
+        // One press slot per button, shared with that button's closure: a closure cannot borrow
+        // the gallery the buttons are fields of, so what it did is recorded in a cell it owns and
+        // the gallery reads it back after the frame.
+        let buttons = TABS
+            .iter()
+            .map(|(name, colour)| {
+                let pressed = std::rc::Rc::new(std::cell::Cell::new(false));
+                let theirs = std::rc::Rc::clone(&pressed);
+                (
+                    pressed,
+                    Button::new(*name, *colour, move || theirs.set(true)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (pressed, buttons): (Vec<_>, Vec<_>) = buttons.into_iter().unzip();
+        let cross_pressed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let cross_released = std::rc::Rc::new(std::cell::Cell::new(false));
+        let pressed_slot = std::rc::Rc::clone(&cross_pressed);
+        let released_slot = std::rc::Rc::clone(&cross_released);
         Self {
             tabs: Tabs::new(
                 TABS.iter()
@@ -177,10 +204,15 @@ impl Gallery {
                     .collect(),
                 0,
             ),
-            buttons: TABS
-                .map(|(name, _)| Button::new(format!(" {name} ")))
-                .into(),
+            buttons,
+            pressed,
             last: "nothing pressed yet".into(),
+            cross: Cross::new(
+                move || pressed_slot.set(true),
+                move || released_slot.set(true),
+            ),
+            cross_pressed,
+            cross_released,
         }
     }
 
@@ -189,11 +221,11 @@ impl Gallery {
         // where centring it leaves it: the list is laid out before anything is drawn, so a
         // frame that is too small clips rather than drawing a skewed list.
         //
-        // One strip, one line per button, and the answer under them.
-        let elements = self.buttons.len().saturating_add(2);
+        // One strip, one line per button, the cross, and the answer under them all.
+        let elements = self.buttons.len().saturating_add(3);
         let total = TABS_HEIGHT
             .saturating_add(BUTTON_HEIGHT * self.buttons.len() as u16)
-            .saturating_add(LINE_HEIGHT)
+            .saturating_add(LINE_HEIGHT * 2)
             .saturating_add(SEPARATION * (elements as u16).saturating_sub(1));
         let mut y = area.y + area.height.saturating_sub(total) / 2;
 
@@ -218,6 +250,15 @@ impl Gallery {
             );
             y = y.saturating_add(BUTTON_HEIGHT + SEPARATION);
         }
+        // The cross on a row of its own, three cells wide: the glyph is the target, and the block
+        // it becomes while held needs the cells either side of it.
+        StatefulWidget::render(
+            &mut self.cross,
+            Rect::new(centred(area, cross::WIDTH), y, cross::WIDTH, LINE_HEIGHT),
+            buf,
+            events,
+        );
+        y = y.saturating_add(LINE_HEIGHT + SEPARATION);
 
         // The answer, in the same column: which tab is up, and what was last pressed.
         let said = format!("{} · showing tab {}", self.last, self.tabs.active());
@@ -240,12 +281,20 @@ impl Gallery {
         self.tabs.step();
     }
 
-    /// Take what the draw decided for each button.
+    /// Take what each button's closure recorded during the frame.
     fn settle(&mut self) {
-        for (index, button) in self.buttons.iter().enumerate() {
-            if button.activated() {
-                self.last = format!("pressed {}", TABS[index].0);
+        for (index, pressed) in self.pressed.iter().enumerate() {
+            if pressed.replace(false) {
+                let name = TABS.get(index).map_or("?", |(name, _)| name);
+                self.last = format!("pressed {name}");
             }
+        }
+        // The cross reports both ends of a press, so the line can say which one just happened.
+        if self.cross_pressed.replace(false) {
+            self.last = "cross pressed".into();
+        }
+        if self.cross_released.replace(false) {
+            self.last = "cross released".into();
         }
     }
 }
