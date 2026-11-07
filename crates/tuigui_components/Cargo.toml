@@ -1,0 +1,19 @@
+[package]
+name = "tuigui_components"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The widgets a pane is built from: a button, a tab strip, and the input they share"
+
+[dependencies]
+# The widgets themselves: each one draws into a buffer handed to it, and nothing here reaches
+# for a terminal of its own.
+ratatui = { workspace = true }
+# The frame's input: the key and mouse events the pane's reader already produces.
+termina = { workspace = true }
+# The gallery's own terminal: raw mode is the device's, and it is not a widget's business.
+rustix = { workspace = true }
+
+[[bin]]
+name = "gallery"
+path = "src/bin/gallery.rs"

@@ -3802,6 +3802,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuigui_components"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+ "rustix 1.1.5",
+ "termina 0.4.0",
+]
+
+[[package]]
 name = "turbojpeg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
