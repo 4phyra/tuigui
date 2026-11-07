@@ -10,6 +10,7 @@ members = [
     "crates/cell_map",
     "crates/cellcode",
     "crates/compositor",
+    "crates/tuigui_components",
 ]
 
 [workspace.package]
@@ -43,7 +44,12 @@ ffmpeg-sidecar = { version = "2", default-features = false }
 rstar = "0.13"
 rayon = "1"
 ndarray = "0.16"
-ratatui = "0.30"
+# An inline viewport is written above with `Terminal::insert_before`. The `scrolling-regions`
+# feature is what makes that path usable here: without it, `insert_before` finishes by clearing the
+# viewport, and that clear asks the terminal where its cursor is — a reply that arrives on stdin,
+# which this process's input reader thread owns, so it times out and the viewport is left unpainted.
+# With the feature it scrolls the rows above the viewport instead and never asks.
+ratatui = { version = "0.30", features = ["scrolling-regions"] }
 # The terminal engine: parses a child's bytes into a grid and keeps the state a
 # byte-level rewritter would have to track by hand.
 vt100 = "0.18"
@@ -143,6 +149,10 @@ wire = { path = "crates/wire" }
 tui = { path = "crates/tui" }
 gui = { path = "crates/gui" }
 wayland = { path = "crates/wayland" }
+# The widgets a pane is built from: a button and a tab strip, drawn as plain ratatui widgets
+# and handed one frame's input. Kept apart from `compositor` so the chrome around a window and
+# the furniture inside a pane do not have to be one crate.
+tuigui_components = { path = "crates/tuigui_components" }
 # The input vocabulary both halves share: W3C UI Events as data, and the table
 # that turns a physical key into each platform's own number. Pure Rust, no C.
 ui-events = "0.3"

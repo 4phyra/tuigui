@@ -746,6 +746,7 @@ dependencies = [
  "rustix 1.1.5",
  "termina 0.4.0",
  "tracing",
+ "tuigui_components",
  "ui-events",
 ]
 
@@ -1877,6 +1878,7 @@ dependencies = [
  "codecs",
  "compositor",
  "crossterm 0.28.1",
+ "derive_deref",
  "futures",
  "log",
  "ratatui",
@@ -1887,6 +1889,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracing-tracy",
+ "tuigui_components",
  "ui-events",
  "wayland",
  "wire",
@@ -3545,6 +3548,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "numtoa"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6aa2c4e539b869820a2b82e1aef6ff40aa85e65decdd5185e83fb4b1249cd00f"
+
+[[package]]
 name = "objc2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4328,6 +4337,7 @@ dependencies = [
  "ratatui-crossterm",
  "ratatui-macros",
  "ratatui-termina",
+ "ratatui-termion",
  "ratatui-termwiz",
  "ratatui-widgets",
  "serde",
@@ -4386,6 +4396,17 @@ dependencies = [
  "instability",
  "ratatui-core",
  "termina 0.3.3",
+]
+
+[[package]]
+name = "ratatui-termion"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87c732202fa5a71a9da0991013f0853e53f87048f45198e3a1ca3ee722accc2f"
+dependencies = [
+ "instability",
+ "ratatui-core",
+ "termion",
 ]
 
 [[package]]
@@ -5480,6 +5501,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "termion"
+version = "4.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f44138a9ae08f0f502f24104d82517ef4da7330c35acd638f1f29d3cd5475ecb"
+dependencies = [
+ "libc",
+ "numtoa",
+]
+
+[[package]]
 name = "termios"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5945,6 +5976,15 @@ dependencies = [
  "rustix 1.1.5",
  "tokio",
  "tui",
+]
+
+[[package]]
+name = "tuigui_components"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+ "rustix 1.1.5",
+ "termina 0.4.0",
 ]
 
 [[package]]

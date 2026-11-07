@@ -9,14 +9,12 @@ mod dock;
 mod stage;
 
 pub use dock::HEIGHT as DOCK_HEIGHT;
-pub use stage::{Page, Props, Stage};
+pub use stage::{Page, Stage, StageProps, RING_BUF_CAPACITY};
 
 use codecs::CodecId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Paragraph, StatefulWidget, Widget as _};
+use ratatui::widgets::StatefulWidget;
 
 /// This terminal's input, boxed so a caller may hand in its own.
 ///
@@ -32,7 +30,7 @@ pub struct Session {
     /// has to be something in its place while the step runs, and a failure is the only
     /// honest thing to put there. A step that never returns its next state leaves the
     /// failure behind, and the pane shows it.
-    pub stage: Result<Stage, String>,
+    pub stage: stage::StageResult,
     /// The dock, which is what gets a session started and what switches screens once
     /// there is one. It shares the stage above as its state, so a button press is the swap.
     pub dock: dock::Dock,
@@ -86,7 +84,7 @@ impl Session {
             crate::Channel::Unix => Box::new(wire::unix::UnixSocket::host().await?),
         };
         Ok(Self {
-            stage: Ok(Stage::new(server, Page::default())),
+            stage: stage::StageResult(Ok(Stage::new(server, Page::default()))),
             dock: dock::Dock::new(transport, program).await?,
             input_receiver,
         })
@@ -94,7 +92,7 @@ impl Session {
 
     /// Whether the session has ended.
     pub fn done(&self) -> bool {
-        match &self.stage {
+        match &self.stage.0 {
             // Failed, or finished: either way there is nothing left to do.
             Err(_) => true,
             // A stage with nothing running yet has not ended: the dock is still working on
@@ -109,18 +107,29 @@ impl Session {
     /// screen it wants, and the two — one three rows at the cursor, one the whole screen —
     /// are built and owned where the writer is.
     pub fn is_alternate(&self) -> bool {
-        self.stage.as_ref().is_ok_and(Stage::showing_stream)
+        self.stage
+            .as_ref()
+            .is_ok_and(|stage| matches!(stage.get_page(), Page::Stream { .. }))
     }
+
 }
 
 /// The client itself: a widget over [`Session`].
 ///
-/// No state of its own and no parameter: there is one session, so the widget is the
-/// type and `Session` is all it needs.
-#[derive(Default)]
-pub struct GuiWidget;
+/// The delta is the one thing a frame knows that the session does not: how long it has been since
+/// the last draw. Anything animated is paced by it, so a slower pane plays the same move at the
+/// same speed rather than in fewer, longer steps.
+pub struct GuiWidget<'a> {
+    /// Seconds since the previous frame.
+    pub delta: f32,
+    /// Where the program's words are collected, for the caller to put on the screen.
+    ///
+    /// Sized to the ring that fills it, so a frame that drains a full ring does not grow it: the
+    /// words handed on are exactly what the ring held, and nothing beyond that can arrive.
+    pub program_stdout: &'a mut Vec<u8>,
+}
 
-impl StatefulWidget for GuiWidget {
+impl StatefulWidget for GuiWidget<'_> {
     type State = Session;
 
     /// One frame.
@@ -159,38 +168,48 @@ impl StatefulWidget for GuiWidget {
         let winsize = rustix::termios::tcgetwinsize(std::io::stdin())
             .expect("the terminal must report its own size");
 
-        // The program's frame. Its own `render` is where the work is: it takes the input
-        // that arrived, advances the windows, and draws them when they are the thing on
-        // screen. The size and the input channel go in as its state, because a `render` is
-        // handed an area and a buffer and nothing else.
-        match &mut session.stage {
-            Ok(stage) => {
-                let mut props = Props {
-                    winsize,
-                    events: &session.input_receiver,
-                };
-                StatefulWidget::render(stage, content, buf, &mut props);
-            }
-            // A failure is drawn here and not by a step: the pane is this widget's, and a
-            // step that drew its own failure would be drawing in a place it does not own.
-            Err(message) => {
-                log::error!("{message}");
-                ratatui::widgets::Clear.render(content, buf);
-                buf.set_style(content, Style::new().bg(Color::Rgb(0x40, 0, 0)));
-                let lines: Vec<Line> = std::iter::once(Line::from("the session failed"))
-                    .chain(message.lines().map(Line::from))
-                    .collect();
-                Paragraph::new(lines).centered().render(content, buf);
-            }
+        // One drain for the whole frame: the program's half and the furniture's half are
+        // offered the same list, and each takes what it acts on. A widget that read the channel
+        // itself would eat a click the other half is waiting for.
+        let mut events = Vec::new();
+        while let Ok(event) = session.input_receiver.try_recv() {
+            events.push(event);
         }
 
-        // The dock, under the screen: the one part of the pane that is the same in every
-        // state, and the one thing a user can press to leave a screen whose content takes
-        // the keyboard. It shares the stage as its state, so a press is the swap itself.
-        //
-        // Borrowed field by field rather than through a method: the dock and the stage are
-        // different fields of one struct, so two mutable borrows of them at once are two
-        // distinct places and the compiler accepts both.
-        StatefulWidget::render(&mut session.dock, dock_area, buf, &mut session.stage);
+        // The program's frame. The wrapper's `render` is where the work is: it hands the input to
+        // the windows, advances them, draws them when they are the thing on screen — or draws the
+        // session's failure in their place.
+        let mut props = StageProps {
+            winsize,
+            events: &mut events,
+            program_stdout: self.program_stdout,
+        };
+        StatefulWidget::render(&mut session.stage, content, buf, &mut props);
+
+        // The frame the session asked to end on is the last one: the dock's rows are blanked
+        // rather than skipped. Skipping leaves whatever the previous frame wrote there — the
+        // terminal only redraws the cells that changed — so the way out is a clear, and the logs
+        // screen underneath is what is left.
+        if !session.stage.as_ref().is_ok_and(Stage::finished) {
+            // The dock, under the screen: the one part of the pane that is the same in every
+            // state, and the one thing a user can press to leave a screen whose content takes
+            // the keyboard. It shares the stage as its state, so a press is the swap itself, and
+            // it is offered the same events the screen above it was: a click the program did not
+            // take is still there for the furniture.
+            //
+            // Borrowed field by field rather than through a method: the dock and the stage are
+            // different fields of one struct, so two mutable borrows of them at once are two
+            // distinct places and the compiler accepts both.
+            StatefulWidget::render(
+                &mut session.dock,
+                dock_area,
+                buf,
+                &mut dock::DockProps {
+                    stage: &mut session.stage.0,
+                    events: &mut events,
+                    delta: self.delta,
+                },
+            );
+        }
     }
 }

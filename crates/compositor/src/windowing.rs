@@ -38,13 +38,23 @@ pub trait WindowingServer {
 
     /// Start the session's program, and hand back what it says.
     ///
+    /// One pipe carries both of the program's streams: a printed line and a reported failure
+    /// arrive on it in the order they were written, so the order a reader sees is the order the
+    /// program wrote rather than two orderings that cannot be put back together.
+    ///
     /// A session whose program is not its own to start — the dummy's, or a session
     /// attached to one already running — starts nothing and gives back nothing.
-    fn spawn(
-        &mut self,
-        _path: &std::path::Path,
-    ) -> std::io::Result<Option<(std::process::ChildStdout, std::process::ChildStderr)>> {
+    fn spawn(&mut self, _path: &std::path::Path) -> std::io::Result<Option<std::io::PipeReader>> {
         Ok(None)
+    }
+
+    /// The program's own output pipe, taken once.
+    ///
+    /// A session whose program is not its own to start has none. Taking it is what makes the
+    /// pipe one reader's: whoever takes it drains the program's words, and the session keeps no
+    /// copy of what a program said.
+    fn take_stdout(&mut self) -> Option<std::io::PipeReader> {
+        None
     }
 
     /// One turn of the session: accept what arrived, dispatch what the
@@ -73,11 +83,12 @@ impl WindowingServer for Box<dyn WindowingServer> {
         (**self).root_window()
     }
 
-    fn spawn(
-        &mut self,
-        path: &std::path::Path,
-    ) -> std::io::Result<Option<(std::process::ChildStdout, std::process::ChildStderr)>> {
+    fn spawn(&mut self, path: &std::path::Path) -> std::io::Result<Option<std::io::PipeReader>> {
         (**self).spawn(path)
+    }
+
+    fn take_stdout(&mut self) -> Option<std::io::PipeReader> {
+        (**self).take_stdout()
     }
 
     fn advance(&mut self, timeout: std::time::Duration) {

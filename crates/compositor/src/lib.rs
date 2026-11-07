@@ -120,6 +120,15 @@ impl<T: WindowingServer> Compositor<T> {
         self.windowing.spawn(path).map(|_| ())
     }
 
+    /// The program's own output pipe, if this session started one.
+    ///
+    /// Taken rather than lent: a pipe has one reader, and whoever takes it is what drains the
+    /// program's words. The session keeps no copy — what a program says is not the compositor's
+    /// business, which is why it is handed over instead of stored.
+    pub fn take_stdout(&mut self) -> Option<std::io::PipeReader> {
+        self.windowing.take_stdout()
+    }
+
     /// Hand one event to the pane.
     ///
     /// Keys go to the focused window, or to the root until something is focused:

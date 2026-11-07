@@ -342,7 +342,7 @@ impl WaylandServer {
     pub fn spawn(
         &mut self,
         path: &std::path::Path,
-    ) -> std::io::Result<(std::process::ChildStdout, std::process::ChildStderr)> {
+    ) -> std::io::Result<std::io::PipeReader> {
         tracing::info!(path = %path.display(), "spawning client");
 
         // The command that can reach both display stacks, scrubbed of
@@ -372,32 +372,27 @@ impl WaylandServer {
             self.socket_name.exists()
         );
         // The program's words come back to the caller rather than going to a file: the
-        // caller is the side that shows them, and it drains both streams for as long as
-        // the program runs. Draining is what makes a pipe safe here — one nobody reads
-        // fills, and a program blocked writing to a full one never draws.
-        command.stdout(std::process::Stdio::piped());
-        command.stderr(std::process::Stdio::piped());
-        let mut child = command
+        // caller is the side that shows them, and it drains them for as long as the
+        // program runs. Draining is what makes a pipe safe here — one nobody reads fills,
+        // and a program blocked writing to a full one never draws.
+        //
+        // One pipe for both streams, made here rather than by `Stdio::piped()` so that the
+        // child can be given the *same* write end twice: `piped()` makes a pipe per stream,
+        // and two pipes are two orderings with no way to interleave them back. Through one,
+        // a printed line and a reported failure arrive in the order they were written.
+        let (reader, writer) = std::io::pipe()?;
+        command.stdout(writer.try_clone()?);
+        command.stderr(writer);
+        let child = command
             .spawn()
             .map_err(|e| std::io::Error::other(format!("{}: {e}", path.display())))?;
-
-        // Taken before the child is handed on: `Child` is what the session keeps, and a
-        // pipe is only readable through the handle taken out of it.
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| std::io::Error::other("the program's stdout was not a pipe"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| std::io::Error::other("the program's stderr was not a pipe"))?;
 
         // The child becomes the session's root client; its connection
         // attaches at the next step.
         self.state
             .attach_root_client(child)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
-        Ok((stdout, stderr))
+        Ok(reader)
     }
 
     /// Advance the session: accept new clients, drain their input mailboxes,

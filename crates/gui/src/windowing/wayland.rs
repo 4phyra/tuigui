@@ -41,6 +41,12 @@ pub struct WaylandServer {
     /// is what starts the program, and a window is only ever minted once its program
     /// has drawn something. Every window minted afterwards takes a clone of this.
     maybe_connection: Option<Connection>,
+    /// The program's own output, held until someone takes it.
+    ///
+    /// Not drained here: what a program prints belongs to whoever shows it, and this side only
+    /// started it. Kept rather than dropped for the same reason any pipe must be read — a writer
+    /// blocks once it fills — and taken once, because a pipe has one reader.
+    stdout: Option<std::io::PipeReader>,
 }
 
 /// One window of the session: the session's window, the windows its program
@@ -154,6 +160,7 @@ impl WaylandServer {
             inner,
             codec,
             maybe_connection: None,
+            stdout: None,
         })
     }
 
@@ -185,29 +192,16 @@ impl WindowingServer for WaylandServer {
         Some(Box::new(window))
     }
 
-    fn spawn(
-        &mut self,
-        path: &std::path::Path,
-    ) -> std::io::Result<Option<(std::process::ChildStdout, std::process::ChildStderr)>> {
-        let (stdout, stderr) = self.inner.spawn(path)?;
-
-        // The program's own words, drained rather than dropped. They are the whole diagnosis when
-        // a client exits instead of drawing: "cannot open display", a missing driver, a path that
-        // is not there — none of which this side can see any other way. A pipe nobody reads also
-        // blocks its writer once it fills, which would turn a chatty program into a stalled one.
-        for (which, pipe) in [
-            ("out", Box::new(stdout) as Box<dyn std::io::Read + Send>),
-            ("err", Box::new(stderr) as Box<dyn std::io::Read + Send>),
-        ] {
-            std::thread::spawn(move || {
-                use std::io::BufRead as _;
-                for line in std::io::BufReader::new(pipe).lines().map_while(Result::ok) {
-                    log::info!("the program's {which}: {line}");
-                }
-            });
-        }
-
+    fn spawn(&mut self, path: &std::path::Path) -> std::io::Result<Option<std::io::PipeReader>> {
+        // The program's own words, kept until someone takes them: what a program says belongs to
+        // whoever shows it, and this side only started it. Both of its streams arrive here, in
+        // the order it wrote them, because the session gives the child one pipe for both.
+        self.stdout = Some(self.inner.spawn(path)?);
         Ok(None)
+    }
+
+    fn take_stdout(&mut self) -> Option<std::io::PipeReader> {
+        self.stdout.take()
     }
 
     #[tracing::instrument(name = "compositor.advance", skip_all)]

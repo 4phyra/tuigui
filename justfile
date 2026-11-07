@@ -46,3 +46,12 @@ tuigui *args:
 # `q` or `Esc` ends it.
 dummy:
     CARGO_TARGET_DIR={{target}} cargo run --release -p compositor --example dummy
+
+# Draw every widget in `tuigui_components` and press them.
+#
+# The components crate's own demo: a centred column of the widgets, and a line under them saying
+# what was last pressed. No session, no link, no program behind it — what it exercises is the
+# dispatch, where one frame's events are offered to each widget in draw order, and the tab strip's
+# move from one tab to the next.
+gallery:
+    CARGO_TARGET_DIR={{target}} cargo run -p tuigui_components --bin gallery
