@@ -7,6 +7,11 @@
 #
 # Run inside the dev shell (`nix develop`), which is where cargo and the system libraries it
 # links against come from.
+#
+# Every recipe starts its command with `@`, so `just` prints no echoed invocation: the recipe
+# is one line the reader already knows, and a run should start with the program's own output
+# rather than with the command that started it. `tui!` and `gui!` in the dev shell are the
+# same recipes with cargo's progress lines hidden as well.
 
 target := "./target"
 
@@ -24,7 +29,7 @@ tracy := "--features=tracy"
 # client inside the server — which is the usual shape, since the client announces itself in
 # the pane's output and the server is what reads it.
 tui *command:
-    CARGO_TARGET_DIR={{target}} cargo run --release -p tui --bin tui {{tracy}} -- {{command}}
+    @CARGO_TARGET_DIR={{target}} cargo run --release -p tui --bin tui {{tracy}} -- {{command}}
 
 # Build and run the client.
 #
@@ -32,12 +37,12 @@ tui *command:
 # server is reading the pane it draws in. `just tui` with this as the command is the usual
 # way to start it.
 gui *args:
-    CARGO_TARGET_DIR={{target}} cargo run --release -p gui --bin gui {{tracy}} -- {{args}}
+    @CARGO_TARGET_DIR={{target}} cargo run --release -p gui --bin gui {{tracy}} -- {{args}}
 
 # Build and run both halves as one command: the server owns this terminal, and the client
 # runs inside the pty it creates.
 tuigui *args:
-    CARGO_TARGET_DIR={{target}} cargo run --release -p tuigui --bin tuigui {{tracy}} -- {{args}}
+    @CARGO_TARGET_DIR={{target}} cargo run --release -p tuigui --bin tuigui {{tracy}} -- {{args}}
 
 # Build and run the capybara demo, with no program, no codec and no link behind it.
 #
@@ -45,7 +50,7 @@ tuigui *args:
 # and the resizing. No profiler here, because there is no session under it to profile, and
 # `q` or `Esc` ends it.
 dummy:
-    CARGO_TARGET_DIR={{target}} cargo run --release -p compositor --example dummy
+    @CARGO_TARGET_DIR={{target}} cargo run --release -p compositor --example dummy
 
 # Draw every widget in `tuigui_components` and press them.
 #
@@ -54,4 +59,4 @@ dummy:
 # dispatch, where one frame's events are offered to each widget in draw order, and the tab strip's
 # move from one tab to the next.
 gallery:
-    CARGO_TARGET_DIR={{target}} cargo run -p tuigui_components --bin gallery
+    @CARGO_TARGET_DIR={{target}} cargo run -p tuigui_components --bin gallery

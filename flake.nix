@@ -195,6 +195,17 @@
           # `CAPYBARA_IMG_DIR` points at the train images so the dummy
           # windowing path can pick one of them at random.
           capys = self.packages.${system}.capyImages or (pkgs.runCommand "capybara-images" {} "mkdir -p $out/train; echo 'no capybara images package; build default first' >&2");
+          # `tui!` and `gui!`: either half of a session, built and run quietly.
+          #
+          # The bang keeps them clear of a `tui` or `gui` the shell may already answer,
+          # and `CARGO_TERM_QUIET` drops cargo's per-crate progress lines while still
+          # letting a warning or an error through.
+          tuiBang = pkgs.writeShellScriptBin "tui!" ''
+            exec env CARGO_TERM_QUIET=true just tui "$@"
+          '';
+          guiBang = pkgs.writeShellScriptBin "gui!" ''
+            exec env CARGO_TERM_QUIET=true just gui "$@"
+          '';
         in
         {
           default = pkgs.mkShell {
@@ -203,6 +214,9 @@
               export CAPYBARA_IMG_DIR="${capys}/train"
             '';
             packages = [
+              # `tui!` and `gui!`: either half of a session, built and run quietly.
+              tuiBang
+              guiBang
               # rustup "minimal" profile (rustc, cargo, rust-std) plus the two
               # dev tools; binaries come from upstream's dist tarballs.
               (pkgs.rust-bin.stable.latest.minimal.override {
