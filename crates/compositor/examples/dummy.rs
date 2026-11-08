@@ -112,11 +112,11 @@ struct DummySession {
 struct DummyWindow {
     /// The windows this one's program opened after it, owned: the tree is what keeps them alive.
     children: RwLock<Vec<Arc<DummyWindow>>>,
-    /// The capybara this window shows, as ANSI cells, and the width it was halftoned for: a grid
-    /// made for a narrower window fills only its left, so the width is kept with it and the grid
-    /// rebuilt when the window is drawn wider. The image's name is kept beside it, which is what
+    /// The capybara this window shows, as cells, and the width it was reduced for: cells made for
+    /// a narrower window fill only its left, so the width is kept with them and they are made
+    /// again when the window is drawn wider. The image's name is kept beside them, which is what
     /// the bar shows.
-    capy: RwLock<(u16, Option<(String, halftone::pipeline::Grid)>)>,
+    capy: RwLock<(u16, Option<(String, Cells)>)>,
     /// The size the compositor last asked for, in pixels.
     ///
     /// A window with no program has no picture to measure, so the size it was given is the only
@@ -299,7 +299,7 @@ impl Compositable for DummyHandle {
     }
 }
 
-/// One capybara of the demo set, halftoned to ANSI cells, as the window's background.
+/// One capybara of the demo set, reduced to cells, as the window's background.
 impl ratatui::widgets::StatefulWidgetRef for DummyHandle {
     type State = compositor::widgets::WindowState;
 
@@ -311,36 +311,49 @@ impl ratatui::widgets::StatefulWidgetRef for DummyHandle {
 
         let mut capy = window.capy.write().unwrap();
         if capy.0 != area.width {
-            *capy = (area.width, halftone(area.width));
+            *capy = (area.width, cells(area.width, area.height));
         }
-        let Some((_, grid)) = &capy.1 else {
+        let Some((_, cells)) = &capy.1 else {
             return;
         };
-        for (index, cell) in grid.cells.iter().enumerate() {
-            let row = (index as u32 / grid.width) as u16;
+        for (index, (glyph, colour)) in cells.glyphs.iter().enumerate() {
+            let row = (index as u32 / cells.width.max(1)) as u16;
             if row >= area.height {
                 break;
             }
-            let place = (area.x + (index as u32 % grid.width) as u16, area.y + row);
+            let place = (area.x + (index as u32 % cells.width.max(1)) as u16, area.y + row);
             if let Some(slot) = buf.cell_mut(place) {
-                slot.set_char(cell.glyph);
-                let [r, g, b] = cell.color;
+                slot.set_char(*glyph);
+                let [r, g, b] = *colour;
                 slot.set_fg(Color::Rgb(r, g, b));
-                let [r, g, b] = cell.shade;
-                slot.set_bg(Color::Rgb(r, g, b));
             }
         }
     }
 }
 
-/// One image from the demo set, halftoned to `width` cells, with the name of the
-/// file it came from.
+/// The demo image as cells: one glyph and one colour per cell, `width` of them to a row.
+struct Cells {
+    /// How many cells a row holds.
+    width: u32,
+    /// The whole picture, row after row: a glyph and the colour it is drawn in.
+    glyphs: Vec<(char, [u8; 3])>,
+}
+
+/// The shades a cell is drawn in, darkest first. A cell's brightness picks one, which is what
+/// turns a photograph into something a terminal can show.
+const SHADES: [char; 10] = [' ', '·', ':', '-', '=', '+', '*', '#', '%', '@'];
+
+/// One image from the demo set, reduced to cells `width` by `height`, with the name of the file
+/// it came from.
 ///
-/// The set is walked from a random start, and one image after another is tried
-/// until one reads and converts: a bad file is skipped, and only a set where none
-/// works leaves the window its black background. Each failure is reported, since
-/// a skipped image is otherwise invisible.
-fn halftone(width: u16) -> Option<(String, halftone::pipeline::Grid)> {
+/// The set is walked from a random start, and one image after another is tried until one reads:
+/// a bad file is skipped, and only a set where none works leaves the window its black
+/// background. Each failure is reported, since a skipped image is otherwise invisible.
+///
+/// Reduced rather than halftoned: a halftone would need a library, and what the dummy window is
+/// for is the compositor around it. Each cell averages the pixels it covers, and the average's
+/// brightness picks a glyph from [`SHADES`] while its colour is that average.
+fn cells(width: u16, height: u16) -> Option<(String, Cells)> {
     let dir = std::env::var_os("CAPYBARA_IMG_DIR")?;
     let files: Vec<_> = std::fs::read_dir(dir)
         .ok()?
@@ -366,28 +379,44 @@ fn halftone(width: u16) -> Option<(String, halftone::pipeline::Grid)> {
                 return None;
             }
         };
-        match halftone::pipeline::convert_bytes(
-            &bytes,
-            &halftone::pipeline::ConvertSettings {
-                width: width.max(1) as u32,
-                cell_bg: true,
-                bg: None,
-                tone: halftone::pipeline::Tone::Natural,
-            },
-        ) {
-            Ok(conversion) => {
+        match image::load_from_memory(&bytes) {
+            Ok(picture) => {
                 let name = file
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| file.display().to_string());
-                Some((name, conversion.grid))
+                let reduced = reduce(&picture, width.max(1), height.max(1));
+                Some((name, reduced))
             }
             Err(e) => {
-                log::warn!("could not halftone {}: {e}", file.display());
+                log::warn!("could not read {}: {e}", file.display());
                 None
             }
         }
     })
+}
+
+/// The picture as `width` by `height` cells, each one the average of the pixels it covers.
+fn reduce(picture: &image::DynamicImage, width: u16, height: u16) -> Cells {
+    let (across, down) = (u32::from(width), u32::from(height));
+    let small = picture
+        .resize_exact(across, down, image::imageops::FilterType::Triangle)
+        .to_rgb8();
+    let glyphs = small
+        .pixels()
+        .map(|pixel| {
+            let [r, g, b] = pixel.0;
+            // The eye weighs the channels unequally, and a plain mean would show a red field as
+            // bright as a green one. The weights are the usual ones.
+            let level = (0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b)) / 255.0;
+            let index = ((level * SHADES.len() as f32) as usize).min(SHADES.len() - 1);
+            (SHADES[index], [r, g, b])
+        })
+        .collect();
+    Cells {
+        width: across,
+        glyphs,
+    }
 }
 
 /// Holds this terminal in raw mode, and restores the old settings when dropped.
