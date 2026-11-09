@@ -11,6 +11,7 @@ members = [
     "crates/cellcode",
     "crates/compositor",
     "crates/tuigui_components",
+    "crates/shared_utils",
 ]
 
 [workspace.package]
@@ -60,6 +61,10 @@ cell_map = { path = "crates/cell_map" }
 # announcement costs a few columns instead of a whole line of text. Here with the
 # other members so both halves of a session encode a record the same way.
 cellcode = { path = "crates/cellcode" }
+# The terminal's own report of itself, shared by both halves: a resize is one signal and
+# each holder of a size has to hear it, so the wait and the read are one function rather
+# than one per crate.
+shared_utils = { path = "crates/shared_utils" }
 # A value several readers borrow while one writer replaces it, neither side waiting:
 # a store is a pointer swap and a read is a load. Chosen over an `RwLock` because the
 # reader here is the screen's rewrite, which runs on every chunk of the command's

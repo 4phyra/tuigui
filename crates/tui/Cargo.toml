@@ -20,6 +20,9 @@ better_default = { workspace = true }
 # and the server that reads it, so there is one answer to "what is on screen".
 vt100 = { workspace = true }
 easytgp = { workspace = true }
+# The terminal's size, and the wait for it to change: one signal per process, and both the
+# pty and the proxy hold a size that has to follow it.
+shared_utils = { workspace = true }
 image = { workspace = true }
 rustix = { workspace = true }
 clap = { workspace = true }

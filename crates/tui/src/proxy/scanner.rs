@@ -35,17 +35,34 @@ const MIN_BARCODE_CELLS: usize = 2;
 impl Scanner {
     /// A scanner over this terminal's grid.
     ///
-    /// Both dimensions are already non-zero: they come from the terminal's own report, and a
-    /// terminal with no rows or no columns has nothing to scan. Which is why this cannot fail.
-    pub fn new(rows: std::num::NonZeroU16, cols: std::num::NonZeroU16) -> Self {
-        Self {
-            terminal: vt100::Parser::new(rows, cols, 0),
-        }
+    /// The size is read here rather than passed, because it is the terminal's own answer: a scan
+    /// over a made-up grid would walk cells the screen does not have and miss the ones it does. A
+    /// terminal that will not report one is a failure, not a guess.
+    pub fn new() -> std::io::Result<Self> {
+        let ws = shared_utils::resize::size()?;
+        Ok(Self {
+            terminal: vt100::Parser::new(
+                std::num::NonZeroU16::new(ws.ws_row)
+                    .ok_or_else(|| std::io::Error::other("this terminal reports no rows"))?,
+                std::num::NonZeroU16::new(ws.ws_col)
+                    .ok_or_else(|| std::io::Error::other("this terminal reports no columns"))?,
+                0,
+            ),
+        })
     }
 
     /// Feed one chunk of the command's output.
     pub fn feed(&mut self, bytes: &[u8]) {
         self.terminal.process(bytes);
+    }
+
+    /// Follow this terminal's own grid when it changes.
+    ///
+    /// The scan walks the grid cell by cell, so its bounds have to be the terminal's: a pane that
+    /// grew would otherwise have columns the scan cannot see, and a window that moved into them
+    /// would never be placed.
+    pub fn resize(&mut self, rows: std::num::NonZeroU16, cols: std::num::NonZeroU16) {
+        self.terminal.set_size(rows, cols);
     }
 
     /// The channel a client announced, if one drew its address.

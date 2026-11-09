@@ -49,51 +49,74 @@ pub async fn run(
     anchors: Anchors,
     new_barcodes: mpsc::Sender<Box<dyn Transport>>,
 ) -> std::io::Result<()> {
-    let ws = rustix::termios::tcgetwinsize(std::io::stdin()).map_err(std::io::Error::from)?;
-    let rows = std::num::NonZeroU16::new(ws.ws_row)
-        .ok_or_else(|| std::io::Error::other("this terminal reports no rows"))?;
-    let cols = std::num::NonZeroU16::new(ws.ws_col)
-        .ok_or_else(|| std::io::Error::other("this terminal reports no columns"))?;
-
-    let mut filter = Filter::default();
-    // The terminal the filter rewrites against. `CellMap::map` asks it for the colour in effect at
-    // each cell, so it is fed the same bytes the rewrite walks.
-    let mut terminal = vt100::Parser::new(rows, cols, 0);
-    // And the screen the scan reads, which is the command's own drawing rather than the rewritten
-    // stream: a window's cells are found where it drew them.
-    let mut scanner = Scanner::new(rows, cols);
+    // Each holds its own model of the screen: the filter the stream as it will be drawn, the scan
+    // the screen as the command drew it. One is the terminal's answer and the other is the
+    // command's, and a window is placed where the command put it rather than where the rewrite does.
+    let mut filter = Filter::new()?;
+    let mut scanner = Scanner::new()?;
     let mut sink = std::io::stdout();
 
-    while let Some(Ok(next)) = slave_stdout.next().await {
-        // Read before the rewrite: a window opened by a message handled in between belongs to the
-        // next chunk, and blanking cells this chunk never drew would be blanking the wrong ones.
-        let known: Vec<SurfaceId> = anchors.load().keys().copied().collect();
+    // Held across turns rather than made per chunk: a resize that arrived while the last chunk was
+    // being rewritten belongs to this future, and one made afresh each time would be a subscriber
+    // registered after the change it was waiting for.
+    let mut resized = Box::pin(shared_utils::resize::resized());
 
-        filter
-            .feed(next.as_slice(), &mut terminal, &mut sink, &known)
-            .await?;
-        scanner.feed(&next);
+    loop {
+        tokio::select! {
+            next = slave_stdout.next() => {
+                // `transpose` keeps the two answers apart: a finished stream ends the session, and a
+                // failed read ends it with the reason it failed.
+                let Some(next) = next.transpose()? else {
+                    return Ok(());
+                };
 
-        // Where each known window is now, merged into what the server published: this side knows
-        // the cells, the server knows which windows exist. A surface the scan cannot find keeps no
-        // position — it has scrolled away or been covered, and there is nothing to place.
-        let found = scanner.scan_positions(&known);
-        anchors.rcu(|current| {
-            let mut next = HashMap::clone(current);
-            for surface in &known {
-                next.insert(*surface, found.get(surface).copied());
+                // Read before the rewrite: a window opened by a message handled in between belongs
+                // to the next chunk, and blanking cells this chunk never drew would be blanking the
+                // wrong ones.
+                let known: Vec<SurfaceId> = anchors.load().keys().copied().collect();
+
+                filter
+                    .feed(next.as_slice(), &mut sink, &known)
+                    .await?;
+                scanner.feed(&next);
+
+                // Where each known window is now, merged into what the server published: this side
+                // knows the cells, the server knows which windows exist. A surface the scan cannot
+                // find keeps no position — it has scrolled away or been covered, and there is
+                // nothing to place.
+                let found = scanner.scan_positions(&known);
+                anchors.rcu(|current| {
+                    let mut next = HashMap::clone(current);
+                    for surface in &known {
+                        next.insert(*surface, found.get(surface).copied());
+                    }
+                    next
+                });
+
+                // A client that cannot be dialed says so by drawing its address, and the scan is
+                // what turns that into a channel.
+                if let Some(announced) = scanner.scan_barcode() {
+                    new_barcodes
+                        .send(announced)
+                        .await
+                        .map_err(|_| std::io::Error::other("the server is no longer listening"))?;
+                }
             }
-            next
-        });
-
-        // A client that cannot be dialed says so by drawing its address, and the scan is what
-        // turns that into a channel.
-        if let Some(announced) = scanner.scan_barcode() {
-            new_barcodes
-                .send(announced)
-                .await
-                .map_err(|_| std::io::Error::other("the server is no longer listening"))?;
+            // The terminal's own grid changed. Both models of the screen follow it, because the
+            // command is told its new size by the pty and draws for that one: a parser left at the
+            // old bounds has columns the rewrite cannot blank and the scan cannot search.
+            size = &mut resized => {
+                let ws = size?;
+                let (Some(rows), Some(cols)) = (
+                    std::num::NonZeroU16::new(ws.ws_row),
+                    std::num::NonZeroU16::new(ws.ws_col),
+                ) else {
+                    return Err(std::io::Error::other("the terminal reports no cells after a resize"));
+                };
+                filter.resize(rows, cols);
+                scanner.resize(rows, cols);
+                resized = Box::pin(shared_utils::resize::resized());
+            }
         }
     }
-    Ok(())
 }
