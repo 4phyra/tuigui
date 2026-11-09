@@ -60,6 +60,11 @@ cell_map = { path = "crates/cell_map" }
 # announcement costs a few columns instead of a whole line of text. Here with the
 # other members so both halves of a session encode a record the same way.
 cellcode = { path = "crates/cellcode" }
+# A value several readers borrow while one writer replaces it, neither side waiting:
+# a store is a pointer swap and a read is a load. Chosen over an `RwLock` because the
+# reader here is the screen's rewrite, which runs on every chunk of the command's
+# output, and queueing it behind a window opening would be a dropped chunk.
+arc-swap = "1"
 crossterm = { version = "0.29", default-features = false, features = ["events"] }
 # The terminal input parser: the gui client's reader thread feeds it the pane's
 # raw bytes and reads typed events out, instead of parsing escapes by hand.

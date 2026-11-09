@@ -22,7 +22,7 @@ use wire::message::{Message, SurfaceId};
 use wire::transport::Connection;
 
 use crate::error::{Error, Result};
-use crate::scanner::Position;
+use crate::proxy::Position;
 use crate::DebugOptions;
 
 /// The image id a window's frames are sent under.
@@ -152,13 +152,19 @@ impl<F: Format> Session<F> {
         }
     }
 
-    pub async fn handle(
-        &mut self,
-        positions: &HashMap<SurfaceId, Position>,
-        sink: &mut (impl std::io::Write + ?Sized),
+    /// Read messages until the link ends, which is the client leaving.
+    ///
+    /// One `await` per message and no return in between: the session owns itself for the whole
+    /// conversation, so the server holds this as one future among several and never has to hand
+    /// a session back. A `FuturesUnordered` makes sure a chatty client cannot starve a quiet one,
+    /// and `?` on the read is the end of the session either way — a link that failed has nothing
+    /// left to read.
+    pub async fn run(
+        mut self,
+        anchors: std::sync::Arc<arc_swap::ArcSwap<HashMap<SurfaceId, Option<Position>>>>,
     ) -> Result<()> {
-        while let Some(message) = self.connection.recv_next()? {
-            if let Err(e) = self.handle_inner(message, positions, sink).await {
+        while let Some(message) = self.connection.recv().await? {
+            if let Err(e) = self.handle_inner(message, &anchors).await {
                 tracing::error!("{e}");
                 // Reported rather than returned: the link is the only channel a client listens on,
                 // and a failure it is not told about is a pane that stops changing for no stated
@@ -184,8 +190,7 @@ impl<F: Format> Session<F> {
     async fn handle_inner(
         &mut self,
         message: Message,
-        positions: &HashMap<SurfaceId, Position>,
-        sink: &mut (impl std::io::Write + ?Sized),
+        anchors: &Arc<arc_swap::ArcSwap<HashMap<SurfaceId, Option<Position>>>>,
     ) -> Result<()> {
         match message {
             Message::Frame {
@@ -202,9 +207,13 @@ impl<F: Format> Session<F> {
                 // The stacking order does travel, because nothing on the screen says which window
                 // is in front of another: that is the window manager's answer, and it arrives with
                 // the frame it applies to.
-                match positions.get(&surface) {
+                match anchors
+                    .load()
+                    .get(&surface)
+                    .ok_or(io::Error::other(format!("no anchor for {surface:?}")))?
+                {
                     Some(at) => {
-                        self.paint(bytes.as_deref(), surface, *at, z, (cols, rows), sink)
+                        self.paint(bytes.as_deref(), surface, *at, z, (cols, rows))
                             .await?
                     }
                     // A window with no cells is not placed. It has scrolled away, or been covered
@@ -245,6 +254,14 @@ impl<F: Format> Session<F> {
                         decoder: codec.to_decoder()?,
                     },
                 );
+                // Announced before anything is drawn: the cells carrying this surface are what the
+                // rewrite blanks, and where they are is what the next scan looks for. No position
+                // yet, which is the answer for a window that has not painted those cells.
+                anchors.rcu(|current| {
+                    let mut next = HashMap::clone(current);
+                    next.insert(surface, None);
+                    next
+                });
                 log::info!(
                     "opened a window on {surface:?} in {codec:?} ({} now open)",
                     self.windows.len()
@@ -261,6 +278,11 @@ impl<F: Format> Session<F> {
                         if let Some(image) = window.image {
                             image.delete();
                         }
+                        anchors.rcu(|current| {
+                            let mut next = HashMap::clone(current);
+                            next.remove(&surface);
+                            next
+                        });
                         log::info!(
                             "closed the window on {surface:?} ({} left)",
                             self.windows.len()
@@ -301,7 +323,7 @@ impl<F: Format> Session<F> {
     /// outlive an `.await`, and the attribute enters and exits per poll instead.
     /// The two waits it contains — the terminal's acknowledgement of the transmit, and
     /// of the placement — are the two numbers this exists to see.
-    #[tracing::instrument(name = "frame", skip(self, stream, sink))]
+    #[tracing::instrument(name = "frame", skip(self, stream))]
     async fn paint(
         &mut self,
         stream: Option<&[u8]>,
@@ -309,7 +331,6 @@ impl<F: Format> Session<F> {
         at: Position,
         z: u32,
         (cols, rows): (u32, u32),
-        sink: &mut (impl std::io::Write + ?Sized),
     ) -> Result<()> {
         // A frame for a window this side has not been told about is not a failure: the
         // announcement and the picture are two messages, and a window that is already drawing
@@ -344,17 +365,13 @@ impl<F: Format> Session<F> {
             // Without this the terminal moves the cursor by the placement's own box
             // after placing, once per frame: on a stream that is a scroll per frame.
             fix_cursor: true,
+            // The picture is drawn from the cursor rather than from a key, so the cell it goes to
+            // *is* the placement: the protocol has no field for a screen position, which is why
+            // this is a cursor move. It rides the same write as the escape, so nothing can land
+            // between the move and the picture it positions.
+            at: Some((at.1, at.0)),
             ..Default::default()
         };
-
-        // The picture is drawn from the cursor, so the cursor goes to the window's own
-        // top-left cell first. This is the position — the protocol has no key for it,
-        // which is why it is a cursor move and not a field on the placement.
-        //
-        // Both paths below place a picture, so both need it, and it goes first: a move that
-        // landed between two halves of an escape would put the picture in the wrong place.
-        sink.write_all(crossterm::cursor::MoveTo(at.0, at.1).to_string().as_bytes())
-            .map_err(Error::Screen)?;
 
         let image_id = image_id(&surface);
 
@@ -530,30 +547,15 @@ mod tests {
         accepted.expect("accept")
     }
 
-    /// The screen the session draws on: the same buffer the library's escapes land in.
-    ///
-    /// Nothing is answered here. A probe is the library's own liveness check, and the thread that
-    /// drains its escapes is what answers those; this only appends what a session writes itself,
-    /// which is the cursor move a real placement needs.
-    struct Screen(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for Screen {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     /// Where the one window is: the cells the scan would have found it on.
     ///
     /// Written by hand because a client draws those cells: a real session gets this from a scan of
     /// the screen, and a test has no screen to scan.
-    fn where_it_is() -> HashMap<SurfaceId, Position> {
-        HashMap::from([(SURFACE, (3, 5))])
+    fn where_it_is() -> crate::proxy::Anchors {
+        std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(HashMap::from([(
+            SURFACE,
+            Some((3, 5)),
+        )])))
     }
 
     /// Put everything the escape pipe has onto `terminal`, which is what a step does.
@@ -601,11 +603,6 @@ mod tests {
             Arc::new(DebugOptions::default()),
             controller,
         );
-        // The sink is what the library writes through, so the session only has to hand it
-        // somewhere to put its own writes. It draws nothing itself, which is why a sink of its own
-        // is the same buffer.
-        let mut terminal = Screen(written.clone());
-
         // The window, which brings its codec with it. A frame names only its surface, so a session
         // that has not been told about that window has nowhere to paint it.
         session
@@ -615,7 +612,6 @@ mod tests {
                     codec: CodecId::H264,
                 },
                 &where_it_is(),
-                &mut terminal,
             )
             .await
             .expect("the window is opened");
@@ -630,7 +626,6 @@ mod tests {
                     bytes: Some(codec_frame(8, 8)),
                 },
                 &where_it_is(),
-                &mut terminal,
             )
             .await
             .expect("the first frame is painted");
@@ -681,7 +676,6 @@ mod tests {
                     bytes: Some(codec_frame(8, 8)),
                 },
                 &where_it_is(),
-                &mut terminal,
             )
             .await
             .expect("the second frame is painted");
