@@ -147,7 +147,7 @@ pub fn set_sink(out: Box<dyn std::io::Write + Send>) -> bool {
     writer::set_sink(out)
 }
 
-pub trait Restorable: std::fmt::Debug {
+pub trait Restorable: std::fmt::Debug + Send {
     fn restore(&mut self, renew_dependents: bool) -> Res<()>;
     // fn renew_one();
 }
@@ -241,11 +241,11 @@ fn log_reply_error(message: &str) {
 
 pub struct PendingTransfer<F: Format> {
     reply: ReplyFuture,
-    returns: Option<Box<dyn FnOnce(Reply) -> DynImage<F>>>,
+    returns: Option<Box<dyn FnOnce(Reply) -> DynImage<F> + Send>>,
 }
 
 impl<F: Format> PendingTransfer<F> {
-    fn new<C: FnOnce(Reply) -> DynImage<F> + 'static>(reply: ReplyFuture, returns: C) -> Self {
+    fn new<C: FnOnce(Reply) -> DynImage<F> + Send + 'static>(reply: ReplyFuture, returns: C) -> Self {
         Self {
             reply,
             returns: Some(Box::new(returns)),
@@ -662,7 +662,12 @@ fn resolve_dims(
 /// `Unpin` is part of the contract rather than a bound the caller adds, because a
 /// transmission is a `Future` and awaiting one needs it: a format that could not be
 /// sent would be a format that implements this trait and nothing else.
-pub trait Format: Copy + Clone + Default + Unpin + 'static {
+/// A medium an image can be sent in.
+///
+/// `Send` because a session that owns a request for one is a task of its own: every attached
+/// client runs beside the others, so a request that could not cross a thread would pin a client
+/// to whichever thread dialed it.
+pub trait Format: Copy + Clone + Default + Unpin + Send + 'static {
     fn to_cd(self) -> ControlData;
 
     /// Build a request for this medium from decoded pixels.
@@ -1094,7 +1099,7 @@ impl<F: Format + 'static> ImageRequest<F> {
     ) -> ReplyFuture {
         let medium = self.format.medium();
         let inline = self.format.is_inline();
-        Message::new()
+        let request = Message::new()
             .cd('a', "T")
             .cd('i', image_id)
             .cd('p', placement_id)
@@ -1122,8 +1127,21 @@ impl<F: Format + 'static> ImageRequest<F> {
             // of this action here.
             .cd_if(placement.virtual_placement, 'U', 1)
             // TODO: I don't like clone here
-            .payload(self.data.clone())
-            .send_medium(inline)
+            .payload(self.data.clone());
+
+        // The move goes out with the placement it positions, in one write: a move written
+        // separately could be followed by another writer's bytes, and the picture would be drawn
+        // from wherever that left the cursor.
+        match placement.at {
+            Some((row, col)) => {
+                let aident = request.ident();
+                let mut bytes = crossterm::cursor::MoveTo(col, row).to_string().into_bytes();
+                bytes.extend_from_slice(&request.into_escape());
+                writer::send(bytes);
+                ReplyFuture::new(aident)
+            }
+            None => request.send_medium(inline),
+        }
     }
 }
 
@@ -1642,6 +1660,14 @@ pub struct PlacementRequest {
     /// is two placements, not a conflict. Naming it lets a caller move an image
     /// swap onto a known placement id rather than one that changes per call.
     pub placement_id: Option<u32>,
+    /// The cell the picture is drawn from, as `(row, column)`, one-based as the cursor escape
+    /// wants it.
+    ///
+    /// The protocol has no key for a screen position: a real placement draws from wherever the
+    /// cursor is. So this is not a control-data key but a cursor move written immediately before
+    /// the placement, in the same write — a move that landed between two halves of an escape would
+    /// put the picture somewhere else entirely.
+    pub at: Option<(u16, u16)>,
     // TODO:
     // H, V
 }
@@ -1663,7 +1689,7 @@ impl PlacementRequest {
     }
 
     fn exec_place(&self, image_id: Id, id: Id, action: &'static str) -> ReplyFuture {
-        Message::new() //
+        let request = Message::new() //
             .cd('a', action)
             .cd('i', image_id)
             .cd('p', id)
@@ -1677,8 +1703,22 @@ impl PlacementRequest {
             .cd_opt('w', self.width)
             .cd_opt('h', self.height)
             .cd_if(self.fix_cursor, 'C', 1)
-            .cd_if(self.virtual_placement, 'U', 1)
-            .send()
+            .cd_if(self.virtual_placement, 'U', 1);
+
+        // The move goes out with the placement it positions, in one write: a move written
+        // separately could land after another writer's bytes, and the picture would be drawn from
+        // wherever that left the cursor.
+        match self.at {
+            Some((row, col)) => {
+                let aident = request.ident();
+                let mut bytes =
+                    crossterm::cursor::MoveTo(col, row).to_string().into_bytes();
+                bytes.extend_from_slice(&request.into_escape());
+                writer::send(bytes);
+                ReplyFuture::new(aident)
+            }
+            None => request.send(),
+        }
     }
 
     // /// Adds attribute related cds

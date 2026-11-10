@@ -29,8 +29,11 @@ tracing = { workspace = true }
 tuigui_components = { workspace = true }
 
 [dev-dependencies]
-# The capybara demo image, converted to ANSI cells: what the dummy window draws.
-halftone = { version = "0.10", default-features = false }
+# The capybara demo images, decoded to pixels: what a dummy window paints its background from.
+# `image` rather than a halftoning crate, which brought its own copy of every format, a gemini
+# of glyph rasterisation and an HTTP client along to turn bytes into cells. The cells are the
+# demo's own few lines instead (`dummy.rs`), and the format decoded is the one the set holds.
+image = { workspace = true, features = ["jpeg"] }
 
 [[example]]
 name = "dummy"

@@ -21,10 +21,9 @@
 
 mod bytes;
 mod error;
-mod filter;
+mod proxy;
 mod pty;
 mod raw;
-mod scanner;
 mod server;
 mod session;
 
@@ -35,7 +34,7 @@ use server::Server;
 
 pub use bytes::Bytes;
 pub use error::{Error, Result};
-pub use scanner::Scanner as CellScanner;
+pub use proxy::Scanner as CellScanner;
 pub use server::Server as ImageServer;
 
 // A session, as the command line describes it. `run` is where it starts.
@@ -110,17 +109,6 @@ pub struct DebugOptions {
 }
 
 impl Tui {
-    /// Start both halves until either ends.
-    ///
-    /// Both are waited on together, and whichever ends first ends the other: the
-    /// command's child is `kill_on_drop`, so dropping its half kills it, and the
-    /// server's future being dropped stops it accepting clients. A session where
-    /// one half is gone has no reader for the other, so leaving the other running
-    /// would be a process with nobody watching it.
-    ///
-    /// Async, with the runtime owned by the caller: a binary gets one from
-    /// `#[tokio::main]`, and a test or an embedder can use whatever it already has
-    /// rather than being made to build a second one.
     pub async fn run(
         self,
         stdin: impl Read + Send + 'static,
@@ -139,8 +127,7 @@ impl Tui {
         install_tracing()?;
         let _raw = Raw::install()?;
 
-        // One set of switches, shared: the pty's proxy reads them on its forwarding
-        // thread while the server and every session read them from the loop, and a copy
+        // One set of switches, shared: the server and every session read them, and a copy
         // per reader would be several answers to one question.
         let debug = std::sync::Arc::new(self.debug);
 
@@ -151,47 +138,71 @@ impl Tui {
         // the terminal's own acknowledgements.
         let (controller, input) = easytgp::Controller::init_with_pipe(stdin)?;
 
-        // The command's output, buffered once for the whole session: a `BufReader` made per step
-        // would drop whatever it had read past the chunk it returned. The capacity is the pipe's
-        // own limit, so one read returns everything that was queued.
+        // Every byte this side puts on the screen goes through easytgp's writer: the rewrite of
+        // the command's output and a session's placement both. One writer and one lock between
+        // them is what stops a picture from being placed in the middle of a line the command
+        // printed. Global because the escapes are global: one terminal, one destination.
+        if !easytgp::set_sink(Box::new(stdout)) {
+            return Err(io::Error::other("the screen's writer was already set"));
+        }
+
         let (pty, master) = Pty::new(&self.command, input)?;
-        let mut master = tokio::io::BufReader::with_capacity(PIPE_CAPACITY, master);
+
+        // Where every window's cells are. Written by the proxy, which is the side that reads the
+        // command's output, and read by the rewrite (to blank them) and by a session (to place a
+        // frame there). Shared rather than borrowed because a session is a `'static` future in a
+        // `FuturesUnordered`, and a borrowed one could not be.
+        let anchors = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            std::collections::HashMap::new(),
+        ));
+        // A client that drew its address. One channel for the whole session: an announcement is a
+        // channel of its own, so several clients are several messages through this one.
+        let (barcodes, announcements) = tokio::sync::mpsc::channel(ANNOUNCEMENTS);
+
+        let forwarding = proxy::run(
+            futures_util::StreamExt::map(
+                tokio_util::io::ReaderStream::new(master),
+                |chunk| chunk.map(|bytes| bytes.to_vec()),
+            ),
+            anchors.clone(),
+            barcodes,
+        );
 
         // The medium is chosen here and nowhere else: a flag read at every frame is the branch the
         // type parameter exists to remove, but the flag still has to be read somewhere, and this is
         // the one place that knows what the user asked for. The two arms are different types, so
         // each is written out where it is built.
-        let mut output = stdout;
-        let mut server: std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + '_>> =
+        let serving = async {
             if debug.no_shm {
-                Box::pin(
-                    Server::<easytgp::Png>::new(debug.clone(), controller)?
-                        .run(&mut master, &mut output),
-                )
+                Server::new(debug.clone(), controller, anchors)
+                    .run::<easytgp::Png>(announcements)
+                    .await
             } else {
-                Box::pin(
-                    Server::<easytgp::Shm>::new(debug.clone(), controller)?
-                        .run(&mut master, &mut output),
-                )
-            };
+                Server::new(debug, controller, anchors)
+                    .run::<easytgp::Shm>(announcements)
+                    .await
+            }
+        };
 
         tokio::select! {
             // The command's half: it waits on the child and keeps the pty's grid in step with
             // this terminal.
             session = pty.run() => session,
-            // The screen: read the command's output, scan it, rewrite it, and give the clients
-            // their turn.
-            served = &mut server => served,
+            // The command's output: rewritten onto the screen, and scanned for what a client drew.
+            forwarded = forwarding => forwarded,
+            // The screen: dial whoever announced itself, and let every client take its turn.
+            served = serving => served,
         }
     }
+
 }
 
-/// How much of the command's output is held between reads.
+/// How many announcements can be waiting a dial.
 ///
-/// The kernel's own pipe limit, so one read takes everything that was waiting: a smaller buffer
-/// would split a chunk the writer made in one go, and a larger one would reserve memory the pipe
-/// cannot fill.
-const PIPE_CAPACITY: usize = 64 * 1024;
+/// One per pane that can be on the screen at once, with room to spare: an announcement is a
+/// client that drew its address and is sitting there waiting to be dialed, so the queue is as
+/// long as the panes a user could open rather than as long as the traffic.
+const ANNOUNCEMENTS: usize = 16;
 
 /// Puts this terminal in raw mode for the session; restores it on drop.
 ///

@@ -43,8 +43,7 @@ pub struct Pty {
     rows: u32,
 }
 
-impl Pty {
-    /// Start `command` on a fresh pty of this terminal's size.
+impl Pty {    /// Start `command` on a fresh pty of this terminal's size.
     ///
     /// Everything the caller needs comes back out of here: the direction of the master the
     /// output is read from, and the child itself. The **input** direction stays in here,
@@ -55,10 +54,10 @@ impl Pty {
         command: &[String],
         mut input: std::io::PipeReader,
     ) -> io::Result<(Self, tokio::fs::File)> {
-        // The window size is a property of the terminal device, and `tcgetwinsize` needs an
-        // fd. Its size is therefore read from this process's own stdin, which is the terminal
-        // the user is looking at.
-        let ws = rustix::termios::tcgetwinsize(io::stdin())?;
+        // The window size is a property of the terminal device rather than of this process, so it
+        // is read from stdin — the terminal the user is looking at — and handed to the pty the
+        // command runs on.
+        let ws = shared_utils::resize::size()?;
 
         let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).map_err(io::Error::from)?;
         grantpt(&master).map_err(io::Error::from)?;
@@ -80,8 +79,8 @@ impl Pty {
         let pty = Self {
             child,
             resizable: master.try_clone()?,
-            cols: ws.ws_col as u32,
-            rows: ws.ws_row as u32,
+            cols: u32::from(ws.ws_col),
+            rows: u32::from(ws.ws_row),
         };
         Ok((pty, tokio::fs::File::from_std(master)))
     }
@@ -95,18 +94,6 @@ impl Pty {
     /// Dropping the child on the way out is the kill: it is `kill_on_drop`, so a session that
     /// ended for any reason leaves no command behind.
     pub async fn run(mut self) -> io::Result<()> {
-        // The real terminal tells us it changed size by signalling, not by sending bytes, so
-        // this is a signal stream and not something a read loop could see: a signal is
-        // delivered to the process, and the readers of the master are blocking threads on the
-        // far side of the runtime with no way to wait for one.
-        //
-        // `SIGWINCH` is ignored by default, so asking for it does not disturb anything that
-        // was not going to happen anyway, and the registry installs its handler with
-        // `SA_RESTART` — so a blocking read resumes rather than failing with `EINTR` every
-        // time the window moves.
-        let mut resized =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
-
         loop {
             tokio::select! {
                 status = self.child.wait() => {
@@ -120,21 +107,26 @@ impl Pty {
                         Err(io::Error::other(format!("the command exited with {status}")))
                     };
                 }
-                // The terminal was resized. The child's pty still has the old grid, so the
-                // command keeps drawing for a screen that is no longer the right shape until
-                // it is told — which for a full-screen program means it lays itself out
-                // against the wrong size.
-                _ = resized.recv() => {
-                    // Read from this process's stdin, the same source the initial size came
-                    // from: that is the terminal the user actually resized.
-                    if let Ok(ws) = rustix::termios::tcgetwinsize(io::stdin()) {
-                        if let Err(e) = rustix::termios::tcsetwinsize(&self.resizable, ws) {
-                            tracing::warn!("could not tell the command its new size: {e}");
+                // The terminal was resized. The child's pty still has the old grid, so the command
+                // keeps drawing for a screen that is no longer the right shape until it is told —
+                // which for a full-screen program means it lays itself out against the wrong size.
+                resized = shared_utils::resize::resized() => {
+                    // A resize nobody could read leaves the pty at its old size, and the next one
+                    // arrives anyway: the command is laid out for a screen one size stale rather
+                    // than for no screen at all.
+                    let ws = match resized {
+                        Ok(ws) => ws,
+                        Err(e) => {
+                            tracing::warn!("could not read the new size: {e}");
+                            continue;
                         }
-                        self.cols = ws.ws_col as u32;
-                        self.rows = ws.ws_row as u32;
-                        self.signal();
+                    };
+                    if let Err(e) = rustix::termios::tcsetwinsize(&self.resizable, ws) {
+                        tracing::warn!("could not tell the command its new size: {e}");
                     }
+                    self.cols = u32::from(ws.ws_col);
+                    self.rows = u32::from(ws.ws_row);
+                    self.signal();
                 }
             }
         }
@@ -167,9 +159,6 @@ impl Pty {
 }
 
 /// Start `cmd` on `slave`, with the pty as its controlling terminal.
-///
-/// `kill_on_drop` is what lets a caller stop the command by dropping it: the session has two
-/// halves, and when one ends the other must not be left running with nobody to read it.
 fn exec(cmd: &[String], slave: &std::fs::File) -> io::Result<Child> {
     let mut c = Command::new(&cmd[0]);
     c.args(&cmd[1..]);

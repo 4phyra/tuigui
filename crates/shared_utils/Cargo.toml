@@ -1,0 +1,10 @@
+[package]
+name = "shared_utils"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "What both halves of a session need and neither should own"
+
+[dependencies]
+rustix = { workspace = true }
+tokio = { workspace = true }

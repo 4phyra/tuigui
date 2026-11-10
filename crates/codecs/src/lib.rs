@@ -51,7 +51,11 @@ pub trait Encoder: Send {
 }
 
 /// Decode what an [`Encoder`] produced, back into pixels, one frame at a time.
-pub trait Decoder {
+///
+/// `Send`, because a session that owns one is a task of its own: every attached client runs
+/// beside the others, and a decoder that could not cross a thread would pin a whole client to
+/// whichever thread happened to dial it.
+pub trait Decoder: Send {
     /// Decode one stretch of the stream, and return the pixels of the frame
     /// that came due, as R,G,B at the frame's own size.
     ///

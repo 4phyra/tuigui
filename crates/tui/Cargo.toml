@@ -20,6 +20,9 @@ better_default = { workspace = true }
 # and the server that reads it, so there is one answer to "what is on screen".
 vt100 = { workspace = true }
 easytgp = { workspace = true }
+# The terminal's size, and the wait for it to change: one signal per process, and both the
+# pty and the proxy hold a size that has to follow it.
+shared_utils = { workspace = true }
 image = { workspace = true }
 rustix = { workspace = true }
 clap = { workspace = true }
@@ -29,15 +32,20 @@ futures-retry = { workspace = true }
 # One error type per failure instead of a string in an `io::Error`, so a caller can tell
 # a dropped frame from a failed transmit.
 thiserror = { workspace = true }
-# The cursor move a real placement needs, as the bytes a terminal expects rather than a
-# sequence spelled out here.
-crossterm = { workspace = true }
+
 # The codec the server decodes with, behind the trait a codec can be swapped
 # behind. Which codec it is arrives on the wire, and is not assumed here.
 codecs = { workspace = true }
-# `select_all` and `StreamExt`, for reading every attached client in one loop
-# without spawning a task per client. Not already reachable through tokio.
+# `FuturesUnordered` and the `StreamExt` that reads it: every attached client is a
+# future in one set, and whichever is ready is awaited directly instead of being
+# polled in turn. Not already reachable through tokio.
 futures-util = { version = "0.3", features = ["alloc"] }
+# `ReaderStream`: the pty master is an `AsyncRead`, and the proxy consumes the
+# command's output as chunks. The bridge is the crate's job, not a loop here.
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
+# The anchor set, read by the rewrite and replaced by the server: a window opening
+# reaches the next chunk without the rewrite waiting for it.
+arc-swap = { workspace = true }
 # Spans become zones in the Tracy profiler, for seeing where a frame's time goes.
 tracing = { workspace = true }
 # Diagnostics through the `log` facade, and a file capturer in the binary: a session's

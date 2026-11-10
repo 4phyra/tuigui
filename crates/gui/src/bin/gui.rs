@@ -6,7 +6,11 @@ use clap::Parser as _;
 
 use gui::Gui;
 
-#[tokio::main]
+// Eight: a frame's encode and its transmit are a few milliseconds each with a wait between them,
+// so the threads beyond what those waits can occupy would spend their lives parked. The same
+// count as `tui`, because a session started from either side should schedule its work the same
+// way.
+#[tokio::main(worker_threads = 8)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gui = Gui::parse();
     gui.run(std::io::stdin(), std::io::stdout()).await?;

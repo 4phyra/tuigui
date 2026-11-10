@@ -2,7 +2,12 @@
 
 use clap::Parser as _;
 
-#[tokio::main]
+// `worker_threads` has to be a literal, so the count is a constant rather than half the cores
+// computed at startup. Eight: a decoded frame and a transmit are a few milliseconds each with a
+// wait between them, so the threads beyond what those waits can occupy would spend their lives
+// parked. Both halves get the same count, and both binaries, because a session started from
+// either one should schedule its work the same way.
+#[tokio::main(worker_threads = 8)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Internal re-entry: this process *is* the client, started by the server
     // inside its pty. Checked first so the runnable's own path is never parsed as
