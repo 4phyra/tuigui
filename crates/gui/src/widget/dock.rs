@@ -192,6 +192,16 @@ impl Dock {
     /// A failure says what went wrong rather than what step it was in, because the failure is the
     /// more useful fact. While waiting there is nothing to say: the record is what the row carries,
     /// and it is drawn by [`render_waiting`].
+    /// Whether something here is still moving, so the next frame is already owed.
+    ///
+    /// A tab strip walks its band over a few frames, and a frame nobody asked for is a band frozen
+    /// halfway. Asking here rather than keeping a flag beside it keeps the answer where the motion
+    /// is: the strip is the only thing in the dock that animates.
+    pub fn is_animating(&self) -> bool {
+        self.tabs.is_moving()
+    }
+
+    /// The program's words while it was watched, and the screen's own state, are the stage's.
     fn status<'a>(&'a self, stage: &'a Result<Stage, String>) -> &'a str {
         match stage {
             Err(message) => message,

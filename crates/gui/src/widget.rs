@@ -102,6 +102,11 @@ impl MainWidget {
         Ok(self.session.handle_event(event, winsize, dock_area))
     }
 
+    /// Whether something on the pane is still moving, so the next frame is already owed.
+    pub fn is_animating(&self) -> bool {
+        self.session.is_animating()
+    }
+
     /// Do a turn of the pane: a window changed, and the root is told the pane's size.
     ///
     /// One call, because the wait and the work cannot be held at once: what the wait answers borrows
@@ -132,9 +137,15 @@ impl MainWidget {
     /// made of, so this is where the profiler's timeline should be divided.
     #[tracing::instrument(name = "frame", skip_all)]
     pub fn render(&mut self) -> std::io::Result<()> {
+        // The frame's own length, which is what paces anything animated. Capped at one frame,
+        // because the gap since the last draw is not always a frame's worth: a pane that sat idle
+        // waits for its indicator tick, and the frame that follows would otherwise be handed the
+        // whole quiet quarter of a second — several steps of a move at once, which is a jump at the
+        // start followed by a crawl.
         let delta = std::mem::replace(&mut self.last, std::time::Instant::now())
             .elapsed()
-            .as_secs_f32();
+            .as_secs_f32()
+            .min(crate::FRAME.as_secs_f32());
 
         // The screen is the session's to name and the terminals are this side's, so the crossing
         // happens here: two modes, set once and never toggled per frame, because both belong to

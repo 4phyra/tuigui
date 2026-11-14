@@ -36,6 +36,22 @@ mod windowing;
 /// screen the terminal keeps rather than on one of the two the client draws: the logs screen
 /// anchors its three rows under the cursor, so the name stays above them and scrolls into
 /// history exactly as any other output above the pane does.
+/// How often a quiet pane is redrawn anyway, so the dock's light keeps breathing.
+///
+/// A frame is drawn when something asked for one, and an indicator that animates asks for nothing:
+/// its brightness comes from the clock, so a pane with no events would sit at one shade forever. A
+/// quarter of a second is slow enough that an idle session costs four frames a second rather than
+/// sixty, and fast enough that the fade reads as a fade.
+const INDICATOR: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How often a pane with something moving on it is redrawn.
+///
+/// An animation is advanced by the frame's own length, so its pace is the redraw rate: the tab
+/// strip's band walks a fixed number of frames, and a frame every 250ms would step it in four
+/// visible jumps. Not zero, because drawing again immediately would advance the animation by
+/// nothing at all and spin the loop.
+const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+
 const BANNER: &str = r#"
  ▗   ▘    ▘
  ▜▘▌▌▌▛▌▌▌▌
@@ -264,6 +280,15 @@ impl Gui {
                 }
             }
 
+            // How long this turn waits for something to happen. A pane with something moving on it
+            // is redrawn at a frame's pace instead of waiting for the next indicator tick: the
+            // animation is advanced by the frame's own delta, so drawing again at once would advance
+            // it by nothing and drawing four times a second would step it in quarter-second jumps.
+            let wait = match main_widget.is_animating() {
+                true => FRAME,
+                false => INDICATOR,
+            };
+
             // Each arm answers whether the frame changed: a key or a press can, a motion over a
             // picture that is already drawn cannot, and neither can a window already placed.
             tokio::select! {
@@ -297,6 +322,12 @@ impl Gui {
                 // A window the program opened or closed: the turn runs the work that change wants,
                 // and tells the root what size the pane is, which only this half can read.
                 () = main_widget.step() => render_next = true,
+                // Nothing happened, and something on the pane is still moving. A tick rather than a
+                // frame clock: it is what keeps the dock's light breathing and a tab's band walking
+                // while the user reads rather than types, and it costs a frame only when asked for
+                // one — 250ms is fast enough for a slow fade and slow enough to leave an idle pane
+                // alone.
+                () = tokio::time::sleep(wait) => render_next = true,
             }
         }
     }

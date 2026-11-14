@@ -128,6 +128,15 @@ impl Session {
         }
     }
 
+    /// Whether something on the pane is still moving, so the next frame is already owed.
+    ///
+    /// The dock's strip is the only thing that animates over many frames; everything else is drawn
+    /// once and stands until something says otherwise. Asked after a frame rather than kept as a
+    /// flag, because the answer belongs to whatever is moving.
+    pub fn is_animating(&self) -> bool {
+        self.dock.is_animating()
+    }
+
     /// Whether the alternate screen is where this session draws.
     ///
     /// Asked by the caller because the terminals are the caller's: the session knows which screen it
