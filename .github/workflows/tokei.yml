@@ -25,8 +25,10 @@ jobs:
           tool: tokei
 
       - name: Count Rust code lines
+        # `tests` and `examples` are harness, not the crates the badge speaks for:
+        # every recorded screen and demo program would inflate the count.
         run: |
-          code=$(tokei . --types Rust --output json | jq -r '.Rust.code')
+          code=$(tokei . --types Rust --exclude tests --exclude examples --output json | jq -r '.Rust.code')
           jq -n --arg n "$code" \
             '{"schemaVersion": 1, "label": "Rust lines of code", "message": $n, "color": "blue"}' \
             >.github/tokei.json
