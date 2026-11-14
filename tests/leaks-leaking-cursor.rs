@@ -73,21 +73,21 @@ fn moving_over_every_cell_leaves_one_cursor() -> termlens::Result<()> {
             ))?;
             // The verdict is taken per move, not at the end of the sweep: an arrow left in the
             // cell the pointer came from is only visible in the frame that follows the move, and
-            // a full repaint later would erase the evidence. The wait is what fails — a pointer
-            // that never leaves the cell it left keeps this predicate false — so the timeout is
-            // short enough that a leak reads as a failure rather than as a hung test.
-            session
-                .wait_until_for(
-                    |screen| screen.find_all(&cursor) == vec![(row, col)],
-                    Duration::from_secs(2),
-                )
-                .unwrap_or_else(|error| {
+            // a full repaint later would erase the evidence.
+            //
+            // So the wait looks for the failure rather than for progress: the first screen that
+            // carries two arrows is the leak, and it has already been drawn by then. Nothing here
+            // is a deadline — a screen with one arrow is simply the state the pane is in until the
+            // pointer arrives, and the sweep moves on when it does.
+            session.wait_until(|screen| {
+                let found = screen.find_all(&cursor);
+                if found.len() >= 2 {
                     panic!(
-                        "after moving to ({row}, {col}) the pointer is not the only one: \
-                         {error}\n{}",
-                        session.screen()
-                    )
-                });
+                        "moving to ({row}, {col}) left the pointer behind: {found:?}\n{screen}"
+                    );
+                }
+                found == vec![(row, col)]
+            })?;
         }
     }
 
