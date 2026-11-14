@@ -164,9 +164,12 @@ impl DecoratedWindow {
         // offset is multiplied by the cell before it is sent — a pointer sent in cells lands in the
         // window's top-left corner and never reaches the widget the user aimed at.
         let (cell_width, cell_height) = cell_size(winsize);
+        // `contains` above is what makes these offsets non-negative; saturating rather than
+        // subtracting because a placement this side got wrong would otherwise wrap to the far end
+        // of the picture instead of its corner.
         let at = (
-            f64::from(mouse.column - area.x) * f64::from(cell_width),
-            f64::from(mouse.row - area.y) * f64::from(cell_height),
+            f64::from(mouse.column.saturating_sub(area.x)) * f64::from(cell_width),
+            f64::from(mouse.row.saturating_sub(area.y)) * f64::from(cell_height),
         );
         let _ = window.input.send(termina::Event::Mouse(MouseEvent {
             column: at.0 as u16,

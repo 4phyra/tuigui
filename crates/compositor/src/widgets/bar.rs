@@ -58,9 +58,10 @@ impl Bar {
             // A click — pressed and let go inside the box — is what closes. The cross answers that
             // once, so this does not have to remember the last frame to notice the edge.
             if self.close.was_released() {
-                // TODO: a window has no close channel yet. The ask belongs beside `set_size` and
-                // `input`: a request its program may ignore.
-                todo!("a window's close ask")
+                // A request, not a verdict: the program is told and decides, and a window it chose
+                // to keep is one that keeps being served. A send that fails is that program being
+                // over already, which is the news arriving too late rather than a failure.
+                let _ = window.close.send(());
             }
             // The button is not a grip: a press on it, and anything at all while it is held, are
             // the cross's rather than the bar's.

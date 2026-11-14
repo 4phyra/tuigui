@@ -245,14 +245,22 @@ impl Compositor {
             .and_then(|window| window.offset_px)
             .unwrap_or((0, 0));
         let (width, height) = self.cells(&window, winsize);
+        let (cell_width, cell_height) = crate::widgets::cell_size(winsize);
+        // The program's offset is in pixels of its own picture, and a rectangle on the pane is in
+        // cells: adding one to the other puts the menu a thousand columns away, off the pane and
+        // into arithmetic that underflows the first time a click is measured against it.
+        let (offset_x, offset_y) = (
+            (offset.0.max(0) as u32 / cell_width) as u16,
+            (offset.1.max(0) as u32 / cell_height) as u16,
+        );
         let area = self.windows[group][parent].state.area;
         self.windows[group].push(DecoratedWindow::new(
             window,
             Some(Frame::bare()),
             WindowState {
                 area: Rect::new(
-                    area.x.saturating_add(offset.0.max(0) as u16),
-                    area.y.saturating_add(offset.1.max(0) as u16),
+                    area.x.saturating_add(offset_x),
+                    area.y.saturating_add(offset_y),
                     width,
                     height,
                 ),

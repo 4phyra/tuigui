@@ -34,7 +34,7 @@ pub struct CompositableWindow {
     /// A request and not a verdict: the program is told and decides, and only a client that
     /// answers stops existing. One-shot because closing is said once — a second ask for a window
     /// already on its way out has nothing to say to it.
-    pub close: tokio::sync::oneshot::Sender<()>,
+    pub close: flume::Sender<()>,
     /// Where this window sits in the stack, bottom first.
     ///
     /// The order is the rank and the rank is the order, so this is written wherever the stack is

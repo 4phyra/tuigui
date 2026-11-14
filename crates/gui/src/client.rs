@@ -127,7 +127,7 @@ fn serve_window(
     let (input, recv_input) = flume::unbounded();
     let (children, new_children) = flume::unbounded();
     let (popups, new_popups) = flume::unbounded();
-    let (close, mut recv_close) = tokio::sync::oneshot::channel();
+    let (close, recv_close) = flume::unbounded();
     let rank = Arc::new(AtomicU32::new(0));
 
     let placed = Arc::new(CompositableWindow {
@@ -204,8 +204,9 @@ fn serve_window(
                     (popups.send(placed).ok(), futures.push(servant));
                 }
                 // The compositor asked this window to close. A request: the program is told and
-                // decides, and the window it chose to keep is one this keeps serving.
-                asked = &mut recv_close => {
+                // decides, and the window it chose to keep is one this keeps serving. A receive
+                // that failed is that ask's sender being gone, which is the pane being over.
+                asked = recv_close.recv_async() => {
                     asked.map_err(|_| {
                         std::io::Error::other("the close request was dropped unread")
                     })?;
