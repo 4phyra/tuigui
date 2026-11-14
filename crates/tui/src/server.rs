@@ -91,8 +91,12 @@ impl Server {
                                 // Reported rather than fatal: the announcement is still on the
                                 // screen, so the next chunk offers the same client again, and
                                 // failing to reach one that is still starting is the ordinary case.
+                                //
+                                // Through `log`, not `tracing`: a tracing event only reaches the
+                                // file capturer when no subscriber is installed, and the profiler
+                                // build installs one — a failed dial would leave no trace at all.
                                 Err(e) => {
-                                    tracing::warn!("could not reach an announced client: {e}");
+                                    log::warn!("could not reach an announced client: {e}");
                                     return;
                                 }
                             };
@@ -100,7 +104,7 @@ impl Server {
                             // A link that failed is nothing this loop can recover from, and a pane
                             // that keeps drawing over it hides the failure.
                             if let Err(e) = session.run(anchors).await {
-                                tracing::error!("a client's session ended: {e}");
+                                log::error!("a client's session ended: {e}");
                             }
                         });
                     },

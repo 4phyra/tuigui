@@ -1,8 +1,6 @@
 //! A window with its chrome: the window's own cells, and the frame around it.
 //! The root has no frame — it is the pane, not a window over anything.
 
-use std::sync::{Arc, Weak};
-
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::widgets::{Clear, Widget};
@@ -33,7 +31,7 @@ pub struct WindowState {
 pub struct DecoratedWindow {
     /// The window itself, held weakly: the side running the program owns it, and a placement
     /// whose window is gone is one that fails to upgrade rather than something to prune.
-    pub window: Weak<CompositableWindow>,
+    pub window: CompositableWindow,
     pub frame: Option<Frame>,
     /// Where this window sits, which cells are its own.
     pub state: WindowState,
@@ -57,7 +55,10 @@ pub fn cell_size(winsize: rustix::termios::Winsize) -> (u32, u32) {
 /// configured, and read back must give the same box.
 pub fn pixels(area: Rect, winsize: rustix::termios::Winsize) -> (u32, u32) {
     let (width, height) = cell_size(winsize);
-    (u32::from(area.width) * width, u32::from(area.height) * height)
+    (
+        u32::from(area.width) * width,
+        u32::from(area.height) * height,
+    )
 }
 
 /// Pixels as a box of cells: what a program's committed size occupies on the pane.
@@ -74,27 +75,12 @@ pub fn cells(px: (u32, u32), winsize: rustix::termios::Winsize) -> (u16, u16) {
 }
 
 impl DecoratedWindow {
-    pub fn new(window: Weak<CompositableWindow>, frame: Option<Frame>, state: WindowState) -> Self {
+    pub fn new(window: CompositableWindow, frame: Option<Frame>, state: WindowState) -> Self {
         Self {
             window,
             frame,
             state,
         }
-    }
-
-    /// The window itself, for the calls that need its facts.
-    pub fn get(&self) -> Option<Arc<CompositableWindow>> {
-        self.window.upgrade()
-    }
-
-    /// Whether this placement is the one for `window`.
-    pub fn is_about(&self, window: &Weak<CompositableWindow>) -> bool {
-        Weak::ptr_eq(&self.window, window)
-    }
-
-    /// Whether the window behind this placement is still there.
-    pub fn is_alive(&self) -> bool {
-        self.window.strong_count() > 0
     }
 
     /// Tell the window's program to draw at the size the window occupies.
@@ -108,12 +94,9 @@ impl DecoratedWindow {
     /// The root has no chrome, so its box is the pane and it is measured in pixels directly by the
     /// compositor; every other window loses a row to its bar and its ring.
     pub fn maybe_set_size(&mut self, winsize: rustix::termios::Winsize) {
-        let Some(window) = self.get() else {
-            return;
-        };
         // A popup is sized by its own program's positioner, so there is nothing to ask: the box it
         // is drawn in is the size it said it would be.
-        if window.is_popup {
+        if self.window.is_popup {
             return;
         }
         // Asked only when the box and the picture disagree. A configure is not free on the
@@ -122,13 +105,13 @@ impl DecoratedWindow {
         // appears. The size the program reports is what it committed at, so the two agreeing means
         // there is nothing to ask for.
         let size = pixels(self.state.area, winsize);
-        let committed = *window.size.lock().unwrap_or_else(|e| e.into_inner());
+        let committed = *self.window.size.lock().unwrap_or_else(|e| e.into_inner());
         if committed == size {
             return;
         }
         // A window whose program is over is a window about to be dropped, so a send that fails is
         // that rather than a failure of the pane's.
-        let _ = window.set_size.send(size);
+        let _ = self.window.set_size.send(size);
     }
 
     /// Offer a mouse event to this window, whose box on the pane is `area`.
@@ -143,17 +126,16 @@ impl DecoratedWindow {
         area: Rect,
         winsize: rustix::termios::Winsize,
     ) -> Result<Option<MouseEvent>, crate::Error> {
-        let Some(window) = self.get() else {
-            return Ok(None);
-        };
         // A window without chrome has nothing to hit-test first, so the event goes straight on: a
         // frame that claimed nothing would report the window as having claimed it, and the root —
         // which has none — would then deliver no pointer event at all.
         let mouse = match self.frame.as_mut() {
-            Some(frame) => match frame.handle_mouse(&window, &mut self.state, mouse, pane, area)? {
-                Some(mouse) => mouse,
-                None => return Ok(None),
-            },
+            Some(frame) => {
+                match frame.handle_mouse(&self.window, &mut self.state, mouse, pane, area)? {
+                    Some(mouse) => mouse,
+                    None => return Ok(None),
+                }
+            }
             None => mouse,
         };
         if !area.contains(Position::new(mouse.column, mouse.row)) {
@@ -171,7 +153,7 @@ impl DecoratedWindow {
             f64::from(mouse.column.saturating_sub(area.x)) * f64::from(cell_width),
             f64::from(mouse.row.saturating_sub(area.y)) * f64::from(cell_height),
         );
-        let _ = window.input.send(termina::Event::Mouse(MouseEvent {
+        let _ = self.window.input.send(termina::Event::Mouse(MouseEvent {
             column: at.0 as u16,
             row: at.1 as u16,
             ..mouse
@@ -188,25 +170,20 @@ impl Widget for &mut DecoratedWindow {
         //
         // A call and not a description, because a window is not only cells: the dummy session's
         // windows paint a picture, and only they know how.
-        if let Some(window) = self.get() {
-            (window.render)(area, buf, &mut self.state);
-        }
+        (self.window.render)(area, buf, &mut self.state);
         // Read before the frame is borrowed: the title is the program's fact, and the frame is
         // this side's.
         let title = self
-            .get()
-            .map(|window| window.title.lock().unwrap_or_else(|e| e.into_inner()).clone());
+            .window
+            .title
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         if let Some(frame) = self.frame.as_mut() {
             // A popup has no bar: it is a menu its own program drew, and a title strip under it
             // would be this side painting furniture over something the client owns. The ring it
             // keeps, because a popup is still a box on the pane.
-            //
-            // A window that is over has no name to give, and the bar it would be painted on is the
-            // bar of a window `cleanup` is about to drop: the title is cleared rather than
-            // reported, because there is nothing left that could act on the failure.
-            if let Some(title) = title {
-                frame.set_title(title);
-            }
+            frame.set_title(title);
             frame.render(area, buf);
         }
     }

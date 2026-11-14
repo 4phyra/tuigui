@@ -87,7 +87,7 @@ impl Session {
     /// before the program has drawn something.
     pub fn from_any_to_windows(
         &mut self,
-        root: std::sync::Arc<CompositableWindow>,
+        root: CompositableWindow,
         stdout: std::io::PipeReader,
     ) {
         if let Ok(stage) = &mut self.stage.0 {

@@ -5,17 +5,16 @@
 //! picture and no link — a window arrives as a [`CompositableWindow`], which is the few facts
 //! placement needs and the channels that reach the side running the program.
 //!
-//! Nothing here removes a window: a window is gone when the [`Weak`] the placement holds stops
-//! upgrading, which is the one fact that cannot go stale.
-
-use std::sync::{Arc, Weak};
+//! Windows are owned here: a placement holds the window itself, so nothing else has to keep it
+//! alive. A window is over when the serving side drops the senders and the channels it opened on
+//! close, which is what its `new_children` wait reports.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Color;
 use ratatui::widgets::Widget;
 
-use crate::widgets::decorated_window::{DecoratedWindow, WindowState, MIN};
+use crate::widgets::decorated_window::{DecoratedWindow, WindowState};
 use crate::widgets::frame::Frame;
 
 pub mod widgets;
@@ -69,7 +68,7 @@ impl Compositor {
     ///
     /// The root is the program itself: it has no chrome, and a key pressed before anything was
     /// clicked is its. Every other window arrives through [`Compositor::run`].
-    pub fn new(root: Weak<CompositableWindow>) -> Self {
+    pub fn new(root: CompositableWindow) -> Self {
         Self {
             windows: vec![vec![DecoratedWindow::new(
                 root,
@@ -102,7 +101,6 @@ impl Compositor {
     /// `winsize` is the terminal's report of itself: it is what turns a box of cells into a
     /// program's size, and the caller owns the terminal, so it is handed in.
     pub async fn step(&mut self, winsize: rustix::termios::Winsize) -> Result<(), Error> {
-        self.cleanup();
         self.maybe_resize_root(winsize)?;
         if let Some(place) = self.recv_tasks().await {
             place(self, winsize);
@@ -123,20 +121,20 @@ impl Compositor {
     /// `None` is a stack with nothing left in it, which is a session whose program never drew.
     pub async fn recv_tasks(&mut self) -> Option<Task> {
         let mut waits = tokio::task::JoinSet::new();
-        for (group, entries) in self.windows.iter().enumerate() {
-            for (inner, entry) in entries.iter().enumerate() {
-                let Some(window) = entry.get() else {
-                    continue;
-                };
+        for (group, entries) in self.windows.iter_mut().enumerate() {
+            for (inner, entry) in entries.iter_mut().enumerate() {
                 // Both waits at once: a program that opens three windows is not three turns, and a
                 // window's children and its menus are the same question — what did it open.
-                let (children, popups) = (window.new_children.clone(), window.new_popups.clone());
+                let (children, popups) = (
+                    entry.window.new_children.clone(),
+                    entry.window.new_popups.clone(),
+                );
                 waits.spawn(async move { (group, inner, children.recv_async().await, false) });
                 waits.spawn(async move { (group, inner, popups.recv_async().await, true) });
             }
         }
-        // A task that ended without a value is a window whose channel closed while it was being
-        // read: there is nothing to place, and the stack learns it is over from the `Weak`.
+        // A task that ended without a value is a window whose channels closed while it was being
+        // read: the serving side is over, and its place in the stack goes with it.
         let Some(Ok((group, inner, arrived, popup))) = waits.join_next().await else {
             return None;
         };
@@ -151,11 +149,11 @@ impl Compositor {
 
         Some(if popup {
             Box::new(move |compositor: &mut Self, winsize| {
-                compositor.add_popup(group, inner, Arc::downgrade(&window), winsize);
+                compositor.add_popup(group, inner, window, winsize);
             })
         } else {
             Box::new(move |compositor: &mut Self, winsize| {
-                compositor.add_window(group, Arc::downgrade(&window), winsize);
+                compositor.add_window(group, window, winsize);
             })
         })
     }
@@ -172,18 +170,6 @@ impl Compositor {
         if let Some(entries) = self.windows.get_mut(group) {
             entries.remove(inner);
         }
-    }
-
-    /// Drop what is over, and tell every program the size its box is.
-    ///
-    /// The root's box is the pane, so a change of pane is a change of the root's rectangle. Every
-    /// other window is asked for the box it was placed in, which its chrome has already taken a row
-    /// and two columns from. A popup is left alone: its size is its program's to state.
-    fn cleanup(&mut self) {
-        for group in self.windows.iter_mut() {
-            group.retain(DecoratedWindow::is_alive);
-        }
-        self.windows.retain(|group| !group.is_empty());
     }
 
     /// The root is the pane, so a change of pane is a change of the root's rectangle.
@@ -207,7 +193,7 @@ impl Compositor {
     fn add_window(
         &mut self,
         opened_by: usize,
-        window: Weak<CompositableWindow>,
+        window: CompositableWindow,
         winsize: rustix::termios::Winsize,
     ) {
         let (width, height) = self.cells(&window, winsize);
@@ -237,13 +223,14 @@ impl Compositor {
         &mut self,
         group: usize,
         parent: usize,
-        window: Weak<CompositableWindow>,
+        window: CompositableWindow,
         winsize: rustix::termios::Winsize,
     ) {
-        let offset = window
-            .upgrade()
-            .and_then(|window| window.offset_px)
-            .unwrap_or((0, 0));
+        // A popup that asked for no offset sits at the origin of the window that owns it.
+        let offset = match window.offset_px {
+            Some(offset) => offset,
+            None => (0, 0),
+        };
         let (width, height) = self.cells(&window, winsize);
         let (cell_width, cell_height) = crate::widgets::cell_size(winsize);
         // The program's offset is in pixels of its own picture, and a rectangle on the pane is in
@@ -290,13 +277,12 @@ impl Compositor {
                     .get(group)
                     .and_then(|group| group.get(inner))
                     .or_else(|| self.windows.first().and_then(|group| group.first()))
-                    .and_then(DecoratedWindow::get)
                 else {
                     return Ok(false);
                 };
                 // A window whose program is over is a window about to be dropped: a send that fails
                 // is that rather than a failure of the pane's.
-                let _ = window.input.send(termina::Event::Key(key));
+                let _ = window.window.input.send(termina::Event::Key(key));
                 Ok(false)
             }
             termina::Event::Mouse(mouse) => {
@@ -309,7 +295,10 @@ impl Compositor {
                 for (index, group) in self.windows.iter_mut().enumerate().rev() {
                     for inner in (0..group.len()).rev() {
                         let area = group[inner].state.area;
-                        if group[inner].handle_mouse(mouse, pane, area, winsize)?.is_none() {
+                        if group[inner]
+                            .handle_mouse(mouse, pane, area, winsize)?
+                            .is_none()
+                        {
                             found = Some((index, inner));
                             break;
                         }
@@ -338,17 +327,10 @@ impl Compositor {
         }
     }
 
-    /// A window's own size in cells, or the smallest a window can be drawn in before it has one.
-    fn cells(
-        &self,
-        window: &Weak<CompositableWindow>,
-        winsize: rustix::termios::Winsize,
-    ) -> (u16, u16) {
-        window
-            .upgrade()
-            .map(|window| *window.size.lock().unwrap_or_else(|e| e.into_inner()))
-            .map(|size| crate::widgets::cells(size, winsize))
-            .unwrap_or(MIN)
+    /// A window's own size in cells: what its program last committed, in the pane's grid.
+    fn cells(&self, window: &CompositableWindow, winsize: rustix::termios::Winsize) -> (u16, u16) {
+        let size = *window.size.lock().unwrap_or_else(|e| e.into_inner());
+        crate::widgets::cells(size, winsize)
     }
 }
 
