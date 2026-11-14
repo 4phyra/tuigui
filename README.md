@@ -21,17 +21,16 @@ and still be used from your terminal.
 
 Built on excellent crates:
 
-- <picture><source media="(prefers-color-scheme: dark)" srcset="https://cdn.simpleicons.org/tokio/ffffff"><img src="https://cdn.simpleicons.org/tokio" height="16" alt=""></picture> [tokio](https://github.com/tokio-rs/tokio) — async runtime
-- <img src="https://raw.githubusercontent.com/ratatui/ratatui/main/assets/logo.png" height="16" alt=""> [ratatui](https://github.com/ratatui/ratatui) — widgets and layout
-- <img src="https://github.com/crossterm-rs.png?size=64" height="16" alt=""> [crossterm](https://github.com/crossterm-rs/crossterm) — terminal I/O
-- <img src="https://github.com/helix-editor.png?size=64" height="16" alt=""> [termina](https://github.com/helix-editor/termina) — terminal input parsing
-- <img src="https://github.com/doy.png?size=64" height="16" alt=""> [vt100](https://github.com/doy/vt100-rust) — terminal emulation
-- <img src="https://github.com/dfrankland.png?size=64" height="16" alt=""> [keycode](https://github.com/dfrankland/keycode) — physical key codes
-- <img src="https://github.com/Smithay.png?size=64" height="16" alt=""> [smithay](https://github.com/Smithay/smithay) — the Wayland compositor
-- <img src="https://raw.githubusercontent.com/n0-computer/iroh/main/.img/iroh_wordmark.svg" height="11" alt=""> [iroh](https://github.com/n0-computer/iroh) — QUIC transport
-- <img src="https://raw.githubusercontent.com/rkyv/rkyv/main/media/logo_color.svg" height="16" alt=""> [rkyv](https://github.com/rkyv/rkyv) — message format
-- <img src="https://github.com/zesterer.png?size=64" height="16" alt=""> [flume](https://github.com/zesterer/flume) — channels
-- <img src="https://github.com/bytecodealliance.png?size=64" height="16" alt=""> [rustix](https://github.com/bytecodealliance/rustix) — system calls
+<p>
+  <a href="https://github.com/ratatui/ratatui"><img src="https://raw.githubusercontent.com/ratatui/ratatui/main/assets/logo.png" height="28" alt="ratatui"></a>&nbsp;
+  <a href="https://github.com/tokio-rs/tokio"><picture><source media="(prefers-color-scheme: dark)" srcset="https://cdn.simpleicons.org/tokio/ffffff"><img src="https://cdn.simpleicons.org/tokio" height="28" alt="tokio"></picture></a>&nbsp;
+  <a href="https://github.com/rkyv/rkyv"><img src="https://raw.githubusercontent.com/rkyv/rkyv/main/media/logo_color.svg" height="28" alt="rkyv"></a>&nbsp;
+  <a href="https://github.com/n0-computer/iroh"><img src="https://raw.githubusercontent.com/n0-computer/iroh/main/.img/iroh_wordmark.svg" height="20" alt="iroh"></a>&nbsp;
+  <a href="https://github.com/Smithay/smithay"><img src="https://raw.githubusercontent.com/Smithay/smithay.github.io/content/content/images/smithay_logo.svg" height="24" alt="smithay"></a>
+</p>
+
+<b>Built on excellent crates:</b> smithay, tokio, ratatui, crossterm, termina,
+vt100, keycode, iroh, rkyv, flume and rustix.
 
 ## License
 
