@@ -44,6 +44,8 @@ gui *args:
 tuigui *args:
     @CARGO_TARGET_DIR={{target}} cargo run --release -p tuigui --bin tuigui {{tracy}} -- {{args}}
 
+lines:
+    tokei -e tests -e examples -e spec -e docs
 # Build and run the capybara demo, with no program, no codec and no link behind it.
 #
 # The compositor drawing itself: what it exercises is the stacking, the chrome, the dragging
