@@ -79,6 +79,20 @@ tracing-subscriber = { workspace = true, optional = true }
 default = []
 tracy = ["dep:tracing-tracy", "dep:tracing-subscriber"]
 
+# The client tested as a program rather than as a widget: spawned in a real pty and asserted
+# on what its grid shows, which is the only way to see the raw mode, the inline viewport and
+# the dock's own drawing. `default-features = false` drops `insta`: the assertions name the
+# facts they check rather than snapshotting, because the dock's light breathes from the clock
+# and a whole-screen snapshot of it would never settle.
+#
+# `cellcode` and `wire` are dev-dependencies too, and for the same test: the dock's record is
+# read back the way a server reads it — cells, decoded, split on the separator — so the assertion
+# is that a peer could dial, not that some text is on a row.
+[dev-dependencies]
+cellcode = { workspace = true }
+termlens = { version = "0.11", default-features = false }
+wire = { workspace = true }
+
 [[bin]]
 name = "gui"
 path = "src/bin/gui.rs"

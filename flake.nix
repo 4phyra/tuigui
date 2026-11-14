@@ -39,6 +39,23 @@
           };
         in
         {
+          # termlens' command line, which the snapshot review calls: `termlens
+          # diff` paints the cells that changed between two saved screens, and
+          # `termlens render --ansi` is one of them whole. nixpkgs has no package
+          # for it, so it is built from the published crate; the dev shell puts
+          # the binary on PATH, since `cargo install` would write outside the
+          # shell and outside the fingerprints the shell is made against.
+          termlens-cli = rustPlatform.buildRustPackage {
+            pname = "termlens-cli";
+            version = "0.11.9";
+            src = pkgs.fetchCrate {
+              pname = "termlens-cli";
+              version = "0.11.9";
+              hash = "sha256-guqUNl6054IK3EBANqEyQBT6NLgDLY5njE5IiuJ7aIQ=";
+            };
+            cargoHash = "sha256-ytVdfI+kRC+nY1qRT4bOpQNYbRvbgn0vMP7mgU+xBj8=";
+          };
+
           # Public-domain (1887 Eadweard Muybridge) capybara clip, transcoded
           # from Wikimedia's WebM to a YUV420P H.264 MP4 (even-dims) so any
           # consumer can decode it with baseline ffmpeg. Stable URL, no
@@ -231,6 +248,24 @@
               # three binaries is a fixed set of invocations, and a shell script
               # would be the same thing with no documentation.
               pkgs.just
+              # The test runner: one process per test, so a pty child or a raw-mode change
+              # cannot leak into a sibling, and per-test timings whose slow ones are named
+              # rather than buried in the output. Here and not `cargo install`, which would
+              # put it outside this shell and outside the fingerprints it is used against.
+              pkgs.cargo-nextest
+              # `just test-record`: the review half of the snapshot loop. A changed
+              # screen waits as a `.snap.new` until it has been looked at, and this is
+              # the review that shows the old and new pictures one at a time; writing
+              # the files outright would record every frame unseen. Here and not
+              # `cargo install` for the same reason as nextest: the shell owns the
+              # version the fingerprints are made against.
+              pkgs.cargo-insta
+              # `just test-record`: the picture that review shows. `termlens
+              # diff` paints the cells that changed between the old and the new
+              # saved screen, and `termlens render --ansi` is one of them whole.
+              # Built from the published crate in `packages` above, since
+              # nixpkgs has no package for it.
+              self.packages.${system}.termlens-cli
               pkgs.wayland
               pkgs.wayland-protocols
               pkgs.wayland-scanner

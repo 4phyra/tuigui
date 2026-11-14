@@ -1,0 +1,33 @@
+---
+source: crates/tuigui_components/tests/tabs.rs
+expression: frame.with_styles()
+---
+size: 80x24  cursor: hidden
+
+
+
+
+
+
+
+
+
+
+                            Buttons   Chrome   About
+
+                                  tab: 0 still
+
+
+
+
+
+
+
+
+
+
+
+
+styles:
+10: 26 bg=#1e1e1e; 27 bg=#ff69b4; 28-34 fg=0 bg=#ff69b4; 35 bg=#ff69b4; 36-37 bg=#1e1e1e; 38-43 fg=#69ffb4 bg=#1e1e1e; 44-46 bg=#1e1e1e; 47-51 fg=#69b4ff bg=#1e1e1e; 52-53 bg=#1e1e1e
+12: 34-45 fg=7

@@ -60,3 +60,16 @@ dummy:
 # move from one tab to the next.
 gallery:
     @CARGO_TARGET_DIR={{target}} cargo run -p tuigui_components --bin gallery
+
+# `cargo insta test` runs nextest — one process per test, so a pty cannot leak —
+# and leaves a mismatched screen as `.snap.new` instead of failing; the review
+# runs whatever its status. `snapshot-diff` shows each one: an empty old file is
+# a new screen rendered whole, a real one a coloured cell diff.
+test *args:
+    @CARGO_TARGET_DIR={{target}} cargo build -p tuigui_components --examples
+    @CARGO_TARGET_DIR={{target}} cargo insta test --test-runner nextest --workspace --tests {{args}} \
+        || echo "test: the run reported failures or pending snapshots; reviewing what it recorded"
+    @INSTA_DIFF_TOOL="just --justfile {{justfile()}} --working-directory . snapshot-diff" cargo insta review --workspace
+
+snapshot-diff old new:
+    @if [ -s "{{old}}" ]; then termlens diff --color=always "{{old}}" "{{new}}" || true; else termlens render --ansi "{{new}}" || true; fi

@@ -1,0 +1,33 @@
+---
+source: crates/tuigui_components/tests/cross.rs
+expression: __screen.with_styles()
+---
+size: 80x24  cursor: hidden
+
+
+
+
+
+
+
+
+
+
+                                       ✖
+
+                                   cross: up
+
+
+
+
+
+
+
+
+
+
+
+
+styles:
+10: 38-40 fg=1
+12: 35-43 fg=7

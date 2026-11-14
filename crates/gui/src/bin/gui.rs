@@ -15,6 +15,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gui = Gui::parse();
     // tokio's stdin, not `std::io`'s: the client reads this terminal as a stream, and the async
     // handle is the same descriptor with a future attached.
-    gui.run(tokio::io::stdin(), std::io::stdout()).await?;
-    Ok(())
+    //
+    // The exit is `std::process::exit` for the reason given next to the same call in `tuigui`:
+    // a read is parked on this terminal when the session ends, and dropping the runtime waits
+    // for it.
+    match gui.run(tokio::io::stdin(), std::io::stdout()).await {
+        Ok(()) => std::process::exit(0),
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    }
 }
