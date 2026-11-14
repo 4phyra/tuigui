@@ -21,16 +21,61 @@ and still be used from your terminal.
 
 Built on excellent crates:
 
-<p>
-  <a href="https://github.com/ratatui/ratatui"><img src="https://raw.githubusercontent.com/ratatui/ratatui/main/assets/logo.png" height="28" alt="ratatui"></a>&nbsp;
-  <a href="https://github.com/tokio-rs/tokio"><picture><source media="(prefers-color-scheme: dark)" srcset="https://cdn.simpleicons.org/tokio/ffffff"><img src="https://cdn.simpleicons.org/tokio" height="28" alt="tokio"></picture></a>&nbsp;
-  <a href="https://github.com/rkyv/rkyv"><img src="https://raw.githubusercontent.com/rkyv/rkyv/main/media/logo_color.svg" height="28" alt="rkyv"></a>&nbsp;
-  <a href="https://github.com/n0-computer/iroh"><img src="https://raw.githubusercontent.com/n0-computer/iroh/main/.img/iroh_wordmark.svg" height="20" alt="iroh"></a>&nbsp;
-  <a href="https://github.com/Smithay/smithay"><img src="https://raw.githubusercontent.com/Smithay/smithay.github.io/content/content/images/smithay_logo.svg" height="24" alt="smithay"></a>
-</p>
-
-<b>Built on excellent crates:</b> smithay, tokio, ratatui, crossterm, termina,
-vt100, keycode, iroh, rkyv, flume and rustix.
+<table>
+  <tr>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><img src="https://raw.githubusercontent.com/Smithay/smithay.github.io/content/content/images/smithay_logo.svg" width="34" alt=""></td>
+      <td><b>smithay</b><br><sub>the Wayland compositor</sub></td>
+    </tr></table></td>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><picture><source media="(prefers-color-scheme: dark)" srcset="https://cdn.simpleicons.org/tokio/ffffff"><img src="https://cdn.simpleicons.org/tokio" width="34" alt=""></picture></td>
+      <td><b>tokio</b><br><sub>async runtime</sub></td>
+    </tr></table></td>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><img src="https://raw.githubusercontent.com/ratatui/ratatui/main/assets/logo.png" width="34" alt=""></td>
+      <td><b>ratatui</b><br><sub>widgets and layout</sub></td>
+    </tr></table></td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><img src="https://github.com/crossterm-rs.png?size=64" width="34" alt=""></td>
+      <td><b>crossterm</b><br><sub>terminal I/O</sub></td>
+    </tr></table></td>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><img src="https://github.com/helix-editor.png?size=64" width="34" alt=""></td>
+      <td><b>termina</b><br><sub>input parsing</sub></td>
+    </tr></table></td>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><img src="https://github.com/doy.png?size=64" width="34" alt=""></td>
+      <td><b>vt100</b><br><sub>terminal emulation</sub></td>
+    </tr></table></td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><img src="https://github.com/dfrankland.png?size=64" width="34" alt=""></td>
+      <td><b>keycode</b><br><sub>physical key codes</sub></td>
+    </tr></table></td>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><img src="https://raw.githubusercontent.com/n0-computer/iroh/main/.img/iroh_wordmark.svg" width="34" alt=""></td>
+      <td><b>iroh</b><br><sub>QUIC transport</sub></td>
+    </tr></table></td>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><img src="https://raw.githubusercontent.com/rkyv/rkyv/main/media/logo_color.svg" width="34" alt=""></td>
+      <td><b>rkyv</b><br><sub>message format</sub></td>
+    </tr></table></td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><img src="https://github.com/zesterer.png?size=64" width="34" alt=""></td>
+      <td><b>flume</b><br><sub>channels</sub></td>
+    </tr></table></td>
+    <td width="33%" valign="top"><table><tr>
+      <td width="40"><img src="https://github.com/bytecodealliance.png?size=64" width="34" alt=""></td>
+      <td><b>rustix</b><br><sub>system calls</sub></td>
+    </tr></table></td>
+    <td width="33%"></td>
+  </tr>
+</table>
 
 ## License
 
