@@ -59,20 +59,12 @@ const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
 /// `transport` is the link the render path already bound and announced: it arrives once, and every
 /// window's servant keeps a clone of the connection, so each streams at its own pace.
 pub async fn run(
-    root_initializer: tokio::sync::oneshot::Sender<(Arc<CompositableWindow>, io::PipeReader)>,
+    root_initializer: tokio::sync::oneshot::Sender<(CompositableWindow, io::PipeReader)>,
     options: crate::windowing::Options,
     codec: codecs::CodecId,
     program: std::path::PathBuf,
     transport: tokio::sync::oneshot::Receiver<Box<dyn Transport>>,
 ) -> io::Result<()> {
-    // The link first: the dial is what starts the program, so a dial that never comes is a session
-    // that never runs. The announcement has already reached the terminal — the render path drew it
-    // before handing this over — so there is something for the other side to have dialed.
-    let transport = transport
-        .await
-        .map_err(|_| io::Error::other("the render path is gone: no link to accept on"))?;
-    let connection = transport.accept().await?;
-
     let mut windowing = PlatformWindowing::new(options, codec)?;
     windowing.spawn(&program)?;
     // The program's own words, for the screen that prints them. Taken once: a pipe has one reader.
@@ -80,14 +72,23 @@ pub async fn run(
         .take_stdout()
         .ok_or_else(|| io::Error::other("the program started without an output pipe"))?;
 
+    let recv_root = windowing.take_root()?;
+
+    // The link first: the dial is what starts the program, so a dial that never comes is a session
+    // that never runs. The announcement has already reached the terminal — the render path drew it
+    // before handing this over — so there is something for the other side to have dialed.
+    let connection = transport
+        .await
+        .map_err(|_| io::Error::other("the render path is gone: no link to accept on"))?
+        .accept()
+        .await?;
+
     // The window the program draws, and then every window it opens: one future, because the root is
     // simply the first window this session serves. It waits for the root itself rather than the
     // session, so the turn beside it can find the root: a wait holding the session would make the
     // very turn that answers it impossible.
-    let wait = windowing.take_root()?;
     let mut serve = std::pin::pin!(async move {
-        let root = wait.await?;
-        let (placed, servant) = serve_window(root, connection)?;
+        let (placed, servant) = serve_window(recv_root.await?, connection)?;
         root_initializer.send((placed, stdout)).map_err(|_| {
             io::Error::other("the root window was not wanted: the render path is gone")
         })?;
@@ -122,7 +123,7 @@ pub async fn run(
 fn serve_window(
     window: Box<dyn Compositable>,
     connection: Connection,
-) -> io::Result<(Arc<CompositableWindow>, Proxy)> {
+) -> io::Result<(CompositableWindow, Proxy)> {
     let (set_size, recv_set_size) = flume::unbounded();
     let (input, recv_input) = flume::unbounded();
     let (children, new_children) = flume::unbounded();
@@ -130,7 +131,7 @@ fn serve_window(
     let (close, recv_close) = flume::unbounded();
     let rank = Arc::new(AtomicU32::new(0));
 
-    let placed = Arc::new(CompositableWindow {
+    let placed = CompositableWindow {
         set_size,
         size: Arc::new(Mutex::new(window.size_px()?)),
         title: Arc::new(Mutex::new(window.title()?)),
@@ -142,17 +143,9 @@ fn serve_window(
         close,
         rank: rank.clone(),
         render: Box::new(paint_surface(window.surface())),
-    });
-
-    // The servant's own handle on the window it serves. The compositor holds a `Weak`, so without
-    // this the window would die as soon as the placement was made: its channel senders would drop
-    // with it, every `recv` below would answer `Err`, and a window that is only four frames old
-    // would be reported over. The servant is the right owner because its lifetime *is* the
-    // window's.
-    let alive = placed.clone();
+    };
 
     let servant = Box::pin(async move {
-        let _alive = alive;
         // Announced before anything is drawn: the far side places a picture on the cells carrying
         // its surface, and a frame for a surface it has never been told about is refused rather
         // than drawn. Said here because this is the first moment the link exists.
@@ -213,7 +206,8 @@ fn serve_window(
                     window.terminate()?;
                 }
                 // One of the windows this one opened is over. Nothing to place — the compositor
-                // learns that from its own `Weak` — so the news is only that a servant finished.
+                // learns it when the child's channel closes — so the news is only that a servant
+                // finished.
                 Some(ended) = futures.next() => ended?,
                 // The program committed a picture nobody typed to ask for. A window draws on its own
                 // clock and not on this side's events, so a frame has to be taken whether or not
@@ -262,8 +256,16 @@ fn paint_surface(
        + Sync {
     move |area, buf, _state| {
         let style = ratatui::style::Style::new()
-            .fg(ratatui::style::Color::Rgb(surface.fg.0, surface.fg.1, surface.fg.2))
-            .bg(ratatui::style::Color::Rgb(surface.bg.0, surface.bg.1, surface.bg.2));
+            .fg(ratatui::style::Color::Rgb(
+                surface.fg.0,
+                surface.fg.1,
+                surface.fg.2,
+            ))
+            .bg(ratatui::style::Color::Rgb(
+                surface.bg.0,
+                surface.bg.1,
+                surface.bg.2,
+            ));
         for row in area.y..area.bottom() {
             for column in area.x..area.right() {
                 if let Some(cell) = buf.cell_mut((column, row)) {

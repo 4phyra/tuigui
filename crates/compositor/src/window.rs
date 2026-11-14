@@ -4,7 +4,8 @@
 //! program, a link, a capture, a task waiting on the next commit — belongs to whoever started it,
 //! so it arrives here as the few facts placement needs and the channels that reach it.
 //!
-//! Nothing here names removal: a window is gone when the compositor's `Weak` to it goes stale.
+//! Removal is the channel's to say: when the serving side drops its senders, the receivers here
+//! close, and the compositor drops the placement that held them.
 
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
@@ -27,8 +28,8 @@ pub struct CompositableWindow {
     ///
     /// The compositor waits on both, so a window that opens another is placed the moment the
     /// program says so: nothing between the two has to notice and forward it.
-    pub new_children: flume::Receiver<Arc<CompositableWindow>>,
-    pub new_popups: flume::Receiver<Arc<CompositableWindow>>,
+    pub new_children: flume::Receiver<CompositableWindow>,
+    pub new_popups: flume::Receiver<CompositableWindow>,
     /// A request that this window close.
     ///
     /// A request and not a verdict: the program is told and decides, and only a client that

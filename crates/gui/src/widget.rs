@@ -120,7 +120,7 @@ impl MainWidget {
     /// The program's window is up, and its output has somewhere to go.
     pub fn from_any_to_windows(
         &mut self,
-        root: std::sync::Arc<compositor::CompositableWindow>,
+        root: compositor::CompositableWindow,
         stdout: std::io::PipeReader,
     ) {
         self.session.from_any_to_windows(root, stdout);

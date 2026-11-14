@@ -19,7 +19,6 @@ use ratatui::text::Line;
 use ratatui::widgets::{StatefulWidget, Widget};
 use ringbuf::traits::{Consumer as _, Observer as _, Producer as _, Split as _};
 use std::io::BufRead as _;
-use std::sync::Arc;
 
 use compositor::{CompositableWindow, Compositor};
 
@@ -198,10 +197,10 @@ impl Stage {
     /// it: they belong to the screen the window is on.
     pub fn from_any_to_windows(
         &mut self,
-        root: Arc<CompositableWindow>,
+        root: CompositableWindow,
         stdout: std::io::PipeReader,
     ) {
-        let compositor = Compositor::new(Arc::downgrade(&root));
+        let compositor = Compositor::new(root);
         self.page = Page::Stream {
             compositor,
             stdout: ring(stdout),
