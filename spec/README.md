@@ -5,68 +5,56 @@ Status: built. This is the shape of the "Built on excellent crates" block in
 
 ## What it looks like
 
-One box per crate. A box is split by a vertical line: the logo fills the left
-cell, the crate's name and its job sit in the right cell.
+One item per crate, two rows:
+
+- **r0** — a large logo on the left, the crate's name in bold beside it.
+- **r1** — the description, on one line, under the name.
+
+No borders, no boxes, no dividers. Everything sits bottom-left.
 
 ```
-┌──┬───────────────────┐ ┌────┬──────────┐ ┌──┬─────────────────┐ ┌────┬────────────┐
-│▣ │ smithay           │ │ ▣  │ tokio    │ │▣ │ ratatui         │ │ ▣  │ crossterm  │
-│  │ the Wayland comp. │ │    │ async    │ │  │ widgets, layout │ │    │ terminal I/O│
-└──┴───────────────────┘ └────┴──────────┘ └──┴─────────────────┘ └────┴────────────┘
+   ████████                 ▣                 ▣
+   ████████   smithay       ▣      tokio      ▣      ratatui
 
-┌──┬────────────────┐ ┌──┬───────────────┐ ┌────┬───────────────────┐
-│▣ │ termina        │ │▣ │ vt100         │ │ ▣  │ keycode           │
-│  │ input parsing  │ │  │ emulation     │ │    │ physical key codes│
-└──┴────────────────┘ └──┴───────────────┘ └────┴───────────────────┘
-
-┌────────────────────┬──────────────────┐ ┌──┬──────────────┐ ┌──┬──────────────┐
-│      i r o h       │ iroh             │ │▣ │ rkyv         │ │▣ │ flume        │
-│                    │ QUIC transport   │ │  │ message fmt  │ │  │ channels     │
-└────────────────────┴──────────────────┘ └──┴──────────────┘ └──┴──────────────┘
-
-┌──┬────────────────┐
-│▣ │ rustix         │
-│  │ system calls   │
-└──┴────────────────┘
+   the Wayland compositor   async runtime     widgets and layout
 ```
 
 ## The rules
 
-- **Equal height, natural width.** Every logo is drawn at the same height
-  (`height="26"`). Nothing sets a width, so each cell is as wide as that image's
-  aspect ratio makes it: square marks get a narrow cell, iroh's wordmark a wide
-  one, and the whole box with it. A box never forces its logo to letterbox.
-- **The logo fills its cell.** The cell carries no width of its own, so the image
-  is the cell's content size, not something shrunk inside it.
-- **Boxes wrap as a unit.** The gap between boxes is `&emsp;&emsp;`, and the
-  entries flow, so a narrow window gives three, two or one per row and never
-  splits a box.
-- **The name is bold, the job is `<sub>`.** Two lines in the text cell, top and
-  bottom, vertically centred against the logo.
+- **The logo is big.** It is the thing worth looking at, so it is drawn large
+  (not a 16px icon) and gets the room that implies.
+- **The logo keeps its own aspect ratio.** No width is set, so a wide wordmark
+  such as iroh's makes a wider item than a square mark does.
+- **The description never wraps.** It is one line, and it starts under the name,
+  not under the logo.
+- **Items flow and wrap as a unit**, so a narrow window gives two or one across
+  and never splits an item.
+- **No borders.** The boxes in early sketches were only there to mark the cells;
+  they are not part of the design.
 
-## Why it is tables and not flex or CSS
+## Can this be built?
 
-GitHub's `.markdown-body` stylesheet gives every `th`/`td` a
-`1px solid var(--borderColor-default)` border and `6px 13px` of padding, with no
-class or id hook, and it strips `style`, `<style>`, `class` and `id` from
-rendered markdown. So:
+Partly. The layout itself is reachable; the borderless two-row cell structure is
+not, because of how GitHub renders markdown.
 
-- The vertical split line and the box outline are that forced cell border. They
-  cannot be removed, and here they are the thing being asked for.
-- `border="0"`, `cellspacing`, `cellpadding` and `frame="void"` either are
-  stripped or lose to the stylesheet, so a borderless box is not reachable.
-- The 13px horizontal padding inside each cell is likewise fixed.
+Reachable:
 
-The consequence worth knowing: the vertical rule is the shared edge between the
-two cells, the outer box is the table's own border, and both come from GitHub
-rather than from this repository.
+- a large inline logo with a bold name beside it, then the description under it —
+  all inside one `<p>`, no table needed;
+- logos at their natural aspect ratio at a shared height;
+- items flowing side by side and wrapping.
 
-## What not to do
+Not reachable on GitHub:
 
-- Do not set `width` on a logo. It equalises the cells and makes a wide wordmark
-  letterbox, which is the failure this layout exists to avoid.
-- Do not replace the per-entry table with a single outer table. One table means
-  equal-width columns, and the whole point is that each box is sized by its own
-  logo and text.
-- Do not add a spacer cell for the gap. Empty cells draw their borders, so the
-  gap becomes a visible empty box.
+- **A true two-row cell.** Aligning the description under the *name* while the
+  logo spans both rows needs a table with `colspan`/`rowspan`, and GitHub gives
+  every `td` a forced `1px solid` border and `6px 13px` padding that no markup
+  can remove (`style`, `<style>`, `class` and `id` are stripped; `border="0"`,
+  `cellspacing` and `cellpadding` are stripped or lose to the stylesheet).
+- **A description that starts exactly under the name** without those cells. With
+  inline flow the description starts wherever the line lies, so on a wrapped
+  item it begins under the logo instead.
+
+So the honest build is: big logo, bold name beside it, description on the next
+line — visually the same as the sketch, without the guaranteed left alignment of
+the description against the name on every wrapped item.
