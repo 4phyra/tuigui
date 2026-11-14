@@ -66,7 +66,20 @@ pub async fn run(
             next = slave_stdout.next() => {
                 // `transpose` keeps the two answers apart: a finished stream ends the session, and a
                 // failed read ends it with the reason it failed.
-                let Some(next) = next.transpose()? else {
+                let next = match next.transpose() {
+                    Ok(next) => next,
+                    // A pty master reads `EIO`, not end-of-file, once the last slave is closed
+                    // (`pty(7)`): there is no command left to read from, which is the ordinary end
+                    // of a session. Reported, every clean exit would look like a failed one.
+                    Err(e)
+                        if e.raw_os_error()
+                            == Some(rustix::io::Errno::IO.raw_os_error()) =>
+                    {
+                        return Ok(())
+                    }
+                    Err(e) => return Err(e),
+                };
+                let Some(next) = next else {
                     return Ok(());
                 };
 

@@ -295,7 +295,13 @@ impl Gui {
                 // The program is over, on either half of it: there is nothing left to draw.
                 ended = &mut client => {
                     log::info!("run: the client ended");
-                    return ended;
+                    // The program is over, so the stream's screen is over too, whether it
+                    // finished or failed. The alternate screen belongs to this side, and the
+                    // frame that leaves it has to be drawn here: this arm's future has just
+                    // finished, so there is no later turn that could draw it.
+                    main_widget.finish();
+                    log::info!("run: the session is over");
+                    return ended.and(main_widget.render());
                 }
                 // A key or a press: this terminal's own bytes, parsed into the events the loop hands
                 // to the program's windows and then to the dock. One read per turn, because a read

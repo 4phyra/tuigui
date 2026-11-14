@@ -1,0 +1,33 @@
+---
+source: crates/tuigui_components/tests/button.rs
+expression: __screen.with_styles()
+---
+size: 80x24  cursor: hidden
+
+
+
+
+
+
+
+
+
+
+                                  ▕ Press me ▏
+
+                                   clicks: 1
+
+
+
+
+
+
+
+
+
+
+
+
+styles:
+10: 34 fg=#ff87c3; 35 bg=#ff87c3; 36-43 bg=#ff87c3 bold; 44 bg=#ff87c3; 45 fg=#ff87c3
+12: 35-43 fg=7

@@ -24,8 +24,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // tokio's stdin, not `std::io`'s: the client reads this terminal as a stream, and the async
         // handle is the same descriptor with a future attached, so the draw loop can wait on a key
         // and on the program in one `select!`.
-        gui.run(tokio::io::stdin(), std::io::stdout()).await?;
-        return Ok(());
+        //
+        // The exit is `std::process::exit`, not `Ok(())`, because the runtime cannot be dropped:
+        // tokio's stdin read is a blocking task, and the one in flight when the session ends is
+        // parked on this pty, whose master the server still holds on the other side. It will
+        // never return input or end-of-file, and dropping the runtime waits for it — the process
+        // would hang here after the session is already over.
+        //
+        // Both outcomes exit here. Returning the error through `main` would drop the runtime too,
+        // and wait on the same read.
+        match gui.run(tokio::io::stdin(), std::io::stdout()).await {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 
     #[cfg(feature = "tracy")]

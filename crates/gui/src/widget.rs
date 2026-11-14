@@ -131,6 +131,18 @@ impl MainWidget {
         self.session.done()
     }
 
+    /// The program is over, however it ended.
+    ///
+    /// The frame that crosses back to the terminal's own screen is still owed: the
+    /// alternate screen is this side's, and leaving it is a draw, not a drop. Called
+    /// from the arm that saw the program end, because the future that would have
+    /// drawn the next frame is the one that just finished.
+    pub fn finish(&mut self) {
+        if let Ok(stage) = &mut self.session.stage.0 {
+            stage.from_any_to_exiting();
+        }
+    }
+
     /// One frame: the screen the session is on, and the program's words where they belong.
     ///
     /// The span is here and not around the caller: this is the one call that knows what a frame is

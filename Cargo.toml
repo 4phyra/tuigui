@@ -201,3 +201,13 @@ tokio = { workspace = true }
 log = { workspace = true, optional = true }
 # `prctl(PR_SET_NAME)`: the kernel's name for this process, which a process list shows.
 rustix = { workspace = true, features = ["thread"], optional = true }
+
+[dev-dependencies]
+# The terminal these tests drive: a pty, the grid the bytes produce, and the
+# kitty graphics payloads a session transmits. The same terminal `gui`'s own
+# tests read, so both suites read a session the one way. No `insta` and no
+# `decode`: the screens are asserted on their cells and the pictures on what
+# the wire carried, neither of which needs a snapshot file or a decoder. The
+# components crate turns `insta` back on for its own snapshot tests, in a
+# dev-dependency of its own.
+termlens = { version = "0.11", default-features = false }

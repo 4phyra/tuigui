@@ -17,3 +17,10 @@ rustix = { workspace = true }
 [[bin]]
 name = "gallery"
 path = "src/bin/gallery.rs"
+
+[dev-dependencies]
+# The gallery as a user meets it: started in a real pty, sent one event at a
+# time, and snapshotted after each. Default features, because the `insta` half
+# of termlens is what turns a screen into a picture a reviewer can look at;
+# the session suites at the root turn it off for their own dep.
+termlens = "0.11"
