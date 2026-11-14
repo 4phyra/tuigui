@@ -1,5 +1,9 @@
 use super::*;
 
+/// The claims every transport owes, shared with the other channel's tests.
+#[path = "pending_read.rs"]
+mod pending_read;
+
 /// The announcement a host writes parses back into the peer it names.
 ///
 /// The round trip is the whole contract between the two sides: one writes text into a
@@ -7,7 +11,9 @@ use super::*;
 /// ticket that did not survive that is a session nothing can dial.
 #[tokio::test]
 async fn an_announcement_names_the_endpoint_it_came_from() {
-    let host = P2p::host().await.expect("an endpoint binds");
+    let host = <P2p as Transport>::new()
+        .await
+        .expect("an endpoint binds");
     let magic = host.to_magic().expect("a bound endpoint has an address");
     let (name, address) = magic
         .split_once(crate::transport::ANNOUNCE_SEPARATOR)
@@ -22,6 +28,21 @@ async fn an_announcement_names_the_endpoint_it_came_from() {
         host_addr,
         "the ticket that was written is the ticket that was read"
     );
+}
+
+/// The second channel, through the two claims every transport owes.
+///
+/// A real QUIC link between two endpoints on this machine, so this is the ordering the session
+/// depends on rather than a local imitation of it.
+#[tokio::test]
+async fn the_handshake_completes_from_both_sides() {
+    pending_read::the_handshake_completes(<P2p as Transport>::new().await.expect("listen")).await;
+}
+
+#[tokio::test]
+async fn a_pending_read_does_not_block_a_send() {
+    pending_read::a_pending_read_does_not_block_a_send(<P2p as Transport>::new().await.expect("listen"))
+        .await;
 }
 
 /// A name that is not ours is not an error, it is somebody else's announcement.

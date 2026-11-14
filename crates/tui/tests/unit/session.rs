@@ -2,7 +2,7 @@ use super::*;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use wire::transport::Transport as _;
+use wire::transport::{Transport, Connection};
 use wire::unix::UnixSocket;
 
 /// The window the tests paint into: its surface is its identity, and that is what a
@@ -75,16 +75,22 @@ fn codec_frame(width: u32, height: u32) -> Vec<u8> {
 
 /// A connection to throw away, so a session can be built.
 ///
-/// The link is not what these tests are about, but a session cannot exist
-/// without one: it is the thing a session is attached to.
-async fn connection(dir: &std::path::Path) -> Connection {
-    let _ = std::fs::remove_dir_all(dir);
-    let path = dir.join("s.sock");
-    let bound = UnixSocket::new(&path);
-    bound.bind().await.expect("bind");
-    let dialer = UnixSocket::new(&path);
-    let (accepted, _dialed) = tokio::join!(bound.accept(), dialer.connect());
-    accepted.expect("accept")
+/// The link is not what these tests are about, but a session cannot exist without one: it is the
+/// thing a session is attached to. Both halves come back, because a session answers what it is
+/// told — a peer dropped here would make every answer a broken pipe rather than the message.
+async fn connection<T: Transport + 'static>() -> (Connection, Connection) {
+    let host = T::new().await.expect("a transport hosts at its own address");
+    let magic = host.to_magic().expect("a hosted transport announces itself");
+    let (name, address) = magic
+        .split_once(wire::transport::ANNOUNCE_SEPARATOR)
+        .expect("an announcement is a name, a separator and an address");
+    let dialer = T::from_magic(name, address).expect("our own announcement reads back");
+
+    let (accepted, dialed) = tokio::join!(host.accept(), dialer.connect());
+    (
+        accepted.expect("the accepting side establishes"),
+        dialed.expect("the dialing side establishes"),
+    )
 }
 
 /// Where the one window is: the cells the scan would have found it on.
@@ -137,12 +143,17 @@ async fn every_frame_reuses_one_id_and_places_itself_again() {
         "this test installs the only sink in the process"
     );
 
-    let dir = std::env::temp_dir().join(format!("tui-session-{}", std::process::id()));
-    let mut session = Session::<easytgp::Shm>::new(
-        connection(&dir).await,
-        Arc::new(DebugOptions::default()),
-        controller,
-    );
+    let (mut session, _peer) = {
+        let (accepted, peer) = connection::<UnixSocket>().await;
+        (
+            Session::<easytgp::Shm>::new(
+                accepted,
+                Arc::new(DebugOptions::default()),
+                controller,
+            ),
+            peer,
+        )
+    };
     // The window, which brings its codec with it. A frame names only its surface, so a session
     // that has not been told about that window has nowhere to paint it.
     session
@@ -237,6 +248,4 @@ async fn every_frame_reuses_one_id_and_places_itself_again() {
         second.contains("p=98"),
         "under the same placement id: {second:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

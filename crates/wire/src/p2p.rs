@@ -40,7 +40,7 @@ use tokio::sync::Mutex;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::message::Message;
-use crate::transport::{framed_read, framed_write, BoxFuture, Connection, MessageCodec, Transport};
+use crate::transport::{framed_read, framed_write, Connection, MessageCodec, Transport};
 
 /// Stable key for this transport, as it appears in an announcement.
 pub const NAME: &str = "p2p";
@@ -75,16 +75,20 @@ pub struct P2p {
     /// connection made through it. A tokio mutex because it is bound under an await.
     endpoint: Arc<Mutex<Option<Endpoint>>>,
     /// The link, once there is one.
-    link: Arc<Mutex<Option<Link>>>,
+    ///
+    /// Swapped in once by [`P2p::adopt`] and read by every send and receive, so a read or a write
+    /// waits for nothing but its own direction.
+    link: Arc<arc_swap::ArcSwapOption<Link>>,
 }
 
 /// The connected half: the two directions of one bidirectional QUIC stream.
 ///
-/// No split here, unlike a unix socket: QUIC hands out the two directions separately, so
-/// a read and a write are already different objects and neither holds up the other.
+/// No split is needed here, unlike a unix socket: QUIC hands out the two directions separately,
+/// so a read and a write are already different objects. A lock each, so that holding one for a
+/// wait — which a read does — never holds off the other.
 struct Link {
-    read: FramedRead<iroh::endpoint::RecvStream, MessageCodec>,
-    write: FramedWrite<iroh::endpoint::SendStream, MessageCodec>,
+    read: Mutex<FramedRead<iroh::endpoint::RecvStream, MessageCodec>>,
+    write: Mutex<FramedWrite<iroh::endpoint::SendStream, MessageCodec>>,
 }
 
 impl P2p {
@@ -110,7 +114,7 @@ impl P2p {
             // Bound already, which is the whole point of this constructor: what `to_magic`
             // reads and what `accept` waits on are the same endpoint.
             endpoint: Arc::new(Mutex::new(Some(endpoint))),
-            link: Arc::new(Mutex::new(None)),
+            link: Arc::new(arc_swap::ArcSwapOption::empty()),
         })
     }
 
@@ -143,10 +147,10 @@ impl P2p {
     ///
     /// Shared by dialing and accepting, which differ only in who opened the stream.
     async fn adopt(&self, (send, recv): (iroh::endpoint::SendStream, iroh::endpoint::RecvStream)) {
-        *self.link.lock().await = Some(Link {
-            read: framed_read(recv),
-            write: framed_write(send),
-        });
+        self.link.store(Some(Arc::new(Link {
+            read: Mutex::new(framed_read(recv)),
+            write: Mutex::new(framed_write(send)),
+        })));
     }
 
     /// What this transport calls itself, for the greeting.
@@ -158,9 +162,18 @@ impl P2p {
     }
 }
 
+#[async_trait::async_trait]
 impl Transport for P2p {
     fn name(&self) -> &'static str {
         NAME
+    }
+
+    /// A transport hosting at the address this channel uses when nobody named one.
+    ///
+    /// Bound here because `to_magic` has to name an address a peer can dial, and an endpoint's key
+    /// is minted at bind time: until there is one there is nothing to announce.
+    async fn new() -> io::Result<Self> {
+        Self::host().await
     }
 
     /// The address to dial, as the text an announcement carries.
@@ -196,7 +209,7 @@ impl Transport for P2p {
         Some(Self {
             peer: Some(ticket.into()),
             endpoint: Arc::new(Mutex::new(None)),
-            link: Arc::new(Mutex::new(None)),
+            link: Arc::new(arc_swap::ArcSwapOption::empty()),
         })
     }
 
@@ -208,35 +221,33 @@ impl Transport for P2p {
     /// told. Sending the [`Message::Ping`] is that first move, and it is the handshake's
     /// anyway.
     #[tracing::instrument(name = "msg.connect", skip_all)]
-    fn connect(&self) -> BoxFuture<'_, io::Result<Connection>> {
-        Box::pin(async move {
-            let peer = self
-                .peer
-                .clone()
-                .ok_or_else(|| io::Error::other("this transport was never given an address"))?;
-            // Named before the connection takes it: `connect` consumes the address, and the
-            // label is a fact about the peer rather than about the connection.
-            let label = Self::label(&peer);
-            let endpoint = self.endpoint().await?;
-            let conn = endpoint
-                .connect(peer, ALPN)
-                .await
-                .map_err(|e| io::Error::other(format!("could not reach the peer: {e}")))?;
-            let stream = conn
-                .open_bi()
-                .await
-                .map_err(|e| io::Error::other(format!("could not open a stream: {e}")))?;
-            self.adopt(stream).await;
+    async fn connect(&self) -> io::Result<Connection> {
+        let peer = self
+            .peer
+            .clone()
+            .ok_or_else(|| io::Error::other("this transport was never given an address"))?;
+        // Named before the connection takes it: `connect` consumes the address, and the
+        // label is a fact about the peer rather than about the connection.
+        let label = Self::label(&peer);
+        let endpoint = self.endpoint().await?;
+        let conn = endpoint
+            .connect(peer, ALPN)
+            .await
+            .map_err(|e| io::Error::other(format!("could not reach the peer: {e}")))?;
+        let stream = conn
+            .open_bi()
+            .await
+            .map_err(|e| io::Error::other(format!("could not open a stream: {e}")))?;
+        self.adopt(stream).await;
 
-            self.send(&Message::Ping(label)).await?;
-            match self.recv().await? {
-                Some(Message::Pong) => Ok(Connection::new(self.clone())),
-                Some(other) => Err(io::Error::other(format!(
-                    "a peer answered the greeting with {other:?}"
-                ))),
-                None => Err(io::Error::other("a peer never answered the greeting")),
-            }
-        })
+        self.send(&Message::Ping(label)).await?;
+        match self.recv().await? {
+            Some(Message::Pong) => Ok(Connection::new(self.clone())),
+            Some(other) => Err(io::Error::other(format!(
+                "a peer answered the greeting with {other:?}"
+            ))),
+            None => Err(io::Error::other("a peer never answered the greeting")),
+        }
     }
 
     /// Wait for a peer to dial, answer its greeting, and return the link.
@@ -245,46 +256,43 @@ impl Transport for P2p {
     /// accepted only once the peer has written on it, so the greeting arrives with the
     /// news that there is a stream to answer on.
     #[tracing::instrument(name = "msg.accept", skip_all)]
-    fn accept(&self) -> BoxFuture<'_, io::Result<Connection>> {
-        Box::pin(async move {
-            let endpoint = self.endpoint().await?;
-            let incoming = endpoint
-                .accept()
-                .await
-                .ok_or_else(|| io::Error::other("this endpoint stopped accepting"))?;
-            let conn = incoming
-                .await
-                .map_err(|e| io::Error::other(format!("a peer did not complete the handshake: {e}")))?;
-            let stream = conn
-                .accept_bi()
-                .await
-                .map_err(|e| io::Error::other(format!("could not accept a stream: {e}")))?;
-            self.adopt(stream).await;
+    async fn accept(&self) -> io::Result<Connection> {
+        let endpoint = self.endpoint().await?;
+        let incoming = endpoint
+            .accept()
+            .await
+            .ok_or_else(|| io::Error::other("this endpoint stopped accepting"))?;
+        let conn = incoming
+            .await
+            .map_err(|e| io::Error::other(format!("a peer did not complete the handshake: {e}")))?;
+        let stream = conn
+            .accept_bi()
+            .await
+            .map_err(|e| io::Error::other(format!("could not accept a stream: {e}")))?;
+        self.adopt(stream).await;
 
-            match self.recv().await? {
-                // The greeting. Answering it is what completes the handshake, and until it
-                // is answered the other end is still waiting.
-                Some(Message::Ping(_)) => {
-                    self.send(&Message::Pong).await?;
-                    Ok(Connection::new(self.clone()))
-                }
-                Some(other) => Err(io::Error::other(format!(
-                    "a peer's first message was {other:?}, not a greeting"
-                ))),
-                None => Err(io::Error::other("a peer connected but never greeted")),
+        match self.recv().await? {
+            // The greeting. Answering it is what completes the handshake, and until it
+            // is answered the other end is still waiting.
+            Some(Message::Ping(_)) => {
+                self.send(&Message::Pong).await?;
+                Ok(Connection::new(self.clone()))
             }
-        })
+            Some(other) => Err(io::Error::other(format!(
+                "a peer's first message was {other:?}, not a greeting"
+            ))),
+            None => Err(io::Error::other("a peer connected but never greeted")),
+        }
     }
 
     #[tracing::instrument(name = "msg.send", skip_all)]
-    fn send<'a>(&'a self, message: &'a Message) -> BoxFuture<'a, io::Result<()>> {
-        Box::pin(async move {
-            let mut link = self.link.lock().await;
-            let link = link
-                .as_mut()
-                .ok_or_else(|| io::Error::other("this transport has no link yet"))?;
-            link.write.send(message.clone()).await
-        })
+    async fn send(&self, message: &Message) -> io::Result<()> {
+        let link = self
+            .link
+            .load_full()
+            .ok_or_else(|| io::Error::other("this transport has no link yet"))?;
+        let sent = link.write.lock().await.send(message.clone()).await;
+        sent
     }
 
     /// Read one message, waiting for a whole one.
@@ -293,43 +301,17 @@ impl Transport for P2p {
     /// instant it was asked would be asking before the peer had a chance to write.
     /// `None` means the peer finished the stream, which is the normal end of a session.
     #[tracing::instrument(name = "msg.recv", skip_all)]
-    fn recv(&self) -> BoxFuture<'_, io::Result<Option<Message>>> {
-        Box::pin(async move {
-            let mut guard = self.link.lock().await;
-            let link = guard
-                .as_mut()
-                .ok_or_else(|| io::Error::other("this transport has no link yet"))?;
-            match link.read.next().await {
-                Some(Ok(message)) => Ok(Some(message)),
-                Some(Err(e)) => Err(e),
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Read one message, but do not wait for one.
-    ///
-    /// Polled straight through to the codec, which is where a half-arrived message is kept:
-    /// nothing is created here, so having nothing to read leaves what has been read where it
-    /// was. That is what makes this different from cancelling [`Transport::recv`].
-    ///
-    /// `None` for a quiet link. A busy lock is reported as quiet rather than waited on:
-    /// there is one reader per connection, so a lock this caller cannot take is a message
-    /// another reader is in the middle of, not one about to be lost.
-    fn recv_next(&self) -> io::Result<Option<Message>> {
-        let mut guard = match self.link.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => return Ok(None),
-        };
-        let link = guard
-            .as_mut()
+    async fn recv(&self) -> io::Result<Option<Message>> {
+        let link = self
+            .link
+            .load_full()
             .ok_or_else(|| io::Error::other("this transport has no link yet"))?;
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        match link.read.poll_next_unpin(&mut context) {
-            std::task::Poll::Ready(Some(r)) => r.map(Some),
-            std::task::Poll::Ready(None) => Ok(None),
-            std::task::Poll::Pending => Ok(None),
-        }
+        let heard = match link.read.lock().await.next().await {
+            Some(Ok(message)) => Ok(Some(message)),
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
+        };
+        heard
     }
 }
 

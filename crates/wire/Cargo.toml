@@ -14,6 +14,13 @@ cell_map = { workspace = true }
 # `io-util` for the socket; `net` for the unix socket itself; `sync` for the
 # mutexes a transport holds its link behind; `rt` and `macros` for what drives it.
 tokio = { version = "1", features = ["io-util", "net", "sync", "rt", "macros", "time"] }
+# `async fn` in the transport trait, which a session holds as `dyn`: the macro turns each method
+# into a boxed future, which is the shape a vtable can hold.
+async-trait = { workspace = true }
+# The link a transport adopts, swapped in once and read by every send and receive: a pointer
+# swap rather than a lock, because that lock would be taken on every message to answer a
+# question that has one answer for the life of the connection.
+arc-swap = { workspace = true }
 # The framed transport: a byte stream becomes a Stream of messages and a Sink
 # for them, with the length prefix and the reassembly it implies. This replaces
 # the framing this crate used to hand-roll, and it is generic over every

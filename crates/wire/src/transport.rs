@@ -192,19 +192,6 @@ impl Connection {
     pub async fn recv(&self) -> io::Result<Option<Message>> {
         self.transport.recv().await
     }
-
-    /// Read one message, but do not wait for one.
-    ///
-    /// `None` means nothing is waiting yet, which is a fact rather than an error: the caller does
-    /// its work and asks again. It says nothing about the peer — a closed link is an `Err`, so a
-    /// caller can tell "quiet" from "gone".
-    ///
-    /// Stopping here loses nothing: what has been read of a half-arrived message lives in the
-    /// transport's own codec, which outlives this call, rather than in a future that would be
-    /// dropped. That is what makes this different from cancelling [`Connection::recv`].
-    pub fn recv_next(&self) -> io::Result<Option<Message>> {
-        self.transport.recv_next()
-    }
 }
 
 impl std::fmt::Debug for Connection {
@@ -223,10 +210,21 @@ impl std::fmt::Debug for Connection {
 /// clients — puts the routing inside itself. That is why sending and receiving are methods
 /// here rather than on the link: they have to consult the routing, and the routing is the
 /// transport's.
+#[async_trait::async_trait]
 pub trait Transport: Send + Sync {
     /// Stable key. Matched against an announcement, and how a caller selects this
     /// transport by name.
     fn name(&self) -> &'static str;
+
+    /// A transport hosting at the address this channel uses when nobody named one.
+    ///
+    /// The counterpart of [`Transport::from_magic`]: this side picks the address, the other side
+    /// reads it out of an announcement — so a transport is only made here once it is *reachable*,
+    /// because `to_magic` has to name an address a peer can dial. Binding is what the async is
+    /// for: a listener is not an address until something is listening on it.
+    async fn new() -> io::Result<Self>
+    where
+        Self: Sized;
 
     /// Where this transport is reachable, as the text that goes in an announcement.
     ///
@@ -262,7 +260,7 @@ pub trait Transport: Send + Sync {
     /// The greeting is here and not in the caller because it is not optional: a peer that
     /// never answers is not a peer, and the half that owns the channel is the half that knows
     /// how to wait on it.
-    fn connect(&self) -> BoxFuture<'_, io::Result<Connection>>;
+    async fn connect(&self) -> io::Result<Connection>;
 
     /// Wait for a peer to connect, and establish the link.
     ///
@@ -273,7 +271,7 @@ pub trait Transport: Send + Sync {
     /// The answering is here for the same reason the greening is there: a channel whose
     /// greeting was never answered is a channel the other end is still waiting on, and the
     /// half that holds the link is the half that must not leave it hanging.
-    fn accept(&self) -> BoxFuture<'_, io::Result<Connection>>;
+    async fn accept(&self) -> io::Result<Connection>;
 
     /// Send one message.
     ///
@@ -282,7 +280,7 @@ pub trait Transport: Send + Sync {
     /// The message gets its own lifetime rather than sharing `&self`'s: the returned future
     /// borrows both, and one `'_` for two inputs is the ambiguity that makes an implementor's
     /// `async move` fail to name what it returns.
-    fn send<'a>(&'a self, message: &'a Message) -> BoxFuture<'a, io::Result<()>>;
+    async fn send(&self, message: &Message) -> io::Result<()>;
 
     /// Read one message, waiting for a whole one.
     ///
@@ -292,18 +290,7 @@ pub trait Transport: Send + Sync {
     /// peer is gone — so this waits, and a caller that cannot wait is the one that is wrong.
     ///
     /// `Ok(None)` means the peer closed between messages, which is the normal end of one.
-    fn recv(&self) -> BoxFuture<'_, io::Result<Option<Message>>>;
-
-    /// Read one message, but do not wait for one.
-    ///
-    /// `None` means nothing is waiting yet, which is a fact rather than an error: the caller does
-    /// its work and asks again. It says nothing about the peer — a closed link is an `Err`, so a
-    /// caller can tell "quiet" from "gone".
-    ///
-    /// Stopping here loses nothing: what has been read of a half-arrived message lives in the
-    /// transport's own codec, which outlives this call, rather than in a future that would be
-    /// dropped. That is what makes this different from cancelling [`Transport::recv`].
-    fn recv_next(&self) -> io::Result<Option<Message>>;
+    async fn recv(&self) -> io::Result<Option<Message>>;
 }
 
 /// An in-process pair of streams, for a session with both halves in one program.

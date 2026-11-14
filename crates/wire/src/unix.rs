@@ -28,7 +28,7 @@ use tokio::sync::Mutex;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::message::Message;
-use crate::transport::{framed_read, framed_write, BoxFuture, Connection, MessageCodec, Transport};
+use crate::transport::{framed_read, framed_write, Connection, MessageCodec, Transport};
 
 /// Stable key for this transport, as it appears in an announcement.
 pub const NAME: &str = "unix";
@@ -50,9 +50,9 @@ pub struct UnixSocket {
     listener: Arc<Mutex<Option<Arc<tokio::net::UnixListener>>>>,
     /// The link, once there is one.
     ///
-    /// A tokio mutex because reading and writing are awaited while it is held, so the lock
-    /// must be `Send`.
-    link: Arc<Mutex<Option<Link>>>,
+    /// Swapped in once by [`UnixSocket::adopt`] and read by every send and receive, so a read or a
+    /// write waits for nothing but its own direction: the two halves have their own locks.
+    link: Arc<arc_swap::ArcSwapOption<Link>>,
 }
 
 /// The connected half: the stream, split so a read never holds up a write.
@@ -60,46 +60,65 @@ pub struct UnixSocket {
 /// The two halves are one socket behind two `Arc`s, and each carries its own
 /// half of the codec: a read that returns fewer bytes than a message holds is
 /// the codec library's problem, not this file's.
+///
+/// A lock per direction, which is the point rather than a detail: a session reads and writes at
+/// the same time, and one lock for both means a read waiting for the peer holds off the very
+/// write the peer is waiting for.
 struct Link {
-    read: FramedRead<ReadHalf<tokio::net::UnixStream>, MessageCodec>,
-    write: FramedWrite<tokio::io::WriteHalf<tokio::net::UnixStream>, MessageCodec>,
+    read: Mutex<FramedRead<ReadHalf<tokio::net::UnixStream>, MessageCodec>>,
+    write: Mutex<FramedWrite<tokio::io::WriteHalf<tokio::net::UnixStream>, MessageCodec>>,
 }
 
 impl UnixSocket {
-    pub fn new(path: impl Into<PathBuf>) -> Self {
+    /// A socket at `path`, listening.
+    ///
+    /// Binding is part of making one: an address nothing listens at is not an address a peer can
+    /// dial, and every use of this is followed by `bind` or was a caller that forgot to.
+    pub async fn at(path: impl Into<PathBuf>) -> io::Result<Self> {
+        let socket = Self {
+            path: path.into(),
+            listener: Arc::new(Mutex::new(None)),
+            link: Arc::new(arc_swap::ArcSwapOption::empty()),
+        };
+        socket.bind().await?;
+        Ok(socket)
+    }
+
+    /// A socket at `path` that is not listening, for a caller that will bind it itself.
+    ///
+    /// Only for the paths `Transport::new` walks when it finds the standard address taken: it has
+    /// to try a bind and see, so it cannot use [`UnixSocket::at`].
+    fn unbound(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
             listener: Arc::new(Mutex::new(None)),
-            link: Arc::new(Mutex::new(None)),
+            link: Arc::new(arc_swap::ArcSwapOption::empty()),
         }
     }
 
-    /// The path this channel is at when nobody chose one.
+    /// The paths a fresh socket may listen at, in the order to try them.
     ///
-    /// One fixed name under `XDG_RUNTIME_DIR`, so both halves of a session can write it down
-    /// without a scan, and not under `/tmp`: a socket there is reachable by every user on the
-    /// machine, and this is the platform's directory for exactly this. A session with no such
-    /// directory has no private place to put a socket, and a public one is not a substitute —
-    /// hence the error rather than a fallback.
-    fn socket_path() -> io::Result<PathBuf> {
-        let dir = std::env::var("XDG_RUNTIME_DIR").map_err(|e| {
-            io::Error::other(format!(
-                "the unix channel needs XDG_RUNTIME_DIR to find a private directory: {e}"
-            ))
-        })?;
-        Ok(std::path::Path::new(&dir).join("tuigui.sock"))
-    }
-
-    /// Bind at the standard path, ready to be dialed.
+    /// `$XDG_RUNTIME_DIR/tuigui.sock` is the address both halves of a session write down, which is
+    /// what lets them find each other without a scan; the socket is announced as well, so a peer
+    /// reaches it by the announcement rather than by guessing.
     ///
-    /// The counterpart of [`crate::p2p::P2p::host`], and deliberately the same shape: a caller
-    /// choosing a channel should not have to know that one of them needs a path picked and a
-    /// listener bound while the other is a single call. Binding belongs to the channel that
-    /// needs it.
-    pub async fn host() -> io::Result<Self> {
-        let socket = Self::new(Self::socket_path()?);
-        socket.bind().await?;
-        Ok(socket)
+    /// The names after it are for a process that already has a live socket at the standard one —
+    /// a second session, or a test runner running tests side by side. Each is announced, so a peer
+    /// still dials the address it was given.
+    fn socket_paths() -> impl Iterator<Item = PathBuf> {
+        (0..16).map(|n| {
+            let name = if n == 0 {
+                "tuigui.sock".to_owned()
+            } else {
+                format!("tuigui-{n}.sock")
+            };
+            match std::env::var_os("XDG_RUNTIME_DIR") {
+                Some(dir) => std::path::Path::new(&dir).join(name),
+                // No runtime dir — a container, a test runner — so a directory of this process's
+                // own, which keeps a name here from reaching another user's session.
+                None => std::env::temp_dir().join(format!("tuigui-{}", std::process::id())).join(name),
+            }
+        })
     }
 
     /// The path this socket is at.
@@ -143,24 +162,47 @@ impl UnixSocket {
     /// Shared by dialing and accepting, which differ only in where the stream came from.
     async fn adopt(&self, stream: tokio::net::UnixStream) {
         let (read, write) = tokio::io::split(stream);
-        *self.link.lock().await = Some(Link {
-            read: framed_read(read),
-            write: framed_write(write),
-        });
+        self.link.store(Some(Arc::new(Link {
+            read: Mutex::new(framed_read(read)),
+            write: Mutex::new(framed_write(write)),
+        })));
     }
 }
 
+#[async_trait::async_trait]
 impl Transport for UnixSocket {
     fn name(&self) -> &'static str {
         NAME
+    }
+
+    /// The socket both halves of a local session agree on, listening.
+    ///
+    /// Bound here because `to_magic` has to name an address a peer can actually dial: an unbound
+    /// socket announces a path nothing answers at. The standard path is tried first, that being
+    /// the address two halves of a session find each other by; a process that already has a live
+    /// socket there takes the next free name instead, and announces it.
+    async fn new() -> io::Result<Self> {
+        let mut taken = None;
+        for path in Self::socket_paths() {
+            let socket = Self::unbound(path);
+            match socket.bind().await {
+                Ok(()) => return Ok(socket),
+                // A listener that is still there. Any other failure is one another name will not
+                // fix, so it is the caller's to hear.
+                Err(e) if e.kind() == io::ErrorKind::AddrInUse => taken = Some(e),
+                Err(e) => return Err(e),
+            }
+        }
+        Err(taken.expect("a path was offered"))
     }
 
     fn address(&self) -> Option<String> {
         Some(self.path.to_string_lossy().into_owned())
     }
 
+    /// A dialer: the socket at the announced path, with nothing listening here.
     fn from_magic(name: &str, address: &str) -> Option<Self> {
-        (name == NAME).then(|| Self::new(address))
+        (name == NAME).then(|| Self::unbound(address))
     }
 
     /// Dial the path this socket holds, greet, and wait for the answer.
@@ -169,20 +211,18 @@ impl Transport for UnixSocket {
     /// only make sense together: the side that dialed is the side that knows the link is new,
     /// so it greets, and a caller that forgot to would leave the other end waiting forever.
     #[tracing::instrument(name = "msg.connect", skip_all)]
-    fn connect(&self) -> BoxFuture<'_, io::Result<Connection>> {
-        Box::pin(async move {
-            let stream = tokio::net::UnixStream::connect(&self.path).await?;
-            self.adopt(stream).await;
+    async fn connect(&self) -> io::Result<Connection> {
+        let stream = tokio::net::UnixStream::connect(&self.path).await?;
+        self.adopt(stream).await;
 
-            self.send(&Message::Ping(self.label())).await?;
-            match self.recv().await? {
-                Some(Message::Pong) => Ok(Connection::new(self.clone())),
-                Some(other) => Err(io::Error::other(format!(
-                    "a peer answered the greeting with {other:?}"
-                ))),
-                None => Err(io::Error::other("a peer never answered the greeting")),
-            }
-        })
+        self.send(&Message::Ping(self.label())).await?;
+        match self.recv().await? {
+            Some(Message::Pong) => Ok(Connection::new(self.clone())),
+            Some(other) => Err(io::Error::other(format!(
+                "a peer answered the greeting with {other:?}"
+            ))),
+            None => Err(io::Error::other("a peer never answered the greeting")),
+        }
     }
 
     /// Wait for a peer to dial, answer its greeting, and return the link.
@@ -191,42 +231,39 @@ impl Transport for UnixSocket {
     /// caller: answering before the greeting arrives would be answering nothing, and reading
     /// after it would be reading a greeting already consumed.
     #[tracing::instrument(name = "msg.accept", skip_all)]
-    fn accept(&self) -> BoxFuture<'_, io::Result<Connection>> {
-        Box::pin(async move {
-            let listener = {
-                let guard = self.listener.lock().await;
-                guard
-                    .as_ref()
-                    .ok_or_else(|| io::Error::other("this socket is not bound"))?
-                    .clone()
-            };
-            let (stream, _) = listener.accept().await?;
-            self.adopt(stream).await;
+    async fn accept(&self) -> io::Result<Connection> {
+        let listener = {
+            let guard = self.listener.lock().await;
+            guard
+                .as_ref()
+                .ok_or_else(|| io::Error::other("this socket is not bound"))?
+                .clone()
+        };
+        let (stream, _) = listener.accept().await?;
+        self.adopt(stream).await;
 
-            match self.recv().await? {
-                // The greeting. Answering it is what completes the handshake, and until it is
-                // answered the other end is still waiting.
-                Some(Message::Ping(_)) => {
-                    self.send(&Message::Pong).await?;
-                    Ok(Connection::new(self.clone()))
-                }
-                Some(other) => Err(io::Error::other(format!(
-                    "a peer's first message was {other:?}, not a greeting"
-                ))),
-                None => Err(io::Error::other("a peer connected but never greeted")),
+        match self.recv().await? {
+            // The greeting. Answering it is what completes the handshake, and until it is
+            // answered the other end is still waiting.
+            Some(Message::Ping(_)) => {
+                self.send(&Message::Pong).await?;
+                Ok(Connection::new(self.clone()))
             }
-        })
+            Some(other) => Err(io::Error::other(format!(
+                "a peer's first message was {other:?}, not a greeting"
+            ))),
+            None => Err(io::Error::other("a peer connected but never greeted")),
+        }
     }
 
     #[tracing::instrument(name = "msg.send", skip_all)]
-    fn send<'a>(&'a self, message: &'a Message) -> BoxFuture<'a, io::Result<()>> {
-        Box::pin(async move {
-            let mut link = self.link.lock().await;
-            let link = link
-                .as_mut()
-                .ok_or_else(|| io::Error::other("this socket has no link yet"))?;
-            link.write.send(message.clone()).await
-        })
+    async fn send(&self, message: &Message) -> io::Result<()> {
+        let link = self
+            .link
+            .load_full()
+            .ok_or_else(|| io::Error::other("this socket has no link yet"))?;
+        let sent = link.write.lock().await.send(message.clone()).await;
+        sent
     }
 
     /// Read one message, waiting for a whole one.
@@ -236,46 +273,21 @@ impl Transport for UnixSocket {
     /// waits, and `None` means the peer closed rather than "nothing yet" — an `Err` here is
     /// a peer that closed *mid-message*, which the codec reports rather than calling clean.
     ///
-    /// The lock is held across the read, which is what keeps two readers from interleaving on
-    /// one stream.
+    /// The read's own lock is held across the await, which is what keeps two readers from
+    /// interleaving on one stream. It is not the write's lock: a session reads and writes at the
+    /// same time, and one lock for both is a link that deadlocks itself.
     #[tracing::instrument(name = "msg.recv", skip_all)]
-    fn recv(&self) -> BoxFuture<'_, io::Result<Option<Message>>> {
-        Box::pin(async move {
-            let mut guard = self.link.lock().await;
-            let link = guard
-                .as_mut()
-                .ok_or_else(|| io::Error::other("this socket has no link yet"))?;
-            match link.read.next().await {
-                Some(Ok(message)) => Ok(Some(message)),
-                Some(Err(e)) => Err(e),
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Read one message, but do not wait for one.
-    ///
-    /// Polled straight through to the codec, which is where a half-arrived message is kept: no
-    /// future is created here, so having nothing to read leaves what has been read exactly where
-    /// it was.
-    ///
-    /// `None` for a quiet link. The lock is taken with `try_lock` and a link that is busy is
-    /// reported as quiet rather than waited on: there is one reader per connection, so a busy lock
-    /// cannot be a message this caller is about to miss.
-    fn recv_next(&self) -> io::Result<Option<Message>> {
-        let mut guard = match self.link.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => return Ok(None),
-        };
-        let link = guard
-            .as_mut()
+    async fn recv(&self) -> io::Result<Option<Message>> {
+        let link = self
+            .link
+            .load_full()
             .ok_or_else(|| io::Error::other("this socket has no link yet"))?;
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        match link.read.poll_next_unpin(&mut context) {
-            std::task::Poll::Ready(Some(r)) => r.map(Some),
-            std::task::Poll::Ready(None) => Ok(None),
-            std::task::Poll::Pending => Ok(None),
-        }
+        let heard = match link.read.lock().await.next().await {
+            Some(Ok(message)) => Ok(Some(message)),
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
+        };
+        heard
     }
 }
 

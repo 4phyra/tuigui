@@ -55,8 +55,8 @@ impl Session {
         transport: tokio::sync::oneshot::Sender<Box<dyn Transport>>,
     ) -> std::io::Result<Self> {
         let bound: Box<dyn Transport> = match channel {
-            crate::Channel::P2p => Box::new(wire::p2p::P2p::host().await?),
-            crate::Channel::Unix => Box::new(wire::unix::UnixSocket::host().await?),
+            crate::Channel::P2p => Box::new(wire::p2p::P2p::new().await?),
+            crate::Channel::Unix => Box::new(wire::unix::UnixSocket::new().await?),
         };
         let advert = bound
             .to_magic()
