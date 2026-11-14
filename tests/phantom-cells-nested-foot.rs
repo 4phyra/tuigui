@@ -1,10 +1,10 @@
-//! A program's window inside a program's window leaves no scaffolding behind.
+//! A program's window inside a program's window leaves no phantom cells behind.
 //!
 //! The pane draws a window as a field of anchor cells — one random glyph, two
 //! random colours — and the picture is placed under them. The other side scans
 //! those cells to learn where the window is; the picture is what a user is meant
-//! to see. So every anchor cell the pane does not paint over is a cell showing
-//! its own scaffolding instead of a program.
+//! to see. So every anchor cell the pane does not paint over is a phantom: a
+//! cell showing the window's scaffolding instead of the program.
 //!
 //! One window is not the hard case: the root program's cells are blanked by the
 //! same frame that places its picture. A *nested* window is. `foot` started from
@@ -12,7 +12,7 @@
 //! middle of a running session rather than before the first frame, and it
 //! arrives while the outer picture is already on screen.
 //!
-//! # How a leak is seen
+//! # How a phantom is seen
 //!
 //! The session is started with `--dbg-anchor-greenscreen`, which gives every
 //! surface the one background a program here never draws: green. The anchor
@@ -41,9 +41,9 @@ const SIZE: (u16, u16) = (80, 24);
 const ANCHOR: Color = Color::Rgb(0, 255, 0);
 
 #[test]
-fn a_window_inside_a_window_leaves_no_anchor_cells() -> termlens::Result<()> {
+fn a_window_inside_a_window_leaves_no_phantom_cells() -> termlens::Result<()> {
     common::require_foot();
-    let runtime = common::runtime_dir("leaks-nested-foot");
+    let runtime = common::runtime_dir("phantom-cells-nested-foot");
     // The inner program waits for this file, so the session ends by the programs
     // finishing rather than by a signal in the middle of a frame.
     let stop = runtime.join("stop");
@@ -51,7 +51,7 @@ fn a_window_inside_a_window_leaves_no_anchor_cells() -> termlens::Result<()> {
     // program. It inherits `WAYLAND_DISPLAY` from the client that spawned it, so
     // it is admitted into the outer window's tree without being told anything.
     let inner = common::script(
-        "leaks-nested-foot-inner",
+        "phantom-cells-nested-foot-inner",
         &format!(
             "exec foot -- sh -c 'printf \"nested\\n\"; \
              while [ ! -e {} ]; do sleep 0.05; done'",
@@ -59,7 +59,7 @@ fn a_window_inside_a_window_leaves_no_anchor_cells() -> termlens::Result<()> {
         ),
     );
     let runnable = common::script(
-        "leaks-nested-foot",
+        "phantom-cells-nested-foot",
         &format!("exec foot -- {}", inner.display()),
     );
 
@@ -92,10 +92,10 @@ fn a_window_inside_a_window_leaves_no_anchor_cells() -> termlens::Result<()> {
     // block itself is never shown — it is what the colours are read from, not what a reader
     // is meant to read.
     termlens::insta::assert_snapshot!(
-        "a_window_inside_a_window_leaves_no_anchor_cells",
+        "a_window_inside_a_window_leaves_no_phantom_cells",
         screen.with_styles()
     );
-    let anchors: Vec<(u16, u16)> = (0..rows)
+    let phantoms: Vec<(u16, u16)> = (0..rows)
         .flat_map(|row| (0..cols).map(move |col| (row, col)))
         .filter(|&(row, col)| {
             screen
@@ -104,10 +104,10 @@ fn a_window_inside_a_window_leaves_no_anchor_cells() -> termlens::Result<()> {
         })
         .collect();
     assert!(
-        anchors.is_empty(),
+        phantoms.is_empty(),
         "no cell is left showing a window's scaffolding, but {} are: {:?}\n{screen}",
-        anchors.len(),
-        anchors
+        phantoms.len(),
+        phantoms
     );
 
     std::fs::write(&stop, b"").expect("the sentinel that ends the inner foot");

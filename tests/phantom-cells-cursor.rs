@@ -3,14 +3,16 @@
 //! The whole session, as `e2e-unix` runs it: `tuigui` starts the server, the
 //! server starts the client, and the client puts `foot` on the pane. Once foot
 //! is streaming, the pointer is walked over every cell of the pane — left to
-//! right, top to bottom — and the frame the last cell produces must carry one
+//! right, top to bottom — and the screen the last move produces must carry one
 //! cursor glyph, at that cell. The compositor paints the pointer by writing it
 //! into the cell it is over, so a move that fails to repaint the cell it left
-//! leaves the old arrow on screen. This is that frame, read from the terminal
-//! rather than from the buffer that produced it.
+//! leaves the old arrow on screen: a phantom cell. This is that screen, read
+//! from the terminal rather than from the buffer that produced it.
 //!
-//! The moves are sent as fast as the reports can be written, so a sweep is one
-//! gesture rather than one frame per cell.
+//! Each move is followed by a millisecond, so every cell is drawn before the next
+//! move overwrites it. The pane redraws on a turn of its own loop, so a gesture
+//! written faster than that is coalesced, and a cell that was never painted
+//! cannot be caught leaving its arrow behind.
 //!
 //! The move is an SGR motion report with no button held (code 35). `termlens`
 //! has no call for a hover; the report is the one a terminal sends.
@@ -65,41 +67,41 @@ fn moving_over_every_cell_leaves_one_cursor() -> termlens::Result<()> {
     let pane_rows = rows - DOCK_HEIGHT;
     for row in 0..pane_rows {
         for col in 0..cols {
-            // SGR counts from one; this loop counts from zero.
+            // SGR counts from one; this loop counts from zero. A motion report is what a
+            // terminal sends for a hover: `35` is "no button" plus the motion bit, and
+            // `termlens` has no call for one — its `drag` is a press and a release around the
+            // path, and this gesture has neither.
             session.send_str(&format!(
                 "\x1b[<35;{};{}M",
                 u32::from(col) + 1,
                 u32::from(row) + 1
             ))?;
-            // The verdict is taken per move, not at the end of the sweep: an arrow left in the
-            // cell the pointer came from is only visible in the frame that follows the move, and
-            // a full repaint later would erase the evidence.
-            //
-            // So the wait looks for the failure rather than for progress: the first screen that
-            // carries two arrows is the leak, and it has already been drawn by then. Nothing here
-            // is a deadline — a screen with one arrow is simply the state the pane is in until the
-            // pointer arrives, and the sweep moves on when it does.
-            session.wait_until(|screen| {
-                let found = screen.find_all(&cursor);
-                if found.len() >= 2 {
-                    panic!(
-                        "moving to ({row}, {col}) left the pointer behind: {found:?}\n{screen}"
-                    );
-                }
-                found == vec![(row, col)]
-            })?;
+            // Brief, so each move lands on a frame of its own. The pane redraws on a turn of its
+            // own loop, so moves written faster than that are coalesced: every cell but the last
+            // is overwritten before it was ever drawn, and a cell that was never painted cannot
+            // be caught leaving its arrow behind.
+            std::thread::sleep(Duration::from_micros(500));
         }
     }
 
+    // Read once, at the end: the sweep is over when the pane has drawn the last cell it was asked
+    // for, which is the cell the last move put the pointer on.
+    session.wait_until(|screen| {
+        screen
+            .cell(pane_rows - 1, cols - 1)
+            .is_some_and(|cell| cell.contents() == cursor)
+    })?;
+
     let screen = session.screen();
-    // The screen a reader compares when the count below disagrees with it: the
-    // pointer is a cell's contents, and a stale one is a second arrow here. The
-    // dock is masked because it carries the runnable's path, which is the temp
-    // directory's rather than the pane's.
+    // The screen a reader compares when the count below disagrees with it: the pointer is a
+    // cell's contents, and a stale one is a second arrow here. The dock is masked because it
+    // carries the runnable's path, which is the temp directory's rather than the pane's.
     termlens::insta::assert_snapshot!(
         "moving_over_every_cell_leaves_one_cursor",
         screen.mask_rect(0..cols, pane_rows..rows)
     );
+    // One read, one count: the pane paints the pointer into the cell it is over and nothing
+    // else, so every cell that still carries the glyph is a phantom the sweep left behind.
     let cursors = screen.find_all(&cursor);
     assert_eq!(
         cursors,

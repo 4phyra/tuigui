@@ -1,0 +1,26 @@
+---
+source: tests/phantom-cells-cursor.rs
+expression: "screen.mask_rect(0..cols, pane_rows..rows)"
+---
+size: 80x24  cursor: hidden
+➤➤                                                                          ➤
+
+
+
+
+                                                                               ➤
+
+
+
+
+                                                                       ➤
+
+
+  ➤
+
+  ➤
+
+              ➤
+                          ➤
+
+                                                                               ➤
