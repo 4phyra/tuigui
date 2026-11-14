@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 use compositor::CompositableWindow;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt as _;
+use wire::message::Message;
 use wire::transport::{Connection, Transport};
 
 use crate::windowing::{Compositable, PlatformWindowing, WindowingServer};
@@ -84,12 +85,20 @@ pub async fn run(
         .accept()
         .await?;
 
+    // What the far side says, handed to every servant waiting on it.
+    let (rebroadcaster, rebroadcaster_recvr) = tokio::sync::broadcast::channel(64);
+
+    // The pinned future below takes what it uses, so the reader it needs is cloned first: the loop
+    // still owns its own.
+    let serve_connection = connection.clone();
+
     // The window the program draws, and then every window it opens: one future, because the root is
     // simply the first window this session serves. It waits for the root itself rather than the
     // session, so the turn beside it can find the root: a wait holding the session would make the
     // very turn that answers it impossible.
     let mut serve = std::pin::pin!(async move {
-        let (placed, servant) = serve_window(recv_root.await?, connection)?;
+        let (placed, servant) =
+            serve_window(recv_root.await?, serve_connection, rebroadcaster_recvr).await?;
         root_initializer.send((placed, stdout)).map_err(|_| {
             io::Error::other("the root window was not wanted: the render path is gone")
         })?;
@@ -101,6 +110,10 @@ pub async fn run(
         tokio::select! {
             // The session's windows: it is over when the last of them is.
             ended = &mut serve => return ended,
+            // What the far side says, handed to every servant waiting on it.
+            msg = connection.recv() => {
+                msg?.and_then(|msg| rebroadcaster.send(msg).ok());
+            },
             // A turn of the session: what dispatches a client's requests and what lets it commit its
             // next picture. Raced against the windows rather than run on a thread, because a session
             // nobody is turning is a program that never draws.
@@ -121,9 +134,16 @@ pub async fn run(
 /// Two ends of every channel are made here: the side the compositor writes to, which goes into the
 /// placement, and the side this half answers on, which stays inside the servant. Nothing is dropped,
 /// because a dropped sender is what a window being over looks like — and this window is not over.
-fn serve_window(
+///
+/// The announcement is sent first and its answer waited for, because the far side blanks the cells
+/// carrying a surface it knows about: a picture placed before that registration exists is a picture
+/// behind cells nobody could blank. The wait is safe here because the caller polls the link beside
+/// this future, which is what carries the answer.
+#[async_recursion::async_recursion]
+async fn serve_window(
     window: Box<dyn Compositable>,
     connection: Connection,
+    mut rebroadcaster: tokio::sync::broadcast::Receiver<wire::message::Message>,
 ) -> io::Result<(CompositableWindow, Proxy)> {
     let (set_size, recv_set_size) = flume::unbounded();
     let (input, recv_input) = flume::unbounded();
@@ -131,6 +151,7 @@ fn serve_window(
     let (popups, new_popups) = flume::unbounded();
     let (close, recv_close) = flume::unbounded();
     let rank = Arc::new(AtomicU32::new(0));
+    let anchor = window.surface();
 
     let placed = CompositableWindow {
         set_size,
@@ -143,19 +164,26 @@ fn serve_window(
         new_popups,
         close,
         rank: rank.clone(),
-        render: Box::new(paint_surface(window.surface())),
+        render: Box::new(paint_surface(anchor)),
     };
 
-    let servant = Box::pin(async move {
-        // Announced before anything is drawn: the far side places a picture on the cells carrying
-        // its surface, and a frame for a surface it has never been told about is refused rather
-        // than drawn. Said here because this is the first moment the link exists.
-        connection
-            .send(&wire::message::Message::OpenWindow {
-                surface: window.surface(),
-                codec: window.codec(),
-            })
-            .await?;
+    // Announced before anything is drawn: the far side places a picture on the cells carrying
+    // its surface, and a frame for a surface it has never been told about is refused rather
+    // than drawn. Said here because this is the first moment the link exists.
+    connection
+        .send(&wire::message::Message::OpenWindow {
+            surface: window.surface(),
+            codec: window.codec(),
+        })
+        .await?;
+    // And the answer is waited for before a cell is drawn. The far side blanks the cells carrying
+    // a surface it knows about, and it learns of one by reading this announcement — a different
+    // stream from the pty those cells come out of, so nothing else orders the two.
+    while !matches!(rebroadcaster.recv().await,
+        Ok(Message::WindowCreated { surface }) if surface == anchor)
+    {}
+
+    let servant: Proxy = Box::pin(async move {
         // The windows this one's program opened, each already being served.
         let mut futures = FuturesUnordered::new();
         // The box the pane placed this window in, in cells. What a frame reports, because that is
@@ -186,7 +214,9 @@ fn serve_window(
                 // `None` is that program being over, which ends this servant on its last frame.
                 child = window.recv_new_child() => {
                     let Some(child) = child else { break Ok(()) };
-                    let (placed, servant) = serve_window(child, connection.clone())?;
+                    let (placed, servant) =
+                        serve_window(child, connection.clone(), rebroadcaster.resubscribe())
+                            .await?;
                     // A failed send is the compositor having dropped this window's placement: the
                     // window is over, and so is the news of it.
                     (children.send(placed).ok(), futures.push(servant));
@@ -194,7 +224,9 @@ fn serve_window(
                 // A menu inside this window: placed the same way, announced on its own channel.
                 popup = window.recv_new_popup() => {
                     let Some(popup) = popup else { break Ok(()) };
-                    let (placed, servant) = serve_window(popup, connection.clone())?;
+                    let (placed, servant) =
+                        serve_window(popup, connection.clone(), rebroadcaster.resubscribe())
+                            .await?;
                     (popups.send(placed).ok(), futures.push(servant));
                 }
                 // The compositor asked this window to close. A request: the program is told and
@@ -234,6 +266,7 @@ fn serve_window(
             .await?;
         served
     });
+
     Ok((placed, servant))
 }
 

@@ -85,6 +85,9 @@ dpi = "0.1"
 # is the shape a vtable can hold. Without it a trait with an async method cannot be a `dyn` object,
 # and the compositor holds its windows exactly that way.
 async-trait = "0.1"
+# A window opens windows, so the function that wires one calls itself. The macro boxes the future
+# that call returns, which is what gives a recursive `async fn` a size.
+async-recursion = "1"
 smithay = { version = "0.7.0", default-features = false, features = ["wayland_frontend", "renderer_pixman", "desktop", "xwayland"] }
 wayland-protocols = { version = "0.32", features = ["client"] }
 # `log` so a `tracing` event also reaches a `log` capturer. Every binary here

@@ -117,6 +117,17 @@ pub enum Message {
         /// The signature the window drew into.
         surface: SurfaceId,
     },
+    /// The server has registered this window's surface, and its cells may be drawn.
+    ///
+    /// The answer to [`Message::OpenWindow`], and the reason it exists at all: the cells carrying a
+    /// surface are blanked by the side that owns the terminal, so a cell it has never been told
+    /// about is a cell it cannot blank. The two sides read different streams — the client draws
+    /// into the pty, the server reads the link — and nothing but this message orders them. Waiting
+    /// for it before drawing the first cell is what makes the registration happen first.
+    WindowCreated {
+        /// The signature the server now knows to blank.
+        surface: SurfaceId,
+    },
 }
 
 /// The signature a window's cells carry: a symbol, a foreground and a background.

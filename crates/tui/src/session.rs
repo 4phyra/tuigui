@@ -262,6 +262,13 @@ impl<F: Format> Session<F> {
                     next.insert(surface, None);
                     next
                 });
+                // The client waits for this before drawing its first cell. The two sides read
+                // different streams, so without it a chunk of the pty carrying this window's
+                // anchors can be rewritten — or rather, not rewritten — before this registration
+                // exists, and cells nobody can blank are cells a user sees.
+                self.connection
+                    .send(&Message::WindowCreated { surface })
+                    .await?;
                 log::info!(
                     "opened a window on {surface:?} in {codec:?} ({} now open)",
                     self.windows.len()
@@ -298,7 +305,7 @@ impl<F: Format> Session<F> {
             // Not handled yet. Nothing here is a failure — the client sends these in the normal
             // course of a session — so they are reported rather than obeyed or turned into an error
             // the client would see as the end.
-            other @ Message::CompositorRequest(_) => {
+            other @ (Message::CompositorRequest(_) | Message::WindowCreated { .. }) => {
                 tracing::warn!("tui: {other:?} is not handled yet");
             }
         }

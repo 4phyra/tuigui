@@ -59,6 +59,8 @@ flume = { workspace = true }
 # `async fn` in a trait the compositor holds as `dyn`: the macro turns each into a boxed future,
 # which is the one shape a vtable can point at.
 async-trait = { workspace = true }
+# A window opens windows, so the servant that wires one calls itself.
+async-recursion = { workspace = true }
 # The physical pixel position a pointer event carries, which is what the window vocabulary
 # beneath the compositor takes.
 dpi = { workspace = true }
