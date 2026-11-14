@@ -21,59 +21,18 @@ and still be used from your terminal.
 
 Built on excellent crates:
 
-<p align="left">
-<a href="https://github.com/Smithay/smithay"><img src="https://github.com/Smithay.png?size=256" height="64" alt="smithay"></a>&nbsp;<b>smithay</b><br>
-<sub>the Wayland compositor</sub>
-</p>
-
-<p align="left">
-<a href="https://github.com/tokio-rs/tokio"><picture><source media="(prefers-color-scheme: dark)" srcset="https://cdn.simpleicons.org/tokio/ffffff"><img src="https://cdn.simpleicons.org/tokio" height="64" alt="tokio"></picture></a>&nbsp;<b>tokio</b><br>
-<sub>async runtime</sub>
-</p>
-
-<p align="left">
-<a href="https://github.com/ratatui/ratatui"><img src="https://raw.githubusercontent.com/ratatui/ratatui/main/assets/logo.png" height="64" alt="ratatui"></a>&nbsp;<b>ratatui</b><br>
-<sub>widgets and layout</sub>
-</p>
-
-<p align="left">
-<a href="https://github.com/crossterm-rs/crossterm"><img src="https://github.com/crossterm-rs.png?size=256" height="64" alt="crossterm"></a>&nbsp;<b>crossterm</b><br>
-<sub>terminal I/O</sub>
-</p>
-
-<p align="left">
-<a href="https://github.com/helix-editor/termina"><img src="https://github.com/helix-editor.png?size=256" height="64" alt="termina"></a>&nbsp;<b>termina</b><br>
-<sub>input parsing</sub>
-</p>
-
-<p align="left">
-<a href="https://github.com/doy/vt100-rust"><img src="https://github.com/doy.png?size=256" height="64" alt="vt100"></a>&nbsp;<b>vt100</b><br>
-<sub>terminal emulation</sub>
-</p>
-
-<p align="left">
-<a href="https://github.com/dfrankland/keycode"><img src="https://github.com/dfrankland.png?size=256" height="64" alt="keycode"></a>&nbsp;<b>keycode</b><br>
-<sub>physical key codes</sub>
-</p>
-
-<p align="left">
-<a href="https://github.com/n0-computer/iroh"><img src="https://iroh.computer/img/logo/iroh-wordmark-purple.svg" height="64" alt="iroh"></a>&nbsp;<b>iroh</b><br>
-<sub>QUIC transport</sub>
-</p>
-
-<p align="left">
-<a href="https://github.com/rkyv/rkyv"><img src="https://raw.githubusercontent.com/rkyv/rkyv/main/media/logo_color.svg" height="64" alt="rkyv"></a>&nbsp;<b>rkyv</b><br>
-<sub>message format</sub>
-</p>
-
-<p align="left">
-<a href="https://github.com/zesterer/flume"><img src="https://github.com/zesterer.png?size=256" height="64" alt="flume"></a>&nbsp;<b>flume</b><br>
-<sub>channels</sub>
-</p>
-
-<p align="left">
-<a href="https://github.com/bytecodealliance/rustix"><img src="https://github.com/bytecodealliance.png?size=256" height="64" alt="rustix"></a>&nbsp;<b>rustix</b><br>
-<sub>system calls</sub>
+<p>
+  <a href="https://github.com/tokio-rs/tokio"><img src="https://img.shields.io/badge/tokio-async%20runtime-2b2b2b?logo=tokio&logoColor=white" alt="tokio: async runtime"></a>
+  <a href="https://github.com/ratatui/ratatui"><img src="https://img.shields.io/badge/ratatui-widgets%20and%20layout-2b2b2b?logo=ratatui&logoColor=white" alt="ratatui: widgets and layout"></a>
+  <a href="https://github.com/Smithay/smithay"><img src="https://img.shields.io/badge/smithay-Wayland%20compositor-2b2b2b" alt="smithay: the Wayland compositor"></a>
+  <a href="https://github.com/crossterm-rs/crossterm"><img src="https://img.shields.io/badge/crossterm-terminal%20I%2FO-2b2b2b" alt="crossterm: terminal I/O"></a>
+  <a href="https://github.com/helix-editor/termina"><img src="https://img.shields.io/badge/termina-input%20parsing-2b2b2b" alt="termina: input parsing"></a>
+  <a href="https://github.com/doy/vt100-rust"><img src="https://img.shields.io/badge/vt100-terminal%20emulation-2b2b2b" alt="vt100: terminal emulation"></a>
+  <a href="https://github.com/dfrankland/keycode"><img src="https://img.shields.io/badge/keycode-physical%20key%20codes-2b2b2b" alt="keycode: physical key codes"></a>
+  <a href="https://github.com/n0-computer/iroh"><img src="https://img.shields.io/badge/iroh-QUIC%20transport-2b2b2b" alt="iroh: QUIC transport"></a>
+  <a href="https://github.com/rkyv/rkyv"><img src="https://img.shields.io/badge/rkyv-message%20format-2b2b2b" alt="rkyv: message format"></a>
+  <a href="https://github.com/zesterer/flume"><img src="https://img.shields.io/badge/flume-channels-2b2b2b" alt="flume: channels"></a>
+  <a href="https://github.com/bytecodealliance/rustix"><img src="https://img.shields.io/badge/rustix-system%20calls-2b2b2b?logo=rust&logoColor=white" alt="rustix: system calls"></a>
 </p>
 
 ## License
