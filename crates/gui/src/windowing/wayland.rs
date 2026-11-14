@@ -17,9 +17,9 @@
 //! picture is compressed with; and the encoder is the pictures already sent, which
 //! is why it is per window — a window is a stream.
 
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Mutex, Weak};
 
-use compositor::{Compositable, Error, WindowingServer};
+use compositor::Error;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -28,6 +28,11 @@ use tokio::sync::broadcast;
 use wire::message::{Message, SurfaceId};
 use wire::transport::Connection;
 
+use super::{Compositable, WindowingServer};
+
+/// What a session is started with, as the backend this machine has answers it.
+pub use wayland::Options;
+
 /// The wayland session as a windowing server.
 pub struct WaylandServer {
     /// The session.
@@ -35,12 +40,6 @@ pub struct WaylandServer {
     /// The codec every window of this session streams with: a property of the
     /// stream, and every window of one session shares it.
     codec: codecs::CodecId,
-    /// Where the pictures go, until there is anything to send to.
-    ///
-    /// `None` until the other side dials, and no window exists before then: the dial
-    /// is what starts the program, and a window is only ever minted once its program
-    /// has drawn something. Every window minted afterwards takes a clone of this.
-    maybe_connection: Option<Connection>,
     /// The program's own output, held until someone takes it.
     ///
     /// Not drained here: what a program prints belongs to whoever shows it, and this side only
@@ -64,10 +63,11 @@ pub struct WaylandWindow {
     /// Subscribed when the wrapper is made, so a child admitted while it was being built is still
     /// reported: a subscription starts at the moment it is made, and one made later would miss it.
     ///
-    /// A plain field, not a lock: reading drains these, and the compositor reads them through
-    /// `&mut` — it walks its stack mutably to place what has arrived.
-    new_children: broadcast::Receiver<Weak<wayland::Window>>,
-    new_popups: broadcast::Receiver<Weak<wayland::Window>>,
+    /// Draining one advances its own cursor, which is why it is behind a lock: the trait hands the
+    /// window to its reader as `&self`, because that reader waits on this and feeds the window in
+    /// the same `select!` — an `&mut` wait would conflict with the arms that type into it.
+    new_children: tokio::sync::Mutex<broadcast::Receiver<Weak<wayland::Window>>>,
+    new_popups: tokio::sync::Mutex<broadcast::Receiver<Weak<wayland::Window>>>,
     /// The cells this window's picture goes into, which is what the far side scans
     /// the pane for.
     ///
@@ -84,12 +84,6 @@ pub struct WaylandWindow {
     /// `Mutex` rather than `&mut`: a frame is taken through `&self`, because the
     /// window is behind an `Arc` that the pane holds for drawing.
     encoder: Mutex<Option<Box<dyn codecs::Encoder>>>,
-    /// Where this window's frames go.
-    ///
-    /// Not an `Option`: a window exists only because its program connected, and the
-    /// dial that let it connect is the same one that handed this session its
-    /// connection. A window with nowhere to send could not have been minted.
-    connection: Connection,
 }
 
 impl WaylandWindow {
@@ -102,19 +96,8 @@ impl WaylandWindow {
     ///
     /// `None` for a window the session has already let go, which is not a failure: the caller
     /// asked about a handle it was given and the answer is that there is nothing behind it.
-    fn new(
-        inner: Weak<wayland::Window>,
-        codec: codecs::CodecId,
-        connection: Connection,
-    ) -> Option<Self> {
+    fn new(inner: Weak<wayland::Window>, codec: codecs::CodecId) -> Option<Self> {
         let window = inner.upgrade()?;
-        let surface = SurfaceId::random();
-        // Reported and carried on with: a window that could not be announced draws its anchor
-        // cells with no picture behind them, which is a window that failed rather than one that
-        // does not exist.
-        if let Err(e) = super::send(&connection, &Message::OpenWindow { surface, codec }) {
-            log::warn!("a window could not be announced: {e}");
-        }
         // Subscribed here, not at the first read: a subscription starts at the moment it is made,
         // so a child admitted while this wrapper is being built would otherwise be one nobody ever
         // hears about.
@@ -122,74 +105,65 @@ impl WaylandWindow {
         let new_popups = window.subscribe_new_popups();
         Some(Self {
             inner,
-            new_children,
-            new_popups,
-            surface,
+            new_children: tokio::sync::Mutex::new(new_children),
+            new_popups: tokio::sync::Mutex::new(new_popups),
+            surface: SurfaceId::random(),
             codec,
             encoder: Mutex::new(None),
-            connection,
         })
     }
 }
 
 impl Drop for WaylandWindow {
-    /// Tell the far side this window is over, so it can free the picture it holds.
+    /// Nothing to tell the far side, and nothing to release.
     ///
-    /// Dropping is the one moment a window is known to be gone: its program closed it, its client
-    /// exited, or the tree that held it was torn down. Nothing polls for that, and nothing else
-    /// names the surface afterwards, so a picture nobody releases stays on the pane for the rest
-    /// of the session.
-    ///
-    /// Best effort and silent: there is no caller to report to, and a link that will not take
-    /// this is a link whose pane is already lost.
-    fn drop(&mut self) {
-        let notice = Message::CloseWindow {
-            surface: self.surface,
-        };
-        if let Err(e) = super::send(&self.connection, &notice) {
-            log::warn!("a closed window could not be reported: {e}");
-        }
-    }
+    /// The picture is named by a surface id that travels with every frame, and the far side frees
+    /// it when the frames stop; a window that is over is one whose `Weak` no longer upgrades.
+    fn drop(&mut self) {}
 }
 
 impl WaylandServer {
     /// Start the session.
+    ///
+    /// The wait for the window the program draws is the caller's, taken from the session's own
+    /// channel by [`Self::recv_root`]: only a turn notices a client has committed, so the news can
+    /// only come from the session, and the wait can only live where it is awaited.
     pub fn new(options: wayland::Options, codec: codecs::CodecId) -> std::io::Result<Self> {
         let inner = Native::new(options).map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(Self {
             inner,
             codec,
-            maybe_connection: None,
             stdout: None,
         })
     }
 
-    /// Hand the session the connection its pictures leave by.
+    /// The wait for the window the program drew, owning what it waits on.
     ///
-    /// The dial is what starts the program, so this arrives before any window exists:
-    /// every window minted afterwards takes a clone of it.
-    ///
-    /// TODO: make it impossible to call `spawn` with no connection. The order is what
-    /// this relies on — a program started before the dial draws into a session with
-    /// nowhere to send — and nothing in the types says so.
-    pub fn set_connection(&mut self, connection: Connection) {
-        self.maybe_connection = Some(connection);
+    /// Owned rather than borrowed, because the caller has to keep turning the session while it
+    /// waits: a future holding the session would make the very turn that answers it impossible.
+    pub fn take_root(
+        &mut self,
+    ) -> std::io::Result<impl std::future::Future<Output = std::io::Result<Box<dyn Compositable>>>>
+    {
+        let root = self
+            .inner
+            .take_root_receiver()
+            .ok_or_else(|| std::io::Error::other("the root window is handed over once"))?;
+        let codec = self.codec;
+        Ok(async move {
+            let root = root
+                .await
+                .map_err(|_| std::io::Error::other("the session ended before it drew a window"))?;
+            WaylandWindow::new(root, codec)
+                .map(|window| Box::new(window) as Box<dyn Compositable>)
+                .ok_or_else(|| std::io::Error::other("the root window is already gone"))
+        })
     }
 }
 
 impl WindowingServer for WaylandServer {
-    /// The root window, wrapped afresh on every call.
-    ///
-    /// Not kept: the session is what holds its windows, so asking is a lookup rather than a slot
-    /// this side has to keep in step with it. A root that went away answers `None`, which is the
-    /// same thing a missing one does.
-    fn root_window(&mut self) -> Option<Box<dyn Compositable>> {
-        let tree = self.inner.root_tree()?;
-        // No connection means nothing has dialed, and a program that has not been started cannot
-        // have a root window: the two arrive together.
-        let connection = self.maybe_connection.clone()?;
-        let window = WaylandWindow::new(Arc::downgrade(&tree), self.codec, connection)?;
-        Some(Box::new(window))
+    async fn recv_root(&mut self) -> std::io::Result<Box<dyn Compositable>> {
+        self.take_root()?.await
     }
 
     fn spawn(&mut self, path: &std::path::Path) -> std::io::Result<Option<std::io::PipeReader>> {
@@ -209,8 +183,8 @@ impl WindowingServer for WaylandServer {
         self.inner.step(timeout);
     }
 
-    fn is_ready(&self) -> bool {
-        self.inner.root_tree().is_some()
+    fn is_running(&self) -> bool {
+        self.inner.is_running()
     }
 
     /// The session is resized: the output changes mode, and the root window is
@@ -226,25 +200,31 @@ impl WindowingServer for WaylandServer {
     }
 }
 
+// The macro, because the trait is written with it: an `async fn` in a trait the compositor holds
+// as `dyn` is desugared into a boxed future, and an implementation spelled the language's own way
+// describes a different signature than the one the vtable points at.
+#[async_trait::async_trait]
 impl Compositable for WaylandWindow {
-    /// Whether the session still holds the window this stands for.
-    ///
-    /// The one question a `Weak` asks, and the reason for holding one: a wrapper whose window is
-    /// gone is not an error to report, it is the window being closed, and the holder drops it.
-    fn is_alive(&self) -> bool {
-        self.inner.strong_count() > 0
-    }
-
-    fn key_input(&self, event: ui_events::keyboard::KeyboardEvent) -> Result<(), Error> {
-        self.inner.upgrade().ok_or(Error::Gone)?.queue_key(event);
+    fn key_input(&self, event: termina::event::KeyEvent) -> std::io::Result<()> {
+        let window = self
+            .inner
+            .upgrade()
+            .ok_or_else(|| std::io::Error::other("the window is gone"))?;
+        window.queue_key(crate::windowing::event_map::key(&event));
         Ok(())
     }
 
-    fn pointer_input(&self, event: ui_events::pointer::PointerEvent) -> Result<(), Error> {
-        self.inner
+    fn pointer_input(&self, event: termina::event::MouseEvent) -> std::io::Result<()> {
+        let window = self
+            .inner
             .upgrade()
-            .ok_or(Error::Gone)?
-            .queue_pointer(event);
+            .ok_or_else(|| std::io::Error::other("the window is gone"))?;
+        if let Some(event) = crate::windowing::event_map::pointer(
+            &event,
+            (f64::from(event.column), f64::from(event.row)),
+        ) {
+            window.queue_pointer(event);
+        }
         Ok(())
     }
 
@@ -264,11 +244,21 @@ impl Compositable for WaylandWindow {
     /// The box the picture goes into travels with it, in cells: the far side puts a
     /// picture on a grid of cells, and this is the side that decided which cells those are.
     #[tracing::instrument(name = "window.frame", skip_all)]
-    fn frame(&self, rank: u32, cells: (u16, u16)) -> Result<(), Error> {
+    async fn frame(
+        &self,
+        connection: &Connection,
+        rank: u32,
+        cells: (u16, u16),
+    ) -> std::io::Result<()> {
         // The picture, if the program drew one. Nothing to take is the ordinary case for a
         // window nobody has touched since the last frame.
         let window = self.inner.upgrade().ok_or(Error::Gone)?;
         let captured = window.capture();
+        log::info!(
+            "window.frame: captured {}, size {:?}",
+            captured.is_some(),
+            captured.as_ref().map(|(_, size)| *size)
+        );
         let bytes = match captured {
             Some((pixels, size)) => {
                 let mut held = self.encoder.lock().unwrap_or_else(|e| e.into_inner());
@@ -290,23 +280,24 @@ impl Compositable for WaylandWindow {
             None => None,
         };
 
-        super::send(
-            &self.connection,
-            &Message::Frame {
-                surface: self.surface,
-                z: rank,
-                cols: u32::from(cells.0),
-                rows: u32::from(cells.1),
-                bytes,
-            },
-        )?;
-        Ok(())
+        let message = Message::Frame {
+            surface: self.surface,
+            z: rank,
+            cols: u32::from(cells.0),
+            rows: u32::from(cells.1),
+            bytes,
+        };
+        connection.send(&message).await
     }
 
     /// How big this window is, in pixels: what its program last committed, or the size it was
     /// adopted at before it drew.
-    fn size_px(&self) -> Result<(u32, u32), Error> {
-        Ok(self.inner.upgrade().ok_or(Error::Gone)?.size())
+    fn size_px(&self) -> std::io::Result<(u32, u32)> {
+        Ok(self
+            .inner
+            .upgrade()
+            .ok_or_else(|| std::io::Error::other("the window is gone"))?
+            .size())
     }
 
     /// Ask the session's window to draw at a size. The next commit answers.
@@ -315,8 +306,11 @@ impl Compositable for WaylandWindow {
     /// caller's record, not this one's — the window knows what its program last committed at,
     /// which is the answer to the ask rather than the ask itself.
     #[tracing::instrument(name = "window.set_size", skip_all)]
-    fn set_size(&self, size: (u32, u32)) -> Result<(), Error> {
-        self.inner.upgrade().ok_or(Error::Gone)?.set_size(size);
+    fn set_size(&self, size: (u32, u32)) -> std::io::Result<()> {
+        self.inner
+            .upgrade()
+            .ok_or_else(|| std::io::Error::other("the window is gone"))?
+            .set_size(size);
         Ok(())
     }
 
@@ -327,55 +321,62 @@ impl Compositable for WaylandWindow {
             .is_some_and(|window| window.is_popup())
     }
 
-    /// The windows this one's program has opened since the last read.
-    ///
-    /// Subscribed when the wrapper was made, so this reports what the window has gained: the
-    /// compositor already holds everything from before. The queue carries `Weak`, which goes
-    /// straight into the wrapper, and a window that died before its news was read is `None` there
-    /// rather than something to check here.
-    #[tracing::instrument(name = "window.children", skip_all)]
-    fn get_new_children(&mut self) -> Vec<Box<dyn Compositable>> {
-        let (codec, connection) = (self.codec, self.connection.clone());
-        std::iter::from_fn(|| self.new_children.try_recv().ok())
-            .filter_map(|window| WaylandWindow::new(window, codec, connection.clone()))
-            .map(|window| Box::new(window) as Box<dyn Compositable>)
-            .collect()
+    /// The signature this window's cells carry, which names it on both sides.
+    fn surface(&self) -> SurfaceId {
+        self.surface
     }
 
-    /// The windows this one's program has placed inside it since the last read: menus, tooltips,
-    /// dropdowns.
+    /// The codec this window's frames are in, which the far side needs to decode them.
+    fn codec(&self) -> codecs::CodecId {
+        self.codec
+    }
+
+    /// The next window this one's program opens, or `None` once that program is over.
+    #[tracing::instrument(name = "window.children", skip_all)]
+    async fn recv_new_child(&self) -> Option<Box<dyn Compositable>> {
+        // A channel that closed is the session letting go of the window it belongs to, which is
+        // its program being over: there is nothing more to open, and nothing wrong to report.
+        let window = self.new_children.lock().await.recv().await.ok()?;
+        WaylandWindow::new(window, self.codec).map(|window| Box::new(window) as Box<dyn Compositable>)
+    }
+
+    /// The next menu this one's program places inside it, or `None` once it is over.
     #[tracing::instrument(name = "window.popups", skip_all)]
-    fn get_new_popups(&mut self) -> Vec<Box<dyn Compositable>> {
-        let (codec, connection) = (self.codec, self.connection.clone());
-        std::iter::from_fn(|| self.new_popups.try_recv().ok())
-            .filter_map(|window| WaylandWindow::new(window, codec, connection.clone()))
-            .map(|window| Box::new(window) as Box<dyn Compositable>)
-            .collect()
+    async fn recv_new_popup(&self) -> Option<Box<dyn Compositable>> {
+        let window = self.new_popups.lock().await.recv().await.ok()?;
+        WaylandWindow::new(window, self.codec).map(|window| Box::new(window) as Box<dyn Compositable>)
     }
 
     /// Where this window's program asked to sit inside the window that opened it.
     ///
     /// In the parent's pixels, because that is what the client's own surface is measured in. The
     /// conversion into the pane's cells is the trait's, so it happens once for every backend.
-    fn offset_px(&self) -> Result<Option<(i32, i32)>, Error> {
-        Ok(*self.inner.upgrade().ok_or(Error::Gone)?.offset())
+    fn offset_px(&self) -> std::io::Result<Option<(i32, i32)>> {
+        Ok(*self
+            .inner
+            .upgrade()
+            .ok_or_else(|| std::io::Error::other("the window is gone"))?
+            .offset())
     }
 
-    /// What the program calls its window: the title it set, or its app id when it
-    /// set no title, or nothing when it set neither.
-    fn title(&self) -> Result<String, Error> {
+    /// What the program calls its window: the title it set, or its app id when it set no title, or
+    /// nothing when it set neither.
+    fn title(&self) -> std::io::Result<String> {
         Ok(self
             .inner
             .upgrade()
-            .ok_or(Error::Gone)?
+            .ok_or_else(|| std::io::Error::other("the window is gone"))?
             .title()
             .unwrap_or_default())
     }
 
-    /// Ask the program to close the window. It is a request: the client is told
-    /// and decides, which is why the window may still be there afterwards.
-    fn terminate(&self) -> Result<(), Error> {
-        self.inner.upgrade().ok_or(Error::Gone)?.terminate();
+    /// Ask the program to close the window. It is a request: the client is told and decides, which
+    /// is why the window may still be there afterwards.
+    fn terminate(&self) -> std::io::Result<()> {
+        self.inner
+            .upgrade()
+            .ok_or_else(|| std::io::Error::other("the window is gone"))?
+            .terminate();
         Ok(())
     }
 }

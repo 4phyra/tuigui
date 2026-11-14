@@ -9,7 +9,7 @@ use termina::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use super::bar::Bar;
 use crate::widgets::WindowState;
-use crate::windowing::Compositable;
+use crate::window::CompositableWindow;
 
 #[derive(Default)]
 pub struct Frame {
@@ -50,7 +50,7 @@ impl Frame {
     /// drew, not where it was put.
     pub fn handle_mouse(
         &mut self,
-        window: &dyn Compositable,
+        window: &CompositableWindow,
         state: &mut WindowState,
         mouse: MouseEvent,
         pane: Rect,
@@ -65,7 +65,7 @@ impl Frame {
         };
         // A popup's size is its own program's to state, so the ring is not a grip on one: the
         // event goes through to the window like any other cell of it.
-        if !window.is_popup() {
+        if !window.is_popup {
             return self.handle_resize(window, state, mouse, pane, content);
         }
         Ok(Some(mouse))
@@ -73,7 +73,7 @@ impl Frame {
 
     fn handle_resize(
         &mut self,
-        _window: &dyn Compositable,
+        _window: &CompositableWindow,
         state: &mut WindowState,
         mouse: MouseEvent,
         pane: Rect,

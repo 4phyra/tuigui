@@ -78,6 +78,13 @@ derive_deref = "1.1"
 derive-getters = "0.5"
 derive_setters = "0.1"
 sysinfo = "0.37"
+# The physical pixel position a pointer event carries: one type for the seat's input and for the
+# window vocabulary that receives it, so nothing between them has to convert.
+dpi = "0.1"
+# `async fn` in a trait that is also used as `dyn`: the macro desugars it into a boxed future, which
+# is the shape a vtable can hold. Without it a trait with an async method cannot be a `dyn` object,
+# and the compositor holds its windows exactly that way.
+async-trait = "0.1"
 smithay = { version = "0.7.0", default-features = false, features = ["wayland_frontend", "renderer_pixman", "desktop", "xwayland"] }
 wayland-protocols = { version = "0.32", features = ["client"] }
 # `log` so a `tracing` event also reaches a `log` capturer. Every binary here

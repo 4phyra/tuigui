@@ -9,7 +9,7 @@ use termina::event::{MouseButton, MouseEvent, MouseEventKind};
 use tuigui_components::{cross, Cross};
 
 use crate::widgets::WindowState;
-use crate::windowing::Compositable;
+use crate::window::CompositableWindow;
 
 /// Eight dots, the standard grip: the bar is what a window is moved by.
 const GRIP: char = '⣿';
@@ -42,7 +42,7 @@ impl Bar {
 
     pub fn handle_mouse(
         &mut self,
-        window: &dyn Compositable,
+        window: &CompositableWindow,
         state: &mut WindowState,
         mouse: MouseEvent,
         pane: Rect,
@@ -58,7 +58,10 @@ impl Bar {
             // A click — pressed and let go inside the box — is what closes. The cross answers that
             // once, so this does not have to remember the last frame to notice the edge.
             if self.close.was_released() {
-                window.terminate()?;
+                // A request, not a verdict: the program is told and decides, and a window it chose
+                // to keep is one that keeps being served. A send that fails is that program being
+                // over already, which is the news arriving too late rather than a failure.
+                let _ = window.close.send(());
             }
             // The button is not a grip: a press on it, and anything at all while it is held, are
             // the cross's rather than the bar's.

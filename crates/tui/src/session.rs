@@ -165,7 +165,7 @@ impl<F: Format> Session<F> {
     ) -> Result<()> {
         while let Some(message) = self.connection.recv().await? {
             if let Err(e) = self.handle_inner(message, &anchors).await {
-                tracing::error!("{e}");
+                log::error!("{e}");
                 // Reported rather than returned: the link is the only channel a client listens on,
                 // and a failure it is not told about is a pane that stops changing for no stated
                 // reason. Retried because this is the last thing the peer is ever told — a report

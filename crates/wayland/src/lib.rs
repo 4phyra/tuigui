@@ -35,7 +35,7 @@ pub use ui_events::ScrollDelta;
 pub use window::Window;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use smithay::reexports::wayland_server::backend::GlobalId;
@@ -96,6 +96,22 @@ pub struct WaylandServer {
     _output_global: GlobalId,
     /// Whether to spawn XWayland and route X11-only clients to it (`DISPLAY`).
     use_x11: bool,
+    /// Where the window the program drew is announced, once there is one.
+    ///
+    /// A channel rather than a lookup, because a program has to connect and commit before it has a
+    /// window at all: a turn of the session is what notices the commit, and this is where the news
+    /// leaves. One-shot because a session has one root, and taken once because a sender is spent by
+    /// the send that answers it.
+    ///
+    /// `Weak`, because the window is the session's: it lives exactly as long as this side owns it,
+    /// and a handle that kept it alive would be the receiver deciding when the session's window
+    /// dies.
+    root_sender: Option<tokio::sync::oneshot::Sender<Weak<Window>>>,
+    /// The other end of it, until somebody asks for the window.
+    ///
+    /// Taken rather than lent, because awaiting a receiver consumes it: a session has one root, and
+    /// asking twice asks about a window that was already handed over.
+    root: Option<tokio::sync::oneshot::Receiver<Weak<Window>>>,
 }
 
 impl WaylandServer {
@@ -110,6 +126,10 @@ impl WaylandServer {
 
         let display = Display::new().map_err(|e| CompError::Server(e.to_string()))?;
         let dh = display.handle();
+
+        // The channel the window the program draws is announced on: the wait is the caller's, and
+        // the news is this session's, because only a turn notices a client has committed.
+        let (root_sender, root) = tokio::sync::oneshot::channel();
 
         // The socket is bound inside the runtime dir, at a free name.
         let (socket, socket_name) = Self::new_socket(&runtime_dir)?;
@@ -144,7 +164,18 @@ impl WaylandServer {
             runtime_dir,
             _output_global: output_global,
             use_x11: options.use_x11,
+            root_sender: Some(root_sender),
+            root: Some(root),
         })
+    }
+
+    /// The wait for the window the program drew, taken once.
+    ///
+    /// The wait is the caller's to hold and this session's to answer: a turn is what notices a
+    /// client has committed, and [`WaylandServer::step`] is that turn. Taken rather than lent
+    /// because awaiting a receiver consumes it, and a session has one root.
+    pub fn take_root_receiver(&mut self) -> Option<tokio::sync::oneshot::Receiver<Weak<Window>>> {
+        self.root.take()
     }
 
     /// A private runtime dir holding the session's socket, inside the caller's
@@ -453,6 +484,16 @@ impl WaylandServer {
             let _flush = tracing::info_span!("wayland.step.flush").entered();
             if let Err(e) = display.flush_clients() {
                 log::warn!("the display did not flush: {e}");
+            }
+        }
+
+        // The window the program drew, announced the first turn there is one. Taken rather than
+        // kept, because a sender is spent by the send that answers the wait.
+        if let Some(root) = self.root_tree() {
+            if let Some(sender) = self.root_sender.take() {
+                // A send that fails is the caller having given up on this session: nothing to
+                // report to it, and nothing left for the window to be handed to.
+                let _ = sender.send(Arc::downgrade(&root));
             }
         }
     }

@@ -12,7 +12,7 @@ ratatui = { workspace = true, features = ["unstable-widget-ref"] }
 # What an event becomes for a window: W3C UI Events as data, and the physical
 # pixel position they are expressed in.
 ui-events = { workspace = true }
-dpi = "0.1"
+dpi = { workspace = true }
 # The terminal's own event types: a window is pressed and typed into with the
 # events the reader produced.
 termina = { workspace = true }
@@ -27,6 +27,13 @@ tracing = { workspace = true }
 # The close button on a window's bar is the same cross a pane's furniture uses, and sharing it is
 # what keeps the two from drifting apart.
 tuigui_components = { workspace = true }
+# What reaches a window and what it asks for: a size ask, the input it is typed with, and the
+# windows it opens. Plain channels rather than a trait, so a window is a value the compositor
+# holds without knowing who runs the program.
+flume = { workspace = true }
+# The `select!` that waits on the program and on the pane's events in one turn: a turn ends on
+# whichever speaks first, and the two are not ordered against each other.
+tokio = { workspace = true }
 
 [dev-dependencies]
 # The capybara demo images, decoded to pixels: what a dummy window paints its background from.

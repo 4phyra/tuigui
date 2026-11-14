@@ -89,7 +89,7 @@ const GUTTER: u16 = 1;
 ///
 /// A move is drawn frame by frame rather than interpolated, and this is what a frame is worth:
 /// the walk, the bounce and the settle together are a little under a third of a second.
-const FRAME: f32 = 0.02;
+const FRAME: f32 = 0.04;
 
 /// How many stop frames the band walks for. The last of them is on the tab.
 const WALK: u8 = 5;

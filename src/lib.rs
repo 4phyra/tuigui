@@ -93,9 +93,8 @@ impl TuiGui {
         // what puts its drawing through the rewrite. This only waits for the session to
         // end, which happens when the client inside it exits.
         //
-        // `std::io`'s handles, not tokio's: the session takes plain streams and puts the
-        // blocking reads on their own thread, so there is nothing async about them to
-        // wrap.
+        // `std::io`'s handles, not tokio's: the server takes plain streams and does its own reading,
+        // so there is nothing async about them to wrap.
         Ok(session.run(std::io::stdin(), std::io::stdout()).await?)
     }
 }

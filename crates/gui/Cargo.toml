@@ -37,6 +37,9 @@ codecs = { workspace = true }
 rustix = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
+# `ReaderStream`: this terminal's bytes as a stream, so the draw loop waits on a key and on the
+# program in one `select!` rather than reading stdin on a thread of its own.
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 # Where the program's output waits while its window is on screen: the thread
 # reading the pipe produces, the frame that prints consumes.
 ringbuf = { workspace = true }
@@ -49,6 +52,16 @@ derive_deref = { workspace = true }
 # `poll!`, for the two steps that must not block: the dial and the program's start have
 # to let their frame finish before anything they drew can reach the terminal.
 futures = "0.3"
+# What reaches a window and what it asks for: a size ask, the input it is typed with, the windows
+# its program opens, and the rank it sits at. Channels rather than a trait, so the compositor holds
+# placement without knowing who runs the program.
+flume = { workspace = true }
+# `async fn` in a trait the compositor holds as `dyn`: the macro turns each into a boxed future,
+# which is the one shape a vtable can point at.
+async-trait = { workspace = true }
+# The physical pixel position a pointer event carries, which is what the window vocabulary
+# beneath the compositor takes.
+dpi = { workspace = true }
 # The logging facade. Every diagnostic goes through it rather than to the pane, and the
 # capturer in this crate is the one logger installed.
 log = { workspace = true }

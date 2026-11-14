@@ -19,14 +19,14 @@
 //! drawn, so the step is driven from the draw: one frame is one step. See
 //! [`widget::Session`].
 
-use std::io::{Read, Write};
+use std::io::Write;
 
 use codecs::CodecId;
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
-use widget::{GuiWidget, Session};
+use futures::StreamExt as _;
+use widget::Session;
 
-mod inputs;
+pub mod client;
+mod session;
 mod widget;
 mod windowing;
 
@@ -36,6 +36,22 @@ mod windowing;
 /// screen the terminal keeps rather than on one of the two the client draws: the logs screen
 /// anchors its three rows under the cursor, so the name stays above them and scrolls into
 /// history exactly as any other output above the pane does.
+/// How often a quiet pane is redrawn anyway, so the dock's light keeps breathing.
+///
+/// A frame is drawn when something asked for one, and an indicator that animates asks for nothing:
+/// its brightness comes from the clock, so a pane with no events would sit at one shade forever. A
+/// quarter of a second is slow enough that an idle session costs four frames a second rather than
+/// sixty, and fast enough that the fade reads as a fade.
+const INDICATOR: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How often a pane with something moving on it is redrawn.
+///
+/// An animation is advanced by the frame's own length, so its pace is the redraw rate: the tab
+/// strip's band walks a fixed number of frames, and a frame every 250ms would step it in four
+/// visible jumps. Not zero, because drawing again immediately would advance the animation by
+/// nothing at all and spin the loop.
+const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+
 const BANNER: &str = r#"
  ▗   ▘    ▘
  ▜▘▌▌▌▛▌▌▌▌
@@ -148,7 +164,7 @@ impl Gui {
     /// own.
     pub async fn run(
         self,
-        stdin: impl Read + std::os::fd::AsRawFd + Send + 'static,
+        stdin: impl tokio::io::AsyncRead + Send + Unpin + 'static,
         stdout: impl Write + Send + Sync + 'static,
     ) -> std::io::Result<()> {
         // Before anything can fail, so the first failure is in the log rather than missing
@@ -186,28 +202,20 @@ impl Gui {
         // banner above the dock rather than under it.
         stdout.write_all(BANNER.as_bytes())?;
 
-        // Two terminals, because a `Terminal`'s viewport is fixed when it is built and the
-        // two screens want different answers: the logs screen wants three rows anchored
-        // under the cursor, where lines printed above them scroll into the terminal's own
-        // history, and the stream wants the whole screen with a window on it.
+        // The two terminals and the session they draw are one thing, built before the input thread
+        // exists: `Viewport::Inline` asks the terminal where the cursor is, and crossterm reads
+        // that answer off stdin itself. A reader holding stdin would take the reply.
         //
-        // Each backend gets this process's own stdout rather than a handle to the writer
-        // above, and they never draw at the same time — the loop picks one per frame — so
-        // there is nothing for them to interleave and nothing to share: one writer, two
-        // handles to it, one of them writing at any given moment.
-        //
-        // Both are built before the input thread exists, and that order is not cosmetic:
-        // `Viewport::Inline` asks the terminal where the cursor is, and crossterm reads that
-        // answer off stdin itself. A reader holding stdin would take the reply.
-        let (mut primary_terminal, mut secondary_terminal) = (
-            Terminal::with_options(
-                CrosstermBackend::new(std::io::stdout()),
-                ratatui::TerminalOptions {
-                    viewport: ratatui::Viewport::Inline(widget::DOCK_HEIGHT),
-                },
-            )?,
-            Terminal::new(CrosstermBackend::new(std::io::stdout()))?,
-        );
+        // The dock binds the link this pane announces, and hands it straight back: accepting on it
+        // is the run path's, and a transport has one owner.
+        let (transport, recv_transport) = tokio::sync::oneshot::channel();
+        let session = Session::new(
+            self.channel,
+            self.program.display().to_string(),
+            transport,
+        )
+        .await?;
+        let mut main_widget = widget::MainWidget::new(session)?;
 
         // The output size is the terminal's own, read once: it is the size the session
         // is created at, and the pane's own report is what resizes it from then on.
@@ -225,127 +233,101 @@ impl Gui {
         // what the name and the lack of an underscore say.
         let _tty = Raw::install()?;
 
-        // The pane's input, read and parsed on a thread of its own: a read of
-        // the raw terminal blocks until the pane has something to say, and the
-        // draw loop cannot sit in that read. Nothing typed while the session
-        // connects is lost — the events wait in the channel until a frame
-        // reads them.
-        //
-        // Handed over rather than started here: reading this terminal is the session's own
-        // business, and it is the session that drains what the reader parses.
-        let input = Box::new(stdin) as widget::Input;
+        // The pane's input, as a stream of the bytes that arrive. One line, because a stream of bytes
+        // is what the loop's `select!` wants: it is woken by the descriptor rather than by a thread,
+        // so a keystroke and a committed window are two answers to the same question.
+        let mut stdin = tokio_util::io::ReaderStream::new(stdin);
+        let mut parser = termina::Parser::default();
 
-        // The window session, the input reader, and the dock: all of it is the session's,
-        // built from the switches this client was started with.
-        let mut session = Session::new(
-            size,
+        // The run path and the render path, driven together: the run path owns the program, so its
+        // ending ends the session, and this loop owns the pane. The client is pinned outside the
+        // loop and polled in place, so a turn of the pane never restarts it.
+        let (root_initializer, root) = tokio::sync::oneshot::channel();
+        let mut client = std::pin::pin!(crate::client::run(
+            root_initializer,
+            crate::windowing::Options {
+                resolution: size,
+                default_window_size: (size.0 / 2, size.1 / 2),
+                dpi: self.scale,
+                use_x11: false,
+            },
             self.streaming.codec(),
-            self.channel,
-            input,
-            self.program.display().to_string(),
-            self.scale,
-        )
-        .await?;
-
-        // Two modes, set once and never toggled, because both belong to the terminal device
-        // rather than to a screen: the alternate screen is a grid the terminal keeps for as
-        // long as it is asked for, and mouse tracking is one mode on the tty — which these
-        // two terminals share through `SharedStdout`, so asking twice is asking once.
-
-        let mut was_alternate = false;
-        // Where a frame's worth of the program's words is collected. One buffer for the whole run,
-        // sized to the ring that fills it: the ring caps what can arrive, so this never grows, and
-        // reusing it is what keeps a chatty program from allocating a Vec per frame.
-        let mut program_stdout = Vec::with_capacity(widget::RING_BUF_CAPACITY);
-        // The frame clock, kept here because this loop is the only place a frame exists: how long
-        // one took is what anything animated is paced by, and nothing below can measure it.
-        let mut last = std::time::Instant::now();
+            self.program.clone(),
+            recv_transport,
+        ));
+        // Pinned for the reason the client is: an arm's future is dropped when another arm wins,
+        // and a receiver moved into that future would be dropped with it — a window that had
+        // already arrived, lost. Pinned, the wait's state stays where it is and awaiting it again
+        // asks the same question. A receiver is `Unpin`, so this only says out loud where the
+        // state lives.
+        let mut root = std::pin::pin!(root);
+        let mut have_root = false;
+        // The first frame is owed: the announcement has to reach the terminal for the other side to
+        // find it and dial, and nothing else can happen until it has.
+        let mut render_next = true;
         loop {
-            let delta = std::mem::replace(&mut last, std::time::Instant::now()).elapsed().as_secs_f32();
-            if session.is_alternate() {
-                if !was_alternate {
-                    crossterm::execute!(
-                        secondary_terminal.backend_mut(),
-                        crossterm::terminal::EnterAlternateScreen,
-                        crossterm::event::EnableMouseCapture
-                    )?;
-                    // The terminal diffs against the buffer it drew last, and that buffer belongs
-                    // to the screen it drew on. Coming back to the alternate screen whose
-                    // contents were dropped by the crossing makes that diff a lie, so the back
-                    // buffer is discarded and the whole screen drawn again.
-                    //
-                    // `resize` and not `clear`: the two do the same work for a fullscreen
-                    // viewport — clear it all, reset the back buffer — and only `clear` reads the
-                    // cursor back to restore it, which cannot be answered here. This process's
-                    // stdin is the reader thread's.
-                    secondary_terminal.resize(secondary_terminal.size()?.into())?;
+            // Drawn before the wait, not after it: a frame is owed when a previous turn said so, and
+            // waiting first would be a pane that shows nothing while it waits for the hand-over that
+            // only the announcement can bring about.
+            if render_next {
+                render_next = false;
+                main_widget.render()?;
+                // The frame the session asked to end on is the one just drawn: the screen has been
+                // crossed back to the logs one, and there is nothing after it.
+                if main_widget.done() {
+                    log::info!("run: the session is over");
+                    return Ok(());
                 }
-
-                was_alternate = true;
-
-                &mut secondary_terminal
-            } else {
-                if was_alternate {
-                    crossterm::execute!(
-                        secondary_terminal.backend_mut(),
-                        crossterm::terminal::LeaveAlternateScreen,
-                        crossterm::event::DisableMouseCapture
-                    )?;
-                }
-
-                // Cleared, or the next entry into the stream is a no-op: the screen would be the
-                // logs one and the program's window would have nowhere to land.
-                was_alternate = false;
-
-                &mut primary_terminal
             }
-            .draw(|frame| {
-                frame.render_stateful_widget(
-                    GuiWidget {
-                        delta,
-                        program_stdout: &mut program_stdout,
-                    },
-                    frame.area(),
-                    &mut session,
-                )
-            })?;
 
-            // After the draw. Only the screen's own frame fills this — the dock switches the page
-            // after the stage has already drawn — so anything here belongs to the screen this frame
-            // drew, and that screen is the logs one exactly when this is empty of a window.
-            //
-            // It is put on the screen here rather than in the draw because the terminal is this
-            // half's: an inline viewport starts at the cursor row, so the only place to put a line
-            // is above it, which `insert_before` scrolls open.
-            if !program_stdout.is_empty() {
-                // A line each: the thread that reads the pipe puts the terminator back on every
-                // line it takes off, so the ring's bytes are newline-separated throughout and
-                // `lines` is exactly what the program printed.
-                let text = String::from_utf8_lossy(&program_stdout);
-                let lines: Vec<&str> = text.lines().collect();
-                primary_terminal.insert_before(lines.len() as u16, |buf| {
-                    for (row, line) in lines.iter().enumerate() {
-                        buf.set_string(0, row as u16, line, ratatui::style::Style::new());
+            // How long this turn waits for something to happen. A pane with something moving on it
+            // is redrawn at a frame's pace instead of waiting for the next indicator tick: the
+            // animation is advanced by the frame's own delta, so drawing again at once would advance
+            // it by nothing and drawing four times a second would step it in quarter-second jumps.
+            let wait = match main_widget.is_animating() {
+                true => FRAME,
+                false => INDICATOR,
+            };
+
+            // Each arm answers whether the frame changed: a key or a press can, a motion over a
+            // picture that is already drawn cannot, and neither can a window already placed.
+            tokio::select! {
+                // The program is over, on either half of it: there is nothing left to draw.
+                ended = &mut client => {
+                    log::info!("run: the client ended");
+                    return ended;
+                }
+                // A key or a press: this terminal's own bytes, parsed into the events the loop hands
+                // to the program's windows and then to the dock. One read per turn, because a read
+                // can carry half a sequence and the parser is what says when it has a whole one.
+                bytes = stdin.next() => {
+                    log::info!("run: input arrived: {}", bytes.is_some());
+                    parser.parse(&bytes.ok_or(std::io::ErrorKind::UnexpectedEof)??, true);
+                    while let Some(event) = parser.pop() {
+                        render_next |= main_widget.handle_event(&event)?;
                     }
-                })?;
-            }
-            // Emptied for the next frame. The allocation is kept, so a program that prints every
-            // frame allocates this buffer once for the whole run rather than once per frame.
-            program_stdout.clear();
-
-            if session.done() {
-                // The same pair the loop leaves with, for the same reason: ending on the
-                // stream's screen leaves the logs screen behind rather than a hole, and a
-                // wheel handed over to the stream is handed back. Guarded, so a session that
-                // never streamed does not ask for a screen it never entered.
-                if was_alternate {
-                    crossterm::execute!(
-                        secondary_terminal.backend_mut(),
-                        crossterm::terminal::LeaveAlternateScreen,
-                        crossterm::event::DisableMouseCapture
-                    )?;
                 }
-                return Ok(());
+                // The window the program drew, handed over once, before the first frame.
+                root_window = &mut root, if !have_root => {
+                    have_root = true;
+                    let (window, stdout) = root_window.map_err(|_| {
+                        std::io::Error::other("the session ended before the program drew a window")
+                    })?;
+                    main_widget.from_any_to_windows(window, stdout);
+                    render_next = true;
+                }
+                // A window the program opened or closed. The wait answers with the work that
+                // change wants — the stack cannot be changed while what changed it is still being
+                // read — so the turn runs it, and a window arriving is always worth drawing.
+                // A window the program opened or closed: the turn runs the work that change wants,
+                // and tells the root what size the pane is, which only this half can read.
+                () = main_widget.step() => render_next = true,
+                // Nothing happened, and something on the pane is still moving. A tick rather than a
+                // frame clock: it is what keeps the dock's light breathing and a tab's band walking
+                // while the user reads rather than types, and it costs a frame only when asked for
+                // one — 250ms is fast enough for a slow fade and slow enough to leave an idle pane
+                // alone.
+                () = tokio::time::sleep(wait) => render_next = true,
             }
         }
     }
@@ -437,6 +419,15 @@ fn install_logger() -> std::path::PathBuf {
         file: std::sync::Mutex::new(file),
     });
     log::set_logger(capturer).expect("the log is installed once, before anything logs");
+    // A panic is the one failure that would otherwise leave nothing behind: its message goes to
+    // stderr, which under the pty is the pane the client is drawing on, so it is wiped by the next
+    // frame or lost with the terminal. The hook puts the same text in the same file as everything
+    // else, and then lets the default hook print it where a terminal would have shown it.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("panicked: {info}");
+        previous(info);
+    }));
     // `Debug`, not `Trace`: trace is where `tracing` puts every span enter and exit, so a
     // `trace` level here captures a line per frame per span — gigabytes of them, from every
     // process, into one file. What is wanted from this log is what the client decided, and

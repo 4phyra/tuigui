@@ -13,6 +13,8 @@ use gui::Gui;
 #[tokio::main(worker_threads = 8)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gui = Gui::parse();
-    gui.run(std::io::stdin(), std::io::stdout()).await?;
+    // tokio's stdin, not `std::io`'s: the client reads this terminal as a stream, and the async
+    // handle is the same descriptor with a future attached.
+    gui.run(tokio::io::stdin(), std::io::stdout()).await?;
     Ok(())
 }
