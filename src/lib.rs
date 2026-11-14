@@ -72,6 +72,9 @@ impl TuiGui {
         if self.gui.loop_video {
             args.push("--dbg-loop-video".into());
         }
+        if self.gui.anchor_greenscreen {
+            args.push("--dbg-anchor-greenscreen".into());
+        }
         args
     }
 

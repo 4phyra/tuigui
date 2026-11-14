@@ -97,6 +97,11 @@ A full rebuild of `ring` / `rustls` / the TLS stack costs minutes. Avoid it.
   seconds, run it in the background and keep working. Do not sit in `wait`.
 - Test after changes (`CARGO_TARGET_DIR=./target cargo test --workspace
   --all-targets`).
+- **Screen snapshots always use `with_styles()`.** A plain `Screen` renders
+  only `size:`/`cursor:` and the glyphs; every colour is dropped, so a snapshot
+  of a screen whose verdict is a colour shows nothing that decides it. Write
+  `assert_snapshot!("name", screen.with_styles())`, never `assert_snapshot!(
+  "name", screen)`.
 
 ## New state is a new concept (reach for a function first)
 

@@ -152,6 +152,12 @@ pub struct DebugOptions {
     /// of these switches is needed at all.
     #[arg(long = "dbg-loop-video")]
     pub loop_video: bool,
+    /// Draw every window's anchor cells on a green background.
+    ///
+    /// A signature is a random colour, so a test cannot name the cell it must not see. Green is
+    /// a colour no program here draws: a green cell is an anchor that was not blanked.
+    #[arg(long = "dbg-anchor-greenscreen")]
+    pub anchor_greenscreen: bool,
 }
 
 impl Gui {
@@ -252,6 +258,7 @@ impl Gui {
                 use_x11: false,
             },
             self.streaming.codec(),
+            self.debug,
             self.program.clone(),
             recv_transport,
         ));

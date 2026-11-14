@@ -262,6 +262,7 @@
               # put it outside this shell and outside the fingerprints it is used against.
               pkgs.cargo-nextest
               pkgs.tokei
+              pkgs.slint-viewer
               # `just test-record`: the review half of the snapshot loop. A changed
               # screen waits as a `.snap.new` until it has been looked at, and this is
               # the review that shows the old and new pictures one at a time; writing

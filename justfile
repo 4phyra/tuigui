@@ -63,15 +63,29 @@ dummy:
 gallery:
     @CARGO_TARGET_DIR={{target}} cargo run -p tuigui_components --bin gallery
 
+# Run the tests. Screens that changed are queued, not printed.
+#
 # `cargo insta test` runs nextest — one process per test, so a pty cannot leak —
-# and leaves a mismatched screen as `.snap.new` instead of failing; the review
-# runs whatever its status. `snapshot-diff` shows each one: an empty old file is
-# a new screen rendered whole, a real one a coloured cell diff.
+# and writes each mismatched screen as a `.snap.new`. `INSTA_OUTPUT=none` keeps it
+# from rendering the screen to stdout: the one line it writes to stderr saying a
+# snapshot was stored is the whole report, and `just test-review` is where they
+# are looked at.
 test *args:
     @CARGO_TARGET_DIR={{target}} cargo build -p tuigui_components --examples
-    @CARGO_TARGET_DIR={{target}} cargo insta test --test-runner nextest --workspace --tests {{args}} \
-        || echo "test: the run reported failures or pending snapshots; reviewing what it recorded"
+    @INSTA_OUTPUT=none CARGO_TARGET_DIR={{target}} cargo insta test --test-runner nextest --workspace --tests {{args}}
+
+# Look at the screens a run left behind: accept, reject, or skip each one.
+#
+# `snapshot-diff` shows each one: an empty old file is a new screen rendered
+# whole, a real one a coloured cell diff.
+test-review:
     @INSTA_DIFF_TOOL="just --justfile {{justfile()}} --working-directory . snapshot-diff" cargo insta review --workspace
 
+# Show one changed screen as a picture: the new screen, painted in its own colours.
+#
+# `termlens render --ansi`, not `termlens diff`: a diff of two screens also
+# prints each changed row's style runs as `styles: … fg=#… → fg=#…`, which is
+# the colour spelled out as hex rather than shown. The picture is what a reader
+# compares, and a cell painted the wrong colour is visible in it.
 snapshot-diff old new:
-    @if [ -s "{{old}}" ]; then termlens diff --color=always "{{old}}" "{{new}}" || true; else termlens render --ansi "{{new}}" || true; fi
+    @termlens render --ansi "{{new}}" || true

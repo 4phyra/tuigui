@@ -34,8 +34,9 @@ pub type Task = Box<dyn FnOnce(&mut Compositor, rustix::termios::Winsize)>;
 /// The pointer, as the pane draws it.
 ///
 /// An arrow, because a pointer is looked for rather than read: it sits on top of whatever window
-/// is under it, and the glyph only has to be findable at a glance.
-const CURSOR: char = '➤';
+/// is under it, and the glyph only has to be findable at a glance. Public so a test of the pane
+/// can find it in the cells rather than repeating the character.
+pub const CURSOR: char = '➤';
 
 /// A program, or several, running in a compositor of ours.
 pub struct Compositor {

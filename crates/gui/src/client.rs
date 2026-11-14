@@ -62,10 +62,11 @@ pub async fn run(
     root_initializer: tokio::sync::oneshot::Sender<(CompositableWindow, io::PipeReader)>,
     options: crate::windowing::Options,
     codec: codecs::CodecId,
+    debug: crate::DebugOptions,
     program: std::path::PathBuf,
     transport: tokio::sync::oneshot::Receiver<Box<dyn Transport>>,
 ) -> io::Result<()> {
-    let mut windowing = PlatformWindowing::new(options, codec)?;
+    let mut windowing = PlatformWindowing::new(options, codec, debug)?;
     windowing.spawn(&program)?;
     // The program's own words, for the screen that prints them. Taken once: a pipe has one reader.
     let stdout = windowing

@@ -5387,6 +5387,7 @@ name = "tuigui"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "compositor",
  "gui",
  "log",
  "rustix",
