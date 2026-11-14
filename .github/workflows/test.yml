@@ -1,0 +1,51 @@
+name: Tests
+
+# `just test` is the only test loop there is, so CI runs the recipe rather than a
+# second set of flags that can drift from it: nextest's process-per-test, the
+# `.snap.new` files a changed screen leaves behind, and the review that has to
+# pass before they count. With nothing pending the review exits immediately; a
+# pending snapshot fails the job, which is what an unaccepted screen means.
+#
+# Master only: the runs worth keeping are the ones that land.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # A hosted runner starts with an empty `/nix`, and the dev shell is a Rust
+      # toolchain plus the libraries it links; without a store cache every run is
+      # a cold build of that closure. `nix-quick-install-action` is the installer
+      # store caching works with — Magic Nix Cache was retired, and a Cachix cache
+      # would need a secret this repository does not have.
+      - uses: nixbuild/nix-quick-install-action@v34
+        with:
+          nix_conf: |
+            keep-env-derivations = true
+            keep-outputs = true
+
+      # Keyed on the flake inputs: a changed `flake.lock` is a different closure
+      # and should not be restored from the previous one, but every run before it
+      # is still a better starting point than an empty store.
+      - name: Restore and save the Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 4G
+
+      - name: Run the tests
+        run: nix develop . -c just test

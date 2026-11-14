@@ -10,7 +10,11 @@
   };
 
   outputs =
-    { self, nixpkgs, rust-overlay }:
+    {
+      self,
+      nixpkgs,
+      rust-overlay,
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -158,9 +162,7 @@
               src = ./.;
               filter =
                 path: type:
-                !pkgs.lib.hasInfix ".crush" path
-                && path != toString ./result
-                && path != toString ./target;
+                !pkgs.lib.hasInfix ".crush" path && path != toString ./result && path != toString ./target;
             };
 
             cargoLock.lockFile = ./Cargo.lock;
@@ -207,11 +209,17 @@
           # `CAPY_VID_PATH` points at the transcoded H.264 MP4 so dev tools
           # can stream it with `tuigui --video "$CAPY_VID_PATH"` without
           # handling licensing or re-encoding themselves.
-          capy = self.packages.${system}.capyVideo or (pkgs.runCommand "capy-video" {} "mkdir -p $out; touch $out/capybara.mp4; echo 'no capybara package; build default first' >&2");
+          capy =
+            self.packages.${system}.capyVideo or (pkgs.runCommand "capy-video" { }
+              "mkdir -p $out; touch $out/capybara.mp4; echo 'no capybara package; build default first' >&2"
+            );
           # Capybara demo images, pinned to the capyImages package above.
           # `CAPYBARA_IMG_DIR` points at the train images so the dummy
           # windowing path can pick one of them at random.
-          capys = self.packages.${system}.capyImages or (pkgs.runCommand "capybara-images" {} "mkdir -p $out/train; echo 'no capybara images package; build default first' >&2");
+          capys =
+            self.packages.${system}.capyImages or (pkgs.runCommand "capybara-images" { }
+              "mkdir -p $out/train; echo 'no capybara images package; build default first' >&2"
+            );
           # `tui!` and `gui!`: either half of a session, built and run quietly.
           #
           # The bang keeps them clear of a `tui` or `gui` the shell may already answer,
@@ -253,6 +261,7 @@
               # rather than buried in the output. Here and not `cargo install`, which would
               # put it outside this shell and outside the fingerprints it is used against.
               pkgs.cargo-nextest
+              pkgs.tokei
               # `just test-record`: the review half of the snapshot loop. A changed
               # screen waits as a `.snap.new` until it has been looked at, and this is
               # the review that shows the old and new pictures one at a time; writing
@@ -291,7 +300,7 @@
               # X11 side: xeyes + glxgears, plus a virtual X server and input
               # driver for the Xvfb capture path
               pkgs.xeyes
-              pkgs.mesa-demos         # glxgears — classic X11/GL gears test app
+              pkgs.mesa-demos # glxgears — classic X11/GL gears test app
               pkgs.xvfb-run
               pkgs.xdotool
               # profiler GUI the client half streams its spans to
