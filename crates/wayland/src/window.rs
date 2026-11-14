@@ -241,16 +241,19 @@ impl Window {
         // unless something committed in between. That is what "anything new" means here, and a
         // receiver would not answer it — `subscribe` starts at the current value and considers
         // it already seen.
-        let frame = self.frame.send_replace(None)?;
+        let frame = self.frame.send_replace(None);
         // Both answers to "you may draw again", given here rather than at commit. The pixels
         // are already copied out, so releasing the buffer cannot disturb them: the client
         // renders the next frame into it, and that frame is read when this is called again.
         // One commit in flight, so a client cannot get further ahead than one frame.
-        if let Some(buffer) = frame.buffer {
+        if let Some(buffer) = frame.as_ref().and_then(|frame| frame.buffer.as_ref()) {
             buffer.release();
         }
+        // Asked whether or not a picture was waiting: the client draws its *next* frame on this
+        // callback, so a callback that only fired when a frame was ready would be a client that
+        // stopped drawing after its first one.
         crate::utils::fire_frame_callbacks(self.surface.wl_surface());
-        Some((frame.pixels, frame.size))
+        frame.map(|frame| (frame.pixels, frame.size))
     }
 
     /// Ask this window to draw at `size` **physical** pixels instead of its current one.

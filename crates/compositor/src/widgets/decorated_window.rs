@@ -1,13 +1,15 @@
 //! A window with its chrome: the window's own cells, and the frame around it.
 //! The root has no frame — it is the pane, not a window over anything.
 
+use std::sync::{Arc, Weak};
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::widgets::{Clear, Widget};
 use termina::event::MouseEvent;
 
 use super::frame::Frame;
-use crate::windowing::{Compositable, event_map};
+use crate::window::CompositableWindow;
 
 /// The smallest a window may be, in cells.
 ///
@@ -29,17 +31,11 @@ pub struct WindowState {
 
 /// One window, as the pane draws it and hands events to it.
 pub struct DecoratedWindow {
-    /// The window itself, owned: the stack is what holds the session's windows, so nothing else
-    /// keeps them alive and nothing has to be pruned. `Box` rather than `Arc` because there is one
-    /// owner — this — and a window that needs to be reachable from elsewhere is reached by its
-    /// place here, never by a second handle.
-    pub window: Box<dyn Compositable>,
+    /// The window itself, held weakly: the side running the program owns it, and a placement
+    /// whose window is gone is one that fails to upgrade rather than something to prune.
+    pub window: Weak<CompositableWindow>,
     pub frame: Option<Frame>,
-    /// Where this window sits, which cells are its own, and how its picture is encoded.
-    ///
-    /// A plain field, like the two above it: every caller that needs it holds the window
-    /// mutably — the frame loop walks the stack with `iter_mut`, and the drag and resize paths
-    /// take `&mut self` — so there is no second reader to synchronise with.
+    /// Where this window sits, which cells are its own.
     pub state: WindowState,
 }
 
@@ -58,10 +54,7 @@ pub fn cell_size(winsize: rustix::termios::Winsize) -> (u32, u32) {
 /// A box of cells as pixels: what a program is asked to draw at.
 ///
 /// The other half of [`cells`], and the pair has to round-trip: a box converted to pixels,
-/// configured, and read back must give the same box. Multiplying here and dividing there is
-/// not enough on its own — a grid does not divide pixels evenly, so dividing a program's
-/// committed size can land a cell either side of the box that produced it, and adopting that
-/// makes the window flip between two sizes forever.
+/// configured, and read back must give the same box.
 pub fn pixels(area: Rect, winsize: rustix::termios::Winsize) -> (u32, u32) {
     let (width, height) = cell_size(winsize);
     (u32::from(area.width) * width, u32::from(area.height) * height)
@@ -81,7 +74,7 @@ pub fn cells(px: (u32, u32), winsize: rustix::termios::Winsize) -> (u16, u16) {
 }
 
 impl DecoratedWindow {
-    pub fn new(window: Box<dyn Compositable>, frame: Option<Frame>, state: WindowState) -> Self {
+    pub fn new(window: Weak<CompositableWindow>, frame: Option<Frame>, state: WindowState) -> Self {
         Self {
             window,
             frame,
@@ -89,31 +82,53 @@ impl DecoratedWindow {
         }
     }
 
+    /// The window itself, for the calls that need its facts.
+    pub fn get(&self) -> Option<Arc<CompositableWindow>> {
+        self.window.upgrade()
+    }
+
+    /// Whether this placement is the one for `window`.
+    pub fn is_about(&self, window: &Weak<CompositableWindow>) -> bool {
+        Weak::ptr_eq(&self.window, window)
+    }
+
+    /// Whether the window behind this placement is still there.
+    pub fn is_alive(&self) -> bool {
+        self.window.strong_count() > 0
+    }
+
     /// Tell the window's program to draw at the size the window occupies.
     ///
-    /// A window is a box of cells on the pane, and its program draws a picture: those
-    /// two are the same fact only if someone converts one into the other, which is what
-    /// this does. Without it a window keeps drawing at whatever size it chose when it
-    /// was opened, and the pane stretches that picture over the box — a window that
-    /// looks right only if the two sizes happen to agree, which for the root they do
-    /// because it is told the pane's own size.
+    /// A window is a box of cells on the pane, and its program draws a picture: those two are the
+    /// same fact only if someone converts one into the other, which is what this does. Without it a
+    /// window keeps drawing at whatever size it chose when it was opened, and the pane stretches
+    /// that picture over the box — a window that looks right only if the two sizes happen to agree,
+    /// which for the root they do because it is told the pane's own size.
     ///
-    /// The root has no chrome, so its box is the pane and it is measured in pixels
-    /// directly by the compositor; every other window loses a row to its bar and its
-    /// ring, and is measured here.
-    pub fn maybe_set_size(
-        &mut self,
-        winsize: rustix::termios::Winsize,
-    ) -> Result<(), crate::Error> {
-        // A popup is sized by its own program's positioner, so there is nothing to ask: the box
-        // it is drawn in is the size it said it would be.
-        if self.frame.is_none() || self.window.is_popup() {
-            return Ok(());
+    /// The root has no chrome, so its box is the pane and it is measured in pixels directly by the
+    /// compositor; every other window loses a row to its bar and its ring.
+    pub fn maybe_set_size(&mut self, winsize: rustix::termios::Winsize) {
+        let Some(window) = self.get() else {
+            return;
+        };
+        // A popup is sized by its own program's positioner, so there is nothing to ask: the box it
+        // is drawn in is the size it said it would be.
+        if window.is_popup {
+            return;
         }
-        let area = self.state.area;
-        // The ask goes out every frame regardless: a program that has not caught up yet needs to
-        // keep hearing the size, and a configure restating what it already has is not news to it.
-        self.window.set_size(pixels(area, winsize))
+        // Asked only when the box and the picture disagree. A configure is not free on the
+        // program's side — it stops, lays itself out again and commits — so asking on every turn is
+        // a program that never finishes drawing one frame, which shows as a window that never
+        // appears. The size the program reports is what it committed at, so the two agreeing means
+        // there is nothing to ask for.
+        let size = pixels(self.state.area, winsize);
+        let committed = *window.size.lock().unwrap_or_else(|e| e.into_inner());
+        if committed == size {
+            return;
+        }
+        // A window whose program is over is a window about to be dropped, so a send that fails is
+        // that rather than a failure of the pane's.
+        let _ = window.set_size.send(size);
     }
 
     /// Offer a mouse event to this window, whose box on the pane is `area`.
@@ -128,37 +143,36 @@ impl DecoratedWindow {
         area: Rect,
         winsize: rustix::termios::Winsize,
     ) -> Result<Option<MouseEvent>, crate::Error> {
-        // A window without chrome has nothing to hit-test first, so the event goes
-        // straight on: a frame that claimed nothing would report the window as having claimed
-        // it, and the root — which has none — would then deliver no pointer event at all.
+        let Some(window) = self.get() else {
+            return Ok(None);
+        };
+        // A window without chrome has nothing to hit-test first, so the event goes straight on: a
+        // frame that claimed nothing would report the window as having claimed it, and the root —
+        // which has none — would then deliver no pointer event at all.
         let mouse = match self.frame.as_mut() {
-            Some(frame) => {
-                match frame.handle_mouse(self.window.as_ref(), &mut self.state, mouse, pane, area)?
-                {
-                    Some(mouse) => mouse,
-                    None => return Ok(None),
-                }
-            }
+            Some(frame) => match frame.handle_mouse(&window, &mut self.state, mouse, pane, area)? {
+                Some(mouse) => mouse,
+                None => return Ok(None),
+            },
             None => mouse,
         };
         if !area.contains(Position::new(mouse.column, mouse.row)) {
             return Ok(Some(mouse));
         }
-        // The terminal reports the pointer in cells of the pane; the window's program
-        // thinks in pixels of its own picture. One cell is not one pixel, so the offset
-        // inside the window is multiplied by the cell before it is sent — a pointer sent
-        // in cells lands in the window's top-left corner and never reaches the widget the
-        // user aimed at.
-        let size = cell_size(winsize);
-        if let Some(event) = event_map::pointer(
-            &mouse,
-            (
-                f64::from(mouse.column - area.x) * f64::from(size.0),
-                f64::from(mouse.row - area.y) * f64::from(size.1),
-            ),
-        ) {
-            self.window.pointer_input(event)?;
-        }
+        // The pane reports the pointer in cells of itself; what the program is told is the pixel
+        // inside its own picture, which is where the user aimed. One cell is not one pixel, so the
+        // offset is multiplied by the cell before it is sent — a pointer sent in cells lands in the
+        // window's top-left corner and never reaches the widget the user aimed at.
+        let (cell_width, cell_height) = cell_size(winsize);
+        let at = (
+            f64::from(mouse.column - area.x) * f64::from(cell_width),
+            f64::from(mouse.row - area.y) * f64::from(cell_height),
+        );
+        let _ = window.input.send(termina::Event::Mouse(MouseEvent {
+            column: at.0 as u16,
+            row: at.1 as u16,
+            ..mouse
+        }));
         Ok(None)
     }
 }
@@ -166,24 +180,30 @@ impl DecoratedWindow {
 impl Widget for &mut DecoratedWindow {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        ratatui::widgets::StatefulWidgetRef::render_ref(
-            self.window.as_ref(),
-            area,
-            buf,
-            &mut self.state,
-        );
+        // The window's own cells, which is what the far side scans for: they carry its surface
+        // signature, and a window drawn without them is an anchor nothing can be placed on.
+        //
+        // A call and not a description, because a window is not only cells: the dummy session's
+        // windows paint a picture, and only they know how.
+        if let Some(window) = self.get() {
+            (window.render)(area, buf, &mut self.state);
+        }
+        // Read before the frame is borrowed: the title is the program's fact, and the frame is
+        // this side's.
+        let title = self
+            .get()
+            .map(|window| window.title.lock().unwrap_or_else(|e| e.into_inner()).clone());
         if let Some(frame) = self.frame.as_mut() {
             // A popup has no bar: it is a menu its own program drew, and a title strip under it
             // would be this side painting furniture over something the client owns. The ring it
             // keeps, because a popup is still a box on the pane.
             //
-            // The bar shows what the window calls itself, which only the window
-            // knows: it is read once per frame, here, rather than kept in step.
-            //
-            // A window that is over has no name to give, and the bar it would be painted on is
-            // the bar of a window `cleanup` is about to drop: the title is cleared rather than
+            // A window that is over has no name to give, and the bar it would be painted on is the
+            // bar of a window `cleanup` is about to drop: the title is cleared rather than
             // reported, because there is nothing left that could act on the failure.
-            frame.set_title(self.window.title().unwrap_or_default());
+            if let Some(title) = title {
+                frame.set_title(title);
+            }
             frame.render(area, buf);
         }
     }

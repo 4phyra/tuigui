@@ -1,215 +1,233 @@
-//! The pane the client draws, and the session it draws from.
+//! The pane the client draws.
 //!
 //! ```text
-//!   widget.rs          this: the widget, the Session, and the screens
-//!   widget/stage.rs    the program running: its link, its windows, and the screen up
+//!   widget.rs          this: the terminals a frame is drawn on, and the session it draws
+//!   widget/dock.rs     the three rows that start a session and switch screens
+//!   widget/stage.rs    the program running: its windows, and the screen up
+//!   session.rs         what a frame is: the screen, the dock, and the input that moves them
 //! ```
+//!
+//! The session knows which screen it is on; the terminals are here, because a screen is a device
+//! and only the half holding the writer can cross between them. A frame is drawn by asking this
+//! to draw, and it decides which of the two the frame lands on.
 
-mod dock;
-mod stage;
+pub(crate) mod dock;
+pub(crate) mod stage;
 
+pub use crate::session::Session;
 pub use dock::HEIGHT as DOCK_HEIGHT;
 pub use stage::{Page, Stage, StageProps, RING_BUF_CAPACITY};
 
-use codecs::CodecId;
-use ratatui::buffer::Buffer;
+use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
-use ratatui::widgets::StatefulWidget;
+use ratatui::Terminal;
 
-/// This terminal's input, boxed so a caller may hand in its own.
+use crate::session::SessionProps;
+
+/// The pane: the session, and the two terminals it is drawn on.
 ///
-/// The session holds one of these for its whole life, and `Gui::run` is generic
-/// over what it was given, so the handle is boxed rather than named.
-pub type Input = Box<dyn std::io::Read + Send>;
-
-/// One session: where it is, and which screen it is showing.
-pub struct Session {
-    /// Where the session is, or what went wrong getting there.
+/// Two terminals, because a `Terminal`'s viewport is fixed when it is built and the two screens
+/// want different answers: the logs screen wants three rows anchored under the cursor, where lines
+/// printed above them scroll into the terminal's own history, and the stream wants the whole
+/// screen with a window on it.
+///
+/// Each backend gets this process's own stdout, and they never draw at the same time — a frame
+/// picks one — so there is nothing for them to interleave and nothing to share: one writer, two
+/// handles to it, one of them writing at any given moment.
+pub struct MainWidget {
+    /// What is being drawn: the screen, the dock, and the windows behind them.
+    session: Session,
+    /// The logs screen: three rows at the cursor, and the terminal's own history above them.
+    primary: Terminal<CrosstermBackend<std::io::Stdout>>,
+    /// The stream: the alternate screen, with the program's window on it.
+    secondary: Terminal<CrosstermBackend<std::io::Stdout>>,
+    /// Whether the previous frame was drawn on the alternate screen.
     ///
-    /// A `Result` and not a state, because a step consumes the state it is given: there
-    /// has to be something in its place while the step runs, and a failure is the only
-    /// honest thing to put there. A step that never returns its next state leaves the
-    /// failure behind, and the pane shows it.
-    pub stage: stage::StageResult,
-    /// The dock, which is what gets a session started and what switches screens once
-    /// there is one. It shares the stage above as its state, so a button press is the swap.
-    pub dock: dock::Dock,
-    /// This terminal's input, as parsed events.
+    /// Kept because entering and leaving are transitions of the terminal device rather than of a
+    /// frame: the crossing happens once, on the frame the screen changes.
+    was_alternate: bool,
+    /// The area the last frame drew into.
     ///
-    /// The reader thread owns the parsing and the reading; this end only
-    /// receives. Nothing is lost while a state is not reading: the channel
-    /// holds whatever arrived, and the streaming step drains it all at once.
-    pub input_receiver: std::sync::mpsc::Receiver<termina::Event>,
+    /// Kept because an event arrives between frames, and a press is aimed at a cell: the area is
+    /// the one the frame the user is looking at was drawn in, and nothing outside `draw` can ask
+    /// for it. On the inline screen it is three rows at the cursor, which the terminal decides.
+    area: Rect,
+    /// When the previous frame was drawn, which is what paces anything animated.
+    ///
+    /// Here because this is the only call that makes a frame, and how long one took is a fact
+    /// nothing below can measure.
+    last: std::time::Instant,
+    /// Where a frame's worth of the program's words is collected.
+    ///
+    /// Sized to the ring that fills it, so a frame that drains a full ring does not grow it, and
+    /// emptied rather than freed between frames so a chatty program allocates it once.
+    program_stdout: Vec<u8>,
 }
 
-impl Session {
-    /// Start a session: the window session this machine composites, and the channel the
-    /// other side dials.
+impl MainWidget {
+    /// The pane, over a session, with both terminals built where the writer is.
     ///
-    /// Built here rather than by the caller because it is the session's own part: the
-    /// caller says which program, how big, how to encode and how to be reached, and
-    /// everything a running window needs is assembled around that. The session is a
-    /// compositor in this process, one output.
-    ///
-    /// The channel is bound and announced before the first frame is drawn, so the advert
-    /// that frame puts on screen is one that answers.
-    ///
-    /// Binding is the one step the two channels do not share, which is why it is here and
-    /// not in [`Dock::new`]: a socket picks a path and listens on it, and an endpoint is
-    /// minted. Everything after it — announce, draw, wait to be dialed — is common.
-    pub async fn new(
-        size: (u32, u32),
-        codec: CodecId,
-        channel: crate::Channel,
-        stdin: Input,
-        program: String,
-        scale: f64,
-    ) -> std::io::Result<Self> {
-        // Read and parsed on a thread of its own: a read of the raw terminal blocks until
-        // the pane has something to say, and the draw loop cannot sit in that read. The
-        // events wait in the channel until a frame drains them, so nothing typed while the
-        // session connects is lost.
-        let input_receiver = crate::inputs::start(std::io::BufReader::new(stdin))?;
-        let server = crate::windowing::PlatformWindowing::new(
-            wayland::Options {
-                resolution: size,
-                default_window_size: (size.0 / 2, size.1 / 2),
-                dpi: scale,
-                use_x11: false,
-            },
-            codec,
-        )?;
-        let transport: Box<dyn wire::transport::Transport> = match channel {
-            crate::Channel::P2p => Box::new(wire::p2p::P2p::host().await?),
-            crate::Channel::Unix => Box::new(wire::unix::UnixSocket::host().await?),
-        };
+    /// Built before the input thread exists, and that order is not cosmetic: `Viewport::Inline`
+    /// asks the terminal where the cursor is, and crossterm reads that answer off stdin itself. A
+    /// reader holding stdin would take the reply.
+    pub fn new(session: Session) -> std::io::Result<Self> {
         Ok(Self {
-            stage: stage::StageResult(Ok(Stage::new(server, Page::default()))),
-            dock: dock::Dock::new(transport, program).await?,
-            input_receiver,
+            session,
+            primary: Terminal::with_options(
+                CrosstermBackend::new(std::io::stdout()),
+                ratatui::TerminalOptions {
+                    viewport: ratatui::Viewport::Inline(DOCK_HEIGHT),
+                },
+            )?,
+            secondary: Terminal::new(CrosstermBackend::new(std::io::stdout()))?,
+            was_alternate: false,
+            area: Rect::ZERO,
+            last: std::time::Instant::now(),
+            program_stdout: Vec::with_capacity(RING_BUF_CAPACITY),
         })
     }
 
-    /// Whether the session has ended.
-    pub fn done(&self) -> bool {
-        match &self.stage.0 {
-            // Failed, or finished: either way there is nothing left to do.
-            Err(_) => true,
-            // A stage with nothing running yet has not ended: the dock is still working on
-            // being reachable.
-            Ok(stage) => stage.finished(),
-        }
-    }
-
-    /// Whether the alternate screen is where this session draws.
+    /// Offer one event to the pane, and answer whether a frame is owed.
     ///
-    /// Asked by the caller because the terminals are the caller's: the session knows which
-    /// screen it wants, and the two — one three rows at the cursor, one the whole screen —
-    /// are built and owned where the writer is.
-    pub fn is_alternate(&self) -> bool {
-        self.stage
-            .as_ref()
-            .is_ok_and(|stage| matches!(stage.get_page(), Page::Stream { .. }))
-    }
-
-}
-
-/// The client itself: a widget over [`Session`].
-///
-/// The delta is the one thing a frame knows that the session does not: how long it has been since
-/// the last draw. Anything animated is paced by it, so a slower pane plays the same move at the
-/// same speed rather than in fewer, longer steps.
-pub struct GuiWidget<'a> {
-    /// Seconds since the previous frame.
-    pub delta: f32,
-    /// Where the program's words are collected, for the caller to put on the screen.
-    ///
-    /// Sized to the ring that fills it, so a frame that drains a full ring does not grow it: the
-    /// words handed on are exactly what the ring held, and nothing beyond that can arrive.
-    pub program_stdout: &'a mut Vec<u8>,
-}
-
-impl StatefulWidget for GuiWidget<'_> {
-    type State = Session;
-
-    /// One frame.
-    ///
-    /// The span is here and not around the draw that calls it: this is the one
-    /// call that knows what a frame is made of — the session's step, the
-    /// capture, the encode — so this is where the profiler's timeline should be
-    /// divided. Every stage below it lands inside the frame it belongs to.
-    #[tracing::instrument(name = "frame", skip_all)]
-    fn render(self, area: Rect, buf: &mut Buffer, session: &mut Session) {
-        // The dock is the last three rows and the content is what is above them. On the
-        // inline terminal those three rows are the whole area, so the content is empty and
-        // drawing into it draws nothing; on the fullscreen one the stream gets the rest.
-        //
-        // A terminal with no room above the dock has no layout to give it: there is no
-        // frame that satisfies it, and this is not a size to invent one for.
-        let content = Rect {
-            height: area
-                .height
-                .checked_sub(dock::HEIGHT)
-                .expect("this terminal has no room above the dock"),
-            ..area
-        };
+    /// The dock's rows are the bottom three of the area the frame drew, and the events that move
+    /// them are the pointer's: a press is aimed at a cell, so the area has to be the one the user
+    /// is looking at rather than the whole terminal.
+    pub fn handle_event(&mut self, event: &termina::Event) -> std::io::Result<bool> {
+        let winsize = rustix::termios::tcgetwinsize(std::io::stdin())?;
         let dock_area = Rect {
-            y: area.bottom() - dock::HEIGHT,
-            height: dock::HEIGHT,
-            ..area
+            y: self.area.bottom() - DOCK_HEIGHT,
+            height: DOCK_HEIGHT,
+            ..self.area
         };
+        Ok(self.session.handle_event(event, winsize, dock_area))
+    }
 
-        // The terminal's own report of itself, read once here because this is the call
-        // that draws: the grid says how many cells the pane is, and `ws_xpixel`/
-        // `ws_ypixel` say how many pixels, which is the size the session's program is
-        // configured at. Read rather than kept, because a terminal changes shape without
-        // anything here being told: a font that grew keeps the grid and changes the
-        // picture.
+    /// Do a turn of the pane: a window changed, and the root is told the pane's size.
+    ///
+    /// One call, because the wait and the work cannot be held at once: what the wait answers borrows
+    /// the stack it changes, so the borrow has to end between the two.
+    pub async fn step(&mut self) {
         let winsize = rustix::termios::tcgetwinsize(std::io::stdin())
             .expect("the terminal must report its own size");
+        self.session.step(winsize).await;
+    }
 
-        // One drain for the whole frame: the program's half and the furniture's half are
-        // offered the same list, and each takes what it acts on. A widget that read the channel
-        // itself would eat a click the other half is waiting for.
-        let mut events = Vec::new();
-        while let Ok(event) = session.input_receiver.try_recv() {
-            events.push(event);
+    /// The program's window is up, and its output has somewhere to go.
+    pub fn from_any_to_windows(
+        &mut self,
+        root: std::sync::Arc<compositor::CompositableWindow>,
+        stdout: std::io::PipeReader,
+    ) {
+        self.session.from_any_to_windows(root, stdout);
+    }
+
+    /// Whether the session is over.
+    pub fn done(&self) -> bool {
+        self.session.done()
+    }
+
+    /// One frame: the screen the session is on, and the program's words where they belong.
+    ///
+    /// The span is here and not around the caller: this is the one call that knows what a frame is
+    /// made of, so this is where the profiler's timeline should be divided.
+    #[tracing::instrument(name = "frame", skip_all)]
+    pub fn render(&mut self) -> std::io::Result<()> {
+        let delta = std::mem::replace(&mut self.last, std::time::Instant::now())
+            .elapsed()
+            .as_secs_f32();
+
+        // The screen is the session's to name and the terminals are this side's, so the crossing
+        // happens here: two modes, set once and never toggled per frame, because both belong to
+        // the terminal device rather than to a screen.
+        match (self.session.is_alternate(), self.was_alternate) {
+            (true, false) => {
+                crossterm::execute!(
+                    self.secondary.backend_mut(),
+                    crossterm::terminal::EnterAlternateScreen,
+                    crossterm::event::EnableMouseCapture
+                )?;
+                // The terminal diffs against the buffer it drew last, and that buffer belongs to
+                // the screen it drew on. Coming back to the alternate screen whose contents were
+                // dropped by the crossing makes that diff a lie, so the back buffer is discarded
+                // and the whole screen drawn again.
+                //
+                // `resize` and not `clear`: the two do the same work for a fullscreen viewport —
+                // clear it all, reset the back buffer — and only `clear` reads the cursor back to
+                // restore it, which cannot be answered here. This process's stdin is the reader
+                // thread's.
+                self.secondary.resize(self.secondary.size()?.into())?;
+                self.was_alternate = true;
+            }
+            (false, true) => {
+                crossterm::execute!(
+                    self.secondary.backend_mut(),
+                    crossterm::terminal::LeaveAlternateScreen,
+                    crossterm::event::DisableMouseCapture
+                )?;
+                self.was_alternate = false;
+            }
+            // The same screen as the last frame: no crossing, because the device is already there.
+            _ => {}
         }
 
-        // The program's frame. The wrapper's `render` is where the work is: it hands the input to
-        // the windows, advances them, draws them when they are the thing on screen — or draws the
-        // session's failure in their place.
-        let mut props = StageProps {
-            winsize,
-            events: &mut events,
-            program_stdout: self.program_stdout,
-        };
-        StatefulWidget::render(&mut session.stage, content, buf, &mut props);
 
-        // The frame the session asked to end on is the last one: the dock's rows are blanked
-        // rather than skipped. Skipping leaves whatever the previous frame wrote there — the
-        // terminal only redraws the cells that changed — so the way out is a clear, and the logs
-        // screen underneath is what is left.
-        if !session.stage.as_ref().is_ok_and(Stage::finished) {
-            // The dock, under the screen: the one part of the pane that is the same in every
-            // state, and the one thing a user can press to leave a screen whose content takes
-            // the keyboard. It shares the stage as its state, so a press is the swap itself, and
-            // it is offered the same events the screen above it was: a click the program did not
-            // take is still there for the furniture.
-            //
-            // Borrowed field by field rather than through a method: the dock and the stage are
-            // different fields of one struct, so two mutable borrows of them at once are two
-            // distinct places and the compiler accepts both.
-            StatefulWidget::render(
-                &mut session.dock,
-                dock_area,
-                buf,
-                &mut dock::DockProps {
-                    stage: &mut session.stage.0,
-                    events: &mut events,
-                    delta: self.delta,
+        // The program's words while the window was up were held, and this is where they are
+        // released: the screen they were written on is the one that is up again, and the client's
+        // own printing is the only thing that may move it.
+        self.print_program_stdout()?;
+
+        let terminal = match self.was_alternate {
+            true => &mut self.secondary,
+            false => &mut self.primary,
+        };
+        terminal.draw(|frame| {
+            let area = frame.area();
+            frame.render_stateful_widget(
+                &mut self.session,
+                area,
+                &mut SessionProps {
+                    delta,
+                    program_stdout: &mut self.program_stdout,
                 },
             );
+        })?;
+        log::info!("render: the frame is drawn");
+        self.area = match self.was_alternate {
+            true => self.secondary.size()?.into(),
+            false => {
+                let area = self.primary.size()?;
+                Rect::new(0, area.height.saturating_sub(DOCK_HEIGHT), area.width, DOCK_HEIGHT)
+            }
+        };
+
+        // After the draw, because only the logs screen fills this — the stream keeps the ring from
+        // filling instead of printing it.
+        self.print_program_stdout()?;
+        Ok(())
+    }
+
+    /// Put whatever the program said on the terminal's own screen, above the pane.
+    ///
+    /// Above and not in the pane, because the pane the inline terminal draws is its visible rows
+    /// and its own top row *is* the cursor row: a line written inside it would be painted over by
+    /// the next frame, which is exactly the output a user wants to keep reading.
+    fn print_program_stdout(&mut self) -> std::io::Result<()> {
+        if self.program_stdout.is_empty() {
+            return Ok(());
         }
+        // A line each: the thread that reads the pipe puts the terminator back on every line it
+        // takes off, so the ring's bytes are newline-separated throughout and `lines` is exactly
+        // what the program printed.
+        let text = String::from_utf8_lossy(&self.program_stdout);
+        let lines: Vec<&str> = text.lines().collect();
+        self.primary.insert_before(lines.len() as u16, |buf| {
+            for (row, line) in lines.iter().enumerate() {
+                buf.set_string(0, row as u16, line, ratatui::style::Style::new());
+            }
+        })?;
+        // Emptied, not freed: a program that prints every frame allocates this buffer once for the
+        // whole run rather than once per frame.
+        self.program_stdout.clear();
+        Ok(())
     }
 }

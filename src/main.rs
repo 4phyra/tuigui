@@ -21,7 +21,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // directly made clap read the runnable's path as the program name and then
         // report that its required `<PATH>` was missing.
         let gui = gui::Gui::parse_from(std::iter::once("gui".to_string()).chain(args));
-        gui.run(std::io::stdin(), std::io::stdout()).await?;
+        // tokio's stdin, not `std::io`'s: the client reads this terminal as a stream, and the async
+        // handle is the same descriptor with a future attached, so the draw loop can wait on a key
+        // and on the program in one `select!`.
+        gui.run(tokio::io::stdin(), std::io::stdout()).await?;
         return Ok(());
     }
 
