@@ -17,6 +17,62 @@ terminal's normal input and output intact. The same split between the terminal
 side and the program side is intended to let a program run on another machine
 and still be used from your terminal.
 
+## Installation
+
+`tui!` and `gui!` are the two halves of a session: the server that owns your
+terminal and the client that draws into it. The bang keeps them clear of a
+`tui` or `gui` your PATH may already answer.
+
+```sh
+# Added to your profile: both halves, on PATH.
+nix profile add github:4phyra/tuigui
+
+# Or one half at a time, without touching your profile.
+nix run github:4phyra/tuigui#tui -- <command>
+nix run github:4phyra/tuigui#gui -- <program>
+```
+
+Bare `nix run github:4phyra/tuigui` refuses on purpose: the package holds two
+programs and there is no single one to pick.
+
+## Usage
+
+A local session is the server, with the client as the command it runs:
+
+```sh
+tui! gui! foot
+```
+
+The server owns the pane, `gui!` draws `foot`'s windows into it, and the picture
+comes through the kitty graphics protocol.
+
+A remote session splits the two ends. The server wraps the command that reaches
+the other machine, and the client that runs there draws the program:
+
+```sh
+# where the terminal is: the server owns the pane, the command is an ssh away
+tui! ssh host gui! foot
+```
+
+The client announces itself in the pane's output and the server dials it back
+over `p2p`, so no port has to be forwarded. The terminal must speak the kitty
+graphics protocol, and the program must be an X11 or Wayland app: the session
+puts it on its own headless Wayland display. `--channel p2p` is the default and
+the only one that crosses machines; `--channel unix` is the cheaper one when
+both ends share a host.
+
+## Contributing
+
+The dev shell carries the toolchain and the system libraries, so development
+happens inside it:
+
+```sh
+nix develop
+just tui <command>   # the server, built from the working tree
+just gui <program>   # the client
+just test            # nextest; changed screens wait for `just test-review`
+```
+
 ## Thanks
 
 Built on excellent crates:

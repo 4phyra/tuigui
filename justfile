@@ -10,8 +10,7 @@
 #
 # Every recipe starts its command with `@`, so `just` prints no echoed invocation: the recipe
 # is one line the reader already knows, and a run should start with the program's own output
-# rather than with the command that started it. `tui!` and `gui!` in the dev shell are the
-# same recipes with cargo's progress lines hidden as well.
+# rather than with the command that started it.
 
 target := "./target"
 

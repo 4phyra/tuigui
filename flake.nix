@@ -49,6 +49,108 @@
             cargo = toolchain;
             rustc = toolchain;
           };
+
+          # buildRustPackage splits the build into a `cargoDeps` derivation
+          # hashed only on Cargo.lock plus the app derivation itself, so
+          # dependency objects stay in the store across rebuilds that only
+          # touch src/.
+          #
+          # The workspace built once, for the two halves this flake installs:
+          # the server and the client. The `tuigui` wrapper is not among them,
+          # which is why `cargoBuildFlags` names the two packages.
+          tuiguiBin = rustPlatform.buildRustPackage {
+            pname = "tuigui";
+            version = "0.1.0";
+            src = pkgs.lib.cleanSourceWith {
+              src = ./.;
+              filter =
+                path: type:
+                !pkgs.lib.hasInfix ".crush" path && path != toString ./result && path != toString ./target;
+            };
+
+            cargoLock.lockFile = ./Cargo.lock;
+            auditable = false;
+
+            # The suite streams real terminals: it looks for `foot` and `kitty` on
+            # PATH and fails, by design, when they are absent. Those live in the
+            # dev shell, and a sandboxed build has neither them nor a terminal to
+            # draw on, so the tests are the shell's job (`just test`), not this
+            # derivation's.
+            doCheck = false;
+
+            # `cargo build` at the workspace root builds only the root package's
+            # binary. The two halves are separate members, so they are named.
+            cargoBuildFlags = [
+              "--package"
+              "tui"
+              "--package"
+              "gui"
+            ];
+
+            nativeBuildInputs = with pkgs; [
+              pkg-config
+              wayland-scanner
+            ];
+            buildInputs = with pkgs; [
+              wayland
+              wayland-protocols
+              # system libs the compositor crate (in-process smithay head)
+              # links against: pixman renderer + xkbcommon keymaps
+              pixman
+              libxkbcommon
+              # X11 apps run through this, since it is what the compositor
+              # spawns to serve them; without it a session is Wayland-only.
+              xwayland
+              # SIMD JPEG encoding for the streaming client. Nix's build already
+              # has the SIMD kernels, so it is linked via pkg-config rather than
+              # compiled from source: no cmake or nasm needed.
+              libjpeg_turbo
+              # decoder backend for the renderer: ffmpeg-sidecar spawns the
+              # ffmpeg CLI, so it must be on PATH at build/run time
+              ffmpeg
+            ];
+
+            meta = with pkgs.lib; {
+              description = "GUI apps in the terminal with pixel-accurate TGP streaming";
+              license = licenses.eupl12;
+              platforms = platforms.linux;
+            };
+          };
+
+          # `tui!` and `gui!`: the two halves as commands. The bang is part of
+          # the installed file name — installed, not linked, so `$out/bin` holds
+          # the name it reports — and it keeps the command clear of a bare `tui`
+          # or `gui` the user's PATH may already answer.
+          tuiPkg = pkgs.runCommand "tui" {
+            meta = {
+              description = "Run a command in a pty and paint the frames sent to it";
+              license = pkgs.lib.licenses.eupl12;
+              platforms = pkgs.lib.platforms.linux;
+              mainProgram = "tui!";
+            };
+          } ''
+            install -Dm755 ${tuiguiBin}/bin/tui $out/bin/tui!
+          '';
+
+          guiPkg = pkgs.runCommand "gui" {
+            meta = {
+              description = "Draw a runnable into the pane a tui server owns";
+              license = pkgs.lib.licenses.eupl12;
+              platforms = pkgs.lib.platforms.linux;
+              mainProgram = "gui!";
+            };
+          } ''
+            install -Dm755 ${tuiguiBin}/bin/gui $out/bin/gui!
+          '';
+
+          # What an install gets: both halves, and nothing else. No wrapper and
+          # no `mainProgram`, so with two programs in `bin/` a `nix run` on the
+          # flake itself refuses rather than picking one of them; `#tui` and
+          # `#gui` are the ways in.
+          defaultPkg = pkgs.runCommand "tuigui" { } ''
+            install -Dm755 ${tuiguiBin}/bin/tui $out/bin/tui!
+            install -Dm755 ${tuiguiBin}/bin/gui $out/bin/gui!
+          '';
         in
         {
           # termlens' command line, which the snapshot review calls: `termlens
@@ -159,53 +261,16 @@
               };
             };
 
-          # buildRustPackage splits the build into a `cargoDeps` derivation
-          # hashed only on Cargo.lock plus the app derivation itself, so
-          # dependency objects stay in the store across rebuilds that only
-          # touch src/.
-          default = rustPlatform.buildRustPackage {
-            pname = "tuigui";
-            version = "0.1.0";
-            src = pkgs.lib.cleanSourceWith {
-              src = ./.;
-              filter =
-                path: type:
-                !pkgs.lib.hasInfix ".crush" path && path != toString ./result && path != toString ./target;
-            };
+          # Installed by `nix profile add`: both halves, under their bang
+          # names, and no wrapper. No `mainProgram`, so a bare `nix run` on the
+          # flake has no program to pick and refuses; `#tui` and `#gui` are the
+          # ways in.
+          default = defaultPkg;
 
-            cargoLock.lockFile = ./Cargo.lock;
-            auditable = false;
-
-            nativeBuildInputs = with pkgs; [
-              pkg-config
-              wayland-scanner
-            ];
-            buildInputs = with pkgs; [
-              wayland
-              wayland-protocols
-              # system libs the compositor crate (in-process smithay head)
-              # links against: pixman renderer + xkbcommon keymaps
-              pixman
-              libxkbcommon
-              # X11 apps run through this, since it is what the compositor
-              # spawns to serve them; without it a session is Wayland-only.
-              xwayland
-              # SIMD JPEG encoding for the streaming client. Nix's build already
-              # has the SIMD kernels, so it is linked via pkg-config rather than
-              # compiled from source: no cmake or nasm needed.
-              libjpeg_turbo
-              # decoder backend for the renderer: ffmpeg-sidecar spawns the
-              # ffmpeg CLI, so it must be on PATH at build/run time
-              ffmpeg
-            ];
-
-            meta = with pkgs.lib; {
-              description = "GUI apps in the terminal with pixel-accurate TGP streaming";
-              license = licenses.mit;
-              platforms = platforms.linux;
-              mainProgram = "tuigui";
-            };
-          };
+          # `nix run .#tui` / `.#gui`: one half each. The attribute is named for
+          # the flake's vocabulary, the program it runs for what is installed.
+          tui = tuiPkg;
+          gui = guiPkg;
         }
       );
 
@@ -228,17 +293,6 @@
             self.packages.${system}.capyImages or (pkgs.runCommand "capybara-images" { }
               "mkdir -p $out/train; echo 'no capybara images package; build default first' >&2"
             );
-          # `tui!` and `gui!`: either half of a session, built and run quietly.
-          #
-          # The bang keeps them clear of a `tui` or `gui` the shell may already answer,
-          # and `CARGO_TERM_QUIET` drops cargo's per-crate progress lines while still
-          # letting a warning or an error through.
-          tuiBang = pkgs.writeShellScriptBin "tui!" ''
-            exec env CARGO_TERM_QUIET=true just tui "$@"
-          '';
-          guiBang = pkgs.writeShellScriptBin "gui!" ''
-            exec env CARGO_TERM_QUIET=true just gui "$@"
-          '';
         in
         {
           default = pkgs.mkShell {
@@ -247,9 +301,6 @@
               export CAPYBARA_IMG_DIR="${capys}/train"
             '';
             packages = [
-              # `tui!` and `gui!`: either half of a session, built and run quietly.
-              tuiBang
-              guiBang
               # rustup "minimal" profile (rustc, cargo, rust-std) plus the two
               # dev tools; binaries come from upstream's dist tarballs.
               (pkgs.rust-bin.stable.latest.minimal.override {
