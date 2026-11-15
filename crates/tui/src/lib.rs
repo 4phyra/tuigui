@@ -106,6 +106,20 @@ pub struct DebugOptions {
     /// visible: pink cells mean the mask works and the picture is the problem.
     #[arg(long = "dbg-pink-placeholders")]
     pub pink_placeholders: bool,
+    /// Send the stream through untouched instead of blanking the anchors' cells.
+    ///
+    /// The rewrite is the only thing that edits the command's bytes, so it is the only thing that
+    /// can leave a cell that is not what the command drew. Turning it off leaves the signatures
+    /// visible over their pictures, and whatever is still wrong is then not the rewrite's doing.
+    #[arg(long = "dbg-no-strip-anchors")]
+    pub no_strip_anchors: bool,
+    /// Send no graphics at all: no transmit, no placement.
+    ///
+    /// Everything else one can switch removes a layer and leaves the picture; this removes the
+    /// picture. What the terminal then shows is only what the stream drew, so a cell that is
+    /// wrong with the flag on is not wrong because of anything this side placed over it.
+    #[arg(long = "dbg-no-graphics")]
+    pub no_graphics: bool,
 }
 
 impl Tui {
@@ -166,6 +180,7 @@ impl Tui {
             ),
             anchors.clone(),
             barcodes,
+            debug.clone(),
         );
 
         // The medium is chosen here and nowhere else: a flag read at every frame is the branch the

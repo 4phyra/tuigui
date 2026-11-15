@@ -1708,12 +1708,18 @@ impl PlacementRequest {
         // The move goes out with the placement it positions, in one write: a move written
         // separately could land after another writer's bytes, and the picture would be drawn from
         // wherever that left the cursor.
+        //
+        // It is bracketed by `\x1b7` and `\x1b8`, which save and restore the cursor, and that is
+        // not tidiness: the other writer on this terminal tracks the cursor itself and moves it
+        // only when it believes it has moved. Left where the placement put it, that writer's next
+        // run of cells with no move of its own lands there — a dock label over the pane's corner.
         match self.at {
             Some((row, col)) => {
                 let aident = request.ident();
-                let mut bytes =
-                    crossterm::cursor::MoveTo(col, row).to_string().into_bytes();
+                let mut bytes = b"\x1b7".to_vec();
+                bytes.extend_from_slice(crossterm::cursor::MoveTo(col, row).to_string().as_bytes());
                 bytes.extend_from_slice(&request.into_escape());
+                bytes.extend_from_slice(b"\x1b8");
                 writer::send(bytes);
                 ReplyFuture::new(aident)
             }

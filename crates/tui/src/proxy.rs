@@ -48,6 +48,7 @@ pub async fn run(
     mut slave_stdout: impl futures_util::Stream<Item = std::io::Result<Vec<u8>>> + Unpin,
     anchors: Anchors,
     new_barcodes: mpsc::Sender<Box<dyn Transport>>,
+    debug: Arc<crate::DebugOptions>,
 ) -> std::io::Result<()> {
     // Each holds its own model of the screen: the filter the stream as it will be drawn, the scan
     // the screen as the command drew it. One is the terminal's answer and the other is the
@@ -88,8 +89,14 @@ pub async fn run(
                 // wrong ones.
                 let known: Vec<SurfaceId> = anchors.load().keys().copied().collect();
 
+                // Empty when the rewrite is off: nothing matches, so the signatures stay visible
+                // over their pictures and anything still wrong is not the rewrite's doing.
                 filter
-                    .feed(next.as_slice(), &mut sink, &known)
+                    .feed(
+                        next.as_slice(),
+                        &mut sink,
+                        if debug.no_strip_anchors { &[] } else { &known },
+                    )
                     .await?;
                 scanner.feed(&next);
 

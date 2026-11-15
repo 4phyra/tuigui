@@ -62,6 +62,11 @@ pub struct MainWidget {
     /// Sized to the ring that fills it, so a frame that drains a full ring does not grow it, and
     /// emptied rather than freed between frames so a chatty program allocates it once.
     program_stdout: Vec<u8>,
+    /// The switches that change how this pane draws.
+    ///
+    /// Shared with the client, which is a `'static` future holding the same switches: one copy,
+    /// made where the command line was read, and `Arc` so nothing can edit it afterwards.
+    debug: std::sync::Arc<crate::DebugOptions>,
 }
 
 impl MainWidget {
@@ -70,7 +75,7 @@ impl MainWidget {
     /// Built before the input thread exists, and that order is not cosmetic: `Viewport::Inline`
     /// asks the terminal where the cursor is, and crossterm reads that answer off stdin itself. A
     /// reader holding stdin would take the reply.
-    pub fn new(session: Session) -> std::io::Result<Self> {
+    pub fn new(session: Session, debug: std::sync::Arc<crate::DebugOptions>) -> std::io::Result<Self> {
         Ok(Self {
             session,
             primary: Terminal::with_options(
@@ -84,6 +89,7 @@ impl MainWidget {
             area: Rect::ZERO,
             last: std::time::Instant::now(),
             program_stdout: Vec::with_capacity(RING_BUF_CAPACITY),
+            debug,
         })
     }
 
@@ -166,9 +172,17 @@ impl MainWidget {
             (true, false) => {
                 crossterm::execute!(
                     self.secondary.backend_mut(),
-                    crossterm::terminal::EnterAlternateScreen,
-                    crossterm::event::EnableMouseCapture
+                    crossterm::terminal::EnterAlternateScreen
                 )?;
+                // Asked for only when the switch allows it: a captured mouse is a mouse the
+                // terminal no longer uses for its own scrolling, so it is something this side
+                // can be told not to take.
+                if !self.debug.no_mouse {
+                    crossterm::execute!(
+                        self.secondary.backend_mut(),
+                        crossterm::event::EnableMouseCapture
+                    )?;
+                }
                 // The terminal diffs against the buffer it drew last, and that buffer belongs to
                 // the screen it drew on. Coming back to the alternate screen whose contents were
                 // dropped by the crossing makes that diff a lie, so the back buffer is discarded

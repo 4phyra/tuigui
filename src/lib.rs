@@ -75,6 +75,9 @@ impl TuiGui {
         if self.gui.anchor_greenscreen {
             args.push("--dbg-anchor-greenscreen".into());
         }
+        if self.gui.no_mouse {
+            args.push("--dbg-no-mouse".into());
+        }
         args
     }
 

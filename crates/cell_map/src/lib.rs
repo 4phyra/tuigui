@@ -187,30 +187,42 @@ impl CellMap {
 }
 
 /// Append the SGR that selects `fg` and `bg`.
+///
+/// Only the two colours are named. A leading `0` would reset the whole pen, and the stream may
+/// have a reverse, a bold or an underline in effect that a replacement must not quietly drop: the
+/// stream will not repeat it, because from its side nothing changed.
 fn push_sgr(out: &mut Vec<u8>, fg: Color, bg: Color) {
     use std::io::Write as _;
-    let _ = write!(out, "\x1b[0");
-    push_colour(out, 30, 38, fg);
-    push_colour(out, 40, 48, bg);
+    let _ = write!(out, "\x1b[");
+    let mut first = true;
+    push_colour(out, &mut first, 30, 38, fg);
+    push_colour(out, &mut first, 40, 48, bg);
     let _ = write!(out, "m");
 }
 
-fn push_colour(out: &mut Vec<u8>, basic: u8, extended: u8, colour: Color) {
+fn push_colour(out: &mut Vec<u8>, first: &mut bool, basic: u8, extended: u8, colour: Color) {
     use std::io::Write as _;
+    let separator = match std::mem::replace(first, false) {
+        true => "",
+        false => ";",
+    };
     match colour {
-        Color::Default => {}
+        // `39` and `49` unset one colour and leave the rest of the pen alone.
+        Color::Default => {
+            let _ = write!(out, "{separator}{}", basic + 9);
+        }
         Color::Idx(index) if index < 8 => {
-            let _ = write!(out, ";{}", basic + index);
+            let _ = write!(out, "{separator}{}", basic + index);
         }
         Color::Idx(index) if index < 16 => {
             // The bright eight sit above the basic ones.
-            let _ = write!(out, ";{}", basic + 60 + (index - 8));
+            let _ = write!(out, "{separator}{}", basic + 60 + (index - 8));
         }
         Color::Idx(index) => {
-            let _ = write!(out, ";{};5;{}", extended, index);
+            let _ = write!(out, "{separator}{};5;{}", extended, index);
         }
         Color::Rgb(r, g, b) => {
-            let _ = write!(out, ";{};2;{};{};{}", extended, r, g, b);
+            let _ = write!(out, "{separator}{};2;{};{};{}", extended, r, g, b);
         }
     }
 }

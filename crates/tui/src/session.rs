@@ -213,8 +213,10 @@ impl<F: Format> Session<F> {
                     .ok_or(io::Error::other(format!("no anchor for {surface:?}")))?
                 {
                     Some(at) => {
-                        self.paint(bytes.as_deref(), surface, *at, z, (cols, rows))
-                            .await?
+                        if !self.debug.no_graphics {
+                            self.paint(bytes.as_deref(), surface, *at, z, (cols, rows))
+                                .await?
+                        }
                     }
                     // A window with no cells is not placed. It has scrolled away, or been covered
                     // entirely, or has not drawn yet, and all three mean the same thing to a
@@ -374,8 +376,9 @@ impl<F: Format> Session<F> {
             fix_cursor: true,
             // The picture is drawn from the cursor rather than from a key, so the cell it goes to
             // *is* the placement: the protocol has no field for a screen position, which is why
-            // this is a cursor move. It rides the same write as the escape, so nothing can land
-            // between the move and the picture it positions.
+            // this is a cursor move. It rides the same write as the escape, and the writer puts
+            // the cursor back afterwards, so nothing lands between the move and the picture it
+            // positions and nothing is left moved.
             at: Some((at.1, at.0)),
             ..Default::default()
         };

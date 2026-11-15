@@ -103,6 +103,24 @@ A full rebuild of `ring` / `rustls` / the TLS stack costs minutes. Avoid it.
   `assert_snapshot!("name", screen.with_styles())`, never `assert_snapshot!(
   "name", screen)`.
 
+## Debug switches: pass the whole struct, never a bool
+
+A `--dbg-` switch reaches the code it controls as the **whole
+`DebugOptions`** — `Arc<DebugOptions>` for a `'static` task, `&DebugOptions`
+for a plain call. Never as a per-switch parameter, and never as a field on a
+struct that draws or places.
+
+- A new switch must cost **zero** signature changes. `proxy::run` takes
+  `Arc<crate::DebugOptions>`: `--dbg-no-strip-anchors` and `--dbg-bypass-filter`
+  are read inside it, and neither touched the call site. A `strip_anchors: bool`
+  parameter would have had to be added again for the second switch.
+- A switch is **input**, not state. It is read where it is used, in the function
+  that acts on it. A `mouse: bool` field on a widget would cache a command-line
+  argument as a fact about the widget, and the copy is what goes stale.
+- The struct is also where the switches are already documented: each variant
+  carries the explanation of what removing that layer will show. A bare bool
+  arrives with none of it.
+
 ## New state is a new concept (reach for a function first)
 
 Every field and every struct introduces a concept a reader has to learn and keep

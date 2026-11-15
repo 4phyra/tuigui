@@ -158,6 +158,13 @@ pub struct DebugOptions {
     /// a colour no program here draws: a green cell is an anchor that was not blanked.
     #[arg(long = "dbg-anchor-greenscreen")]
     pub anchor_greenscreen: bool,
+    /// Do not ask the terminal for mouse reports.
+    ///
+    /// The capture is an escape this side writes, and it is on for as long as the alternate screen
+    /// is. A terminal that answers a capture with anything of its own is a terminal whose answers
+    /// arrive on the pane's input, so a stray sequence there is a stray sequence here.
+    #[arg(long = "dbg-no-mouse")]
+    pub no_mouse: bool,
 }
 
 impl Gui {
@@ -221,7 +228,7 @@ impl Gui {
             transport,
         )
         .await?;
-        let mut main_widget = widget::MainWidget::new(session)?;
+        let mut main_widget = widget::MainWidget::new(session, self.debug.clone().into())?;
 
         // The output size is the terminal's own, read once: it is the size the session
         // is created at, and the pane's own report is what resizes it from then on.
@@ -258,7 +265,7 @@ impl Gui {
                 use_x11: false,
             },
             self.streaming.codec(),
-            self.debug,
+            self.debug.clone(),
             self.program.clone(),
             recv_transport,
         ));
