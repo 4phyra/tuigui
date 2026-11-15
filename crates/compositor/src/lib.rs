@@ -174,12 +174,21 @@ impl Compositor {
     }
 
     /// The root is the pane, so a change of pane is a change of the root's rectangle.
+    ///
+    /// Every window is offered a size ask, not only the root: a box changes without the pane
+    /// changing — a drag on a window's ring is what resizes it — and a program keeps drawing at the
+    /// size it was last configured with. Asking only the root leaves a dragged window with its ring
+    /// in the new place and its picture drawn for the old box. `maybe_set_size` sends nothing when
+    /// the box and the committed size already agree, so a turn with no change costs a comparison.
     fn maybe_resize_root(&mut self, winsize: rustix::termios::Winsize) -> Result<(), Error> {
-        let Some(root) = self.windows.first_mut().and_then(|group| group.first_mut()) else {
-            return Ok(());
-        };
-        root.state.area = self.pane;
-        root.maybe_set_size(winsize);
+        if let Some(root) = self.windows.first_mut().and_then(|group| group.first_mut()) {
+            root.state.area = self.pane;
+        }
+        for group in &mut self.windows {
+            for placed in group {
+                placed.maybe_set_size(winsize);
+            }
+        }
         Ok(())
     }
 
