@@ -1129,15 +1129,14 @@ impl<F: Format + 'static> ImageRequest<F> {
             // TODO: I don't like clone here
             .payload(self.data.clone());
 
-        // The move goes out with the placement it positions, in one write: a move written
-        // separately could be followed by another writer's bytes, and the picture would be drawn
-        // from wherever that left the cursor.
+        // The move goes out with the placement it positions, and the cursor is put back after:
+        // the other writer on this terminal tracks the cursor itself and moves it only when it
+        // believes it has moved, so a placement that left it moved makes that writer's next cells
+        // land here.
         match placement.at {
             Some((row, col)) => {
                 let aident = request.ident();
-                let mut bytes = crossterm::cursor::MoveTo(col, row).to_string().into_bytes();
-                bytes.extend_from_slice(&request.into_escape());
-                writer::send(bytes);
+                writer::send(around_cursor(row, col, &request.into_escape()));
                 ReplyFuture::new(aident)
             }
             None => request.send_medium(inline),
@@ -1672,6 +1671,21 @@ pub struct PlacementRequest {
     // H, V
 }
 
+/// `escape`, with the cursor moved to `(row, col)` before it and put back after.
+///
+/// A placement draws from the cursor, so the cell it goes to is the cursor's position at that
+/// moment. The other writer on this terminal keeps its own idea of where the cursor is and moves it
+/// only when it believes it must, so the move has to be undone here: left where the placement
+/// stopped, that writer's next run of cells lands there. One function so both placement paths — a
+/// frame carrying pixels and a placement that only moves — cannot bracket differently.
+fn around_cursor(row: u16, col: u16, escape: &[u8]) -> Vec<u8> {
+    let mut bytes = b"\x1b7".to_vec();
+    bytes.extend_from_slice(crossterm::cursor::MoveTo(col, row).to_string().as_bytes());
+    bytes.extend_from_slice(escape);
+    bytes.extend_from_slice(b"\x1b8");
+    bytes
+}
+
 impl PlacementRequest {
     pub fn place(
         self,
@@ -1716,11 +1730,7 @@ impl PlacementRequest {
         match self.at {
             Some((row, col)) => {
                 let aident = request.ident();
-                let mut bytes = b"\x1b7".to_vec();
-                bytes.extend_from_slice(crossterm::cursor::MoveTo(col, row).to_string().as_bytes());
-                bytes.extend_from_slice(&request.into_escape());
-                bytes.extend_from_slice(b"\x1b8");
-                writer::send(bytes);
+                writer::send(around_cursor(row, col, &request.into_escape()));
                 ReplyFuture::new(aident)
             }
             None => request.send(),
@@ -2091,3 +2101,7 @@ impl ControlData {
 #[cfg(test)]
 #[path = "../tests/unit/messages.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/cursor_recovery.rs"]
+mod cursor_recovery;
