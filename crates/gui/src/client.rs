@@ -48,7 +48,13 @@ const STEP: std::time::Duration = std::time::Duration::from_millis(4);
 /// none of that reaches this side as an event. The tick is what makes a commit visible at all: it is
 /// the servant's own clock, not the pane's, because the pane redrawing is what a picture is *shown*
 /// by and this is what it is *taken* for.
-const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+///
+/// Thirty frames a second, not sixty. Every tick costs the far side a transmit and a wait
+/// for the terminal to acknowledge the placement, and those are serialized on the link — so
+/// the tick is a rate the consumer has to keep up with, not a free poll. 33ms is past what a
+/// streamed desktop needs to read as continuous, and it leaves the server's queue room to
+/// stay short over a link whose round trip is tens of milliseconds.
+const FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 
 /// Run the session's program to its end.
 ///
