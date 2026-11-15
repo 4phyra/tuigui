@@ -78,7 +78,7 @@ pub struct DebugOptions {
     /// Removes the wire codec and the decode, so what is on screen is attributable
     /// to the encode, the transmit and the placement. Blue means those are sound and
     /// the fault is upstream; a blank pane means it is here.
-    #[arg(long = "dbg-blue-pixel")]
+    #[arg(long = "dbg-blue-pixel", hide = true)]
     pub blue_pixel: bool,
     /// Place the image for real instead of creating a virtual placement.
     ///
@@ -86,7 +86,7 @@ pub struct DebugOptions {
     /// until placeholder cells resolve against it — correct, and silent when they do
     /// not. A real placement draws at the cursor and needs nothing from the client's
     /// text, which is what separates "no image" from "no cells".
-    #[arg(long = "dbg-no-vplacement")]
+    #[arg(long = "dbg-no-vplacement", hide = true)]
     pub no_vplacement: bool,
     /// Send the pixels inside the escape instead of through shared memory.
     ///
@@ -95,7 +95,7 @@ pub struct DebugOptions {
     /// puts a base64 PNG in the escape, so it is slower and larger — and it cannot
     /// fail on a terminal that will not read the object, which is what makes it the
     /// control for "the image arrived but nothing was drawn".
-    #[arg(long = "dbg-no-shm")]
+    #[arg(long = "dbg-no-shm", hide = true)]
     pub no_shm: bool,
     /// Mark the cells the surface mask fires on, instead of blanking them.
     ///
@@ -104,21 +104,21 @@ pub struct DebugOptions {
     /// faults are "the mask never matched" and "the image never arrived", and both look
     /// like an empty pane. A pink `*` on a default background is the same edit made
     /// visible: pink cells mean the mask works and the picture is the problem.
-    #[arg(long = "dbg-pink-placeholders")]
+    #[arg(long = "dbg-pink-placeholders", hide = true)]
     pub pink_placeholders: bool,
     /// Send the stream through untouched instead of blanking the anchors' cells.
     ///
     /// The rewrite is the only thing that edits the command's bytes, so it is the only thing that
     /// can leave a cell that is not what the command drew. Turning it off leaves the signatures
     /// visible over their pictures, and whatever is still wrong is then not the rewrite's doing.
-    #[arg(long = "dbg-no-strip-anchors")]
+    #[arg(long = "dbg-no-strip-anchors", hide = true)]
     pub no_strip_anchors: bool,
     /// Send no graphics at all: no transmit, no placement.
     ///
     /// Everything else one can switch removes a layer and leaves the picture; this removes the
     /// picture. What the terminal then shows is only what the stream drew, so a cell that is
     /// wrong with the flag on is not wrong because of anything this side placed over it.
-    #[arg(long = "dbg-no-graphics")]
+    #[arg(long = "dbg-no-graphics", hide = true)]
     pub no_graphics: bool,
 }
 

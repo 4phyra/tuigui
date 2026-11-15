@@ -7,6 +7,13 @@
     # rustc: ~1.2 GB devshell closure instead of ~2 GB.
     rust-overlay.url = "github:oxalica/rust-overlay/84fb3c79e477d5e7ec4eff9c24dbc5d5c99b0fd1";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    # blaze: the incremental build engine, added as an input now so the pin and its
+    # lock are reviewed once. Not placed in the dev shell yet: as of v0.20261105.4
+    # upstream's `packages.default` does not build (its `dist` derivation still calls
+    # the retired `build_release.py` cargo recipe), so adding it would make the shell
+    # unbuildable. `blaze.packages.${system}.default` goes into the shell's packages
+    # once that builds.
+    blaze.url = "github:indexable-inc/blaze";
   };
 
   outputs =
@@ -14,6 +21,7 @@
       self,
       nixpkgs,
       rust-overlay,
+      blaze,
     }:
     let
       systems = [

@@ -150,20 +150,20 @@ pub struct DebugOptions {
     /// A clip is short and a session is not, so a run that ends after a few seconds is hard
     /// to look at while something else is being examined, which is the usual case when one
     /// of these switches is needed at all.
-    #[arg(long = "dbg-loop-video")]
+    #[arg(long = "dbg-loop-video", hide = true)]
     pub loop_video: bool,
     /// Draw every window's anchor cells on a green background.
     ///
     /// A signature is a random colour, so a test cannot name the cell it must not see. Green is
     /// a colour no program here draws: a green cell is an anchor that was not blanked.
-    #[arg(long = "dbg-anchor-greenscreen")]
+    #[arg(long = "dbg-anchor-greenscreen", hide = true)]
     pub anchor_greenscreen: bool,
     /// Do not ask the terminal for mouse reports.
     ///
     /// The capture is an escape this side writes, and it is on for as long as the alternate screen
     /// is. A terminal that answers a capture with anything of its own is a terminal whose answers
     /// arrive on the pane's input, so a stray sequence there is a stray sequence here.
-    #[arg(long = "dbg-no-mouse")]
+    #[arg(long = "dbg-no-mouse", hide = true)]
     pub no_mouse: bool,
 }
 
