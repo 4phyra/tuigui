@@ -7,6 +7,7 @@
 //! `handlers/`.
 
 mod compositor;
+mod decoration;
 mod inputs;
 mod seat;
 mod xdg_shell;
@@ -30,6 +31,8 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::protocol::wl_touch::WlTouch;
 use smithay::reexports::wayland_protocols::xwayland::shell::v1::server::xwayland_shell_v1::XwaylandShellV1;
 use smithay::reexports::wayland_protocols::xwayland::shell::v1::server::xwayland_surface_v1::XwaylandSurfaceV1;
+use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1;
+use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_popup::XdgPopup;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_positioner::XdgPositioner;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_surface::XdgSurface;
@@ -50,9 +53,10 @@ use smithay::wayland::selection::SelectionHandler;
 use smithay::wayland::seat::{
     KeyboardUserData, PointerUserData, SeatGlobalData, SeatUserData, TouchUserData,
 };
+use smithay::wayland::shell::xdg::decoration::{XdgDecorationManagerGlobalData, XdgDecorationState};
 use smithay::wayland::shell::xdg::{
-    XdgPositionerUserData, XdgShellState, XdgShellSurfaceUserData, XdgSurfaceUserData,
-    XdgWmBaseUserData,
+    ToplevelSurface, XdgPositionerUserData, XdgShellState, XdgShellSurfaceUserData,
+    XdgSurfaceUserData, XdgWmBaseUserData,
 };
 use smithay::wayland::shm::{ShmBufferUserData, ShmHandler, ShmPoolUserData, ShmState};
 use smithay::wayland::xwayland_shell::{XWaylandShellState, XWaylandSurfaceUserData};
@@ -77,6 +81,13 @@ forward!(XdgSurface: XdgSurfaceUserData => XdgShellState);
 forward!(XdgToplevel: XdgShellSurfaceUserData => XdgShellState);
 forward!(XdgPopup: XdgShellSurfaceUserData => XdgShellState);
 forward!(XdgPositioner: XdgPositionerUserData => XdgShellState);
+
+// xdg-decoration-unstable-v1. The answer to the client's question is in `handlers/decoration.rs`;
+// these are only the dispatches that reach it. The global is what makes a toolkit ask at all:
+// with no decoration manager advertised, GTK and Qt assume client-side decorations are wanted.
+forward_global!(ZxdgDecorationManagerV1: XdgDecorationManagerGlobalData => XdgDecorationState);
+forward!(ZxdgDecorationManagerV1: () => XdgDecorationState);
+forward!(ZxdgToplevelDecorationV1: ToplevelSurface => XdgDecorationState);
 
 // wl_shm: the only buffer path the MVP admits.
 forward_global!(WlShm: () => ShmState);

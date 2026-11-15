@@ -23,6 +23,15 @@ use crate::CompError;
 pub struct Globals {
     pub compositor_state: CompositorState,
     pub xdg_shell_state: smithay::wayland::shell::xdg::XdgShellState,
+    /// XDG window decorations: the global a toolkit asks "who draws my titlebar" on.
+    ///
+    /// Held for its global, never read — constructing it publishes
+    /// `zxdg_decoration_manager_v1` and dropping it withdraws that global. Without it,
+    /// GTK and Qt assume client-side decorations are wanted and draw their own frame
+    /// around every window, which is chrome this session never asked for and cannot
+    /// place.
+    #[allow(dead_code)]
+    pub xdg_decoration_state: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
     pub shm_state: ShmState,
     /// Clipboard / drag-and-drop. Required by GTK: it refuses to open a
     /// Wayland display entirely if `wl_data_device_manager` is absent.
@@ -110,6 +119,12 @@ impl State {
             globals: Globals {
                 compositor_state: CompositorState::new::<Self>(dh),
                 xdg_shell_state: smithay::wayland::shell::xdg::XdgShellState::new::<Self>(dh),
+                // Advertised so a toolkit can ask who decorates its windows, and answered
+                // `server_side` in `handlers/decoration.rs`. The protocol is advisory — a
+                // client may draw its own chrome regardless — but a client that never sees
+                // this global has no way to hear the answer at all.
+                xdg_decoration_state:
+                    smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(dh),
                 shm_state: ShmState::new::<Self>(
                     dh,
                     vec![
