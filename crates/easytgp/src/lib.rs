@@ -232,11 +232,12 @@ impl From<Reply> for Result<Reply, TGPError> {
 ///
 /// The reply path cannot return an error: a [`PendingTransfer`] is a `Future`
 /// whose `Output` is an image, so a malformed reply cannot become an `Err`
-/// without changing the type of every transmit. Writing to stderr keeps it
-/// visible, which matters because the alternative is an image whose cells
-/// silently draw nothing.
+/// without changing the type of every transmit. A span keeps it visible in the
+/// profiler and in a log, which matters because the alternative is an image
+/// whose cells silently draw nothing. Never to stderr: this runs inside a pane
+/// the session is drawing, so a line there is a line over the picture.
 fn log_reply_error(message: &str) {
-    eprintln!("easytgp: {message}");
+    tracing::warn!("easytgp: {message}");
 }
 
 pub struct PendingTransfer<F: Format> {

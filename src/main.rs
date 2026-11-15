@@ -36,7 +36,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match gui.run(tokio::io::stdin(), std::io::stdout()).await {
             Ok(()) => std::process::exit(0),
             Err(e) => {
-                eprintln!("Error: {e}");
+                // Never to stderr: this process draws inside the server's pty, so a line
+                // there is a line printed over the pane it is working in. The client
+                // installed its own log before this could fail.
+                tracing::error!("gui: {e}");
                 std::process::exit(1);
             }
         }

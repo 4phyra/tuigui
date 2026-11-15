@@ -199,6 +199,10 @@ tui = { workspace = true }
 gui = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
+# The client's exit path reports through this rather than to stderr: it draws inside
+# the server's pty, so a line on stderr is a line over the pane. Both halves install
+# the `log` capturer that turns it into a line of the log file.
+tracing = { workspace = true }
 # Only the profiled build carries it: the one thing here that needs it is naming this process
 # for the two listings, and a build without a profiler has no second listing to tell apart.
 log = { workspace = true, optional = true }
