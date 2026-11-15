@@ -87,13 +87,19 @@ fn a_window_inside_a_window_leaves_no_phantom_cells() -> termlens::Result<()> {
 
     let screen = session.screen();
     let (cols, rows) = screen.size();
-    // The screen with its colours, not the bare grid: `just test-review` renders this
-    // with `termlens render --ansi`, which paints the styles into the picture. The styles
-    // block itself is never shown — it is what the colours are read from, not what a reader
-    // is meant to read.
+    // The grid, and not `with_styles()`.
+    //
+    // Every cell a window's picture is placed over carries that window's anchor signature, and
+    // the signature's foreground is chosen at random per surface so no window's cells can be
+    // mistaken for another's. The cells themselves are blanked by the rewrite, so the grid is the
+    // same on every run — but their foreground is not, and a styles block would report a colour
+    // that differs each time while saying nothing a reader can judge.
+    //
+    // The one style fact this test is about, a green background left on a cell nobody blanked, is
+    // asserted cell by cell just below, where it can be named exactly.
     termlens::insta::assert_snapshot!(
         "a_window_inside_a_window_leaves_no_phantom_cells",
-        screen.with_styles()
+        screen
     );
     let phantoms: Vec<(u16, u16)> = (0..rows)
         .flat_map(|row| (0..cols).map(move |col| (row, col)))

@@ -1,6 +1,6 @@
 ---
 source: tests/phantom-cells-nested-foot.rs
-expression: screen.with_styles()
+expression: screen
 ---
 size: 80x24  cursor: hidden
 
@@ -27,29 +27,3 @@ size: 80x24  cursor: hidden
 ╭ • streaming ─────────────────────────────────────────────────────────────────╮
 │▏/tmp/tuigui-e2e-script-phantom-cells-nested-foot/run     Logs   Windows   ✖  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-
-styles:
-0: 0-79 fg=#4be92a
-1: 0-79 fg=#4be92a
-2: 0-79 fg=#4be92a
-3: 0-18 fg=#4be92a; 19-60 fg=8; 61-79 fg=#4be92a
-4: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-5: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-6: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-7: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-8: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-9: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-10: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-11: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-12: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-13: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-14: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-15: 0-18 fg=#4be92a; 19 fg=8; 20-59 fg=#6d5f2f; 60 fg=8; 61-79 fg=#4be92a
-16: 0-18 fg=#4be92a; 19-20 fg=8; 21-58 fg=7 bg=8; 59-60 fg=8; 61-79 fg=#4be92a
-17: 0-79 fg=#4be92a
-18: 0-79 fg=#4be92a
-19: 0-79 fg=#4be92a
-20: 0-79 fg=#4be92a
-21: 0-1 fg=8; 2 fg=#4b2517; 3 fg=8; 4-12 fg=#808080; 13-79 fg=8
-22: 0 fg=8; 1 fg=#ff7f50; 57-58 bg=#1e1e1e; 59-62 fg=0 bg=#ecbc9d; 63-65 bg=#ecbc9d; 66-72 fg=#d77bba bg=#1e1e1e; 73-74 bg=#1e1e1e; 75-77 fg=7; 79 fg=8
-23: 0-79 fg=8

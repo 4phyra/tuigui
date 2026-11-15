@@ -81,11 +81,25 @@ test *args:
 test-review:
     @INSTA_DIFF_TOOL="just --justfile {{justfile()}} --working-directory . snapshot-diff" cargo insta review --workspace
 
-# Show one changed screen as a picture: the new screen, painted in its own colours.
+# Show one changed screen: the lines that differ, then both screens in their own colours.
 #
-# `termlens render --ansi`, not `termlens diff`: a diff of two screens also
-# prints each changed row's style runs as `styles: … fg=#… → fg=#…`, which is
-# the colour spelled out as hex rather than shown. The picture is what a reader
-# compares, and a cell painted the wrong colour is visible in it.
+# Three facts, in the order a reader needs them.
+#
+# First the unified diff, as text: it is the only part that says *where* a change is,
+# and for a change of colour alone it is the `styles:` lines and nothing else.
+#
+# Then the old screen and the new one, each rendered with `termlens render --ansi`, so
+# every cell arrives in the colour it actually is. This is the part that is not
+# optional: `termlens diff` paints changed cells hard red and green, which tells you a
+# cell changed but throws away the one fact a style change is about — what colour it
+# changed from and to. Rendering each screen whole is the only way to show that.
+#
+# `--color never` on the text diff because insta clears and redraws the screen around
+# this output; the escapes in the rendered screens are the colours, not decoration.
 snapshot-diff old new:
+    @diff -u --label old --label new "{{old}}" "{{new}}" || true
+    @echo
+    @echo "── old ──"
+    @termlens render --ansi "{{old}}" || true
+    @echo "── new ──"
     @termlens render --ansi "{{new}}" || true

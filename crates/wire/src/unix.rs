@@ -136,23 +136,37 @@ impl UnixSocket {
     pub async fn bind(&self) -> io::Result<()> {
         let mut listener = self.listener.lock().await;
         if listener.is_none() {
-            // A stale file from a previous run would make the bind fail and look like a
-            // permissions problem. Removing it is what `sshd` does with
-            // `StreamLocalBindUnlink`.
-            match std::fs::remove_file(&self.path) {
-                Ok(()) => {}
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    return Err(io::Error::new(
-                        e.kind(),
-                        format!("removing stale {}: {e}", self.path.display()),
-                    ))
-                }
-            }
             if let Some(dir) = self.path.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            *listener = Some(Arc::new(tokio::net::UnixListener::bind(&self.path)?));
+            // Bind first and clear the file only on failure, because the two states a file at this
+            // path can be in need opposite answers and the bind is the one that tells them apart
+            // without guessing. A path nobody holds is the ordinary case, and it costs one syscall.
+            *listener = Some(Arc::new(match tokio::net::UnixListener::bind(&self.path) {
+                Ok(listener) => listener,
+                // Something is at the path. A listener still running is a session that must not be
+                // stolen — the second entrant takes the next name instead — while a file left by a
+                // session that ended refuses connections and is what `sshd` clears under
+                // `StreamLocalBindUnlink`. Connecting is what distinguishes them: a live listener
+                // answers, a dead one's file refuses.
+                Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+                    if tokio::net::UnixStream::connect(&self.path).await.is_ok() {
+                        return Err(e);
+                    }
+                    match std::fs::remove_file(&self.path) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                        Err(e) => {
+                            return Err(io::Error::new(
+                                e.kind(),
+                                format!("removing stale {}: {e}", self.path.display()),
+                            ))
+                        }
+                    }
+                    tokio::net::UnixListener::bind(&self.path)?
+                }
+                Err(e) => return Err(e),
+            }));
         }
         Ok(())
     }

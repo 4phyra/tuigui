@@ -24,6 +24,12 @@ const SIZE: (u16, u16) = (80, 24);
 
 /// How many times the session is run. Each run is a fresh process tree, so a
 /// failure here is a fact about the nesting and not about one build's timing.
+///
+/// Five, because that is the repeat that fits a suite people run per change. A
+/// longer run — twenty — is how the teardown race was found rather than a rate to
+/// pay every time: it fails about once in twenty sessions with "the close request
+/// was dropped unread", which is the client's close arm meeting a channel whose
+/// sender has already gone. That is a bug of its own, not this test's to prove.
 const ROUNDS: usize = 5;
 
 #[test]
