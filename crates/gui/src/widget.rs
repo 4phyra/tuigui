@@ -154,7 +154,7 @@ impl MainWidget {
     /// The span is here and not around the caller: this is the one call that knows what a frame is
     /// made of, so this is where the profiler's timeline should be divided.
     #[tracing::instrument(name = "frame", skip_all)]
-    pub fn render(&mut self) -> std::io::Result<()> {
+    pub fn render(&mut self) -> Result<(), crate::Error> {
         // The frame's own length, which is what paces anything animated. Capped at one frame,
         // because the gap since the last draw is not always a frame's worth: a pane that sat idle
         // waits for its indicator tick, and the frame that follows would otherwise be handed the

@@ -67,6 +67,12 @@ dpi = { workspace = true }
 # The logging facade. Every diagnostic goes through it rather than to the pane, and the
 # capturer in this crate is the one logger installed.
 log = { workspace = true }
+# What a failed session looks like on the screen it was crossed back to: a diagnostic drawn
+# with the labels and the cause chain, into a plain string, because the caller puts it on a
+# terminal this side draws itself.
+miette = { workspace = true }
+# The failure itself, defined once so `?` can carry it out of every step of the run path.
+thiserror = { workspace = true }
 # Spans become zones in the Tracy profiler, for seeing where a frame's time goes.
 tracing = { workspace = true }
 # The profiler's client, optional and off by default: it is a compiled C++

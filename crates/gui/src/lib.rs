@@ -26,9 +26,12 @@ use futures::StreamExt as _;
 use widget::Session;
 
 pub mod client;
+mod error;
 mod session;
 mod widget;
 mod windowing;
+
+pub use error::Error;
 
 /// The name, in the block letters a shell prints when it starts.
 ///
@@ -179,7 +182,7 @@ impl Gui {
         self,
         stdin: impl tokio::io::AsyncRead + Send + Unpin + 'static,
         stdout: impl Write + Send + Sync + 'static,
-    ) -> std::io::Result<()> {
+    ) -> Result<(), Error> {
         // Before anything can fail, so the first failure is in the log rather than missing
         // from it.
         let log_path = install_logger();
@@ -322,7 +325,11 @@ impl Gui {
                 // can carry half a sequence and the parser is what says when it has a whole one.
                 bytes = stdin.next() => {
                     log::info!("run: input arrived: {}", bytes.is_some());
-                    parser.parse(&bytes.ok_or(std::io::ErrorKind::UnexpectedEof)??, true);
+                    parser.parse(
+                        &bytes
+                            .ok_or(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))??,
+                        true,
+                    );
                     while let Some(event) = parser.pop() {
                         render_next |= main_widget.handle_event(&event)?;
                     }

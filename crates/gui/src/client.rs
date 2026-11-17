@@ -29,12 +29,13 @@ use wire::message::Message;
 use wire::transport::{Connection, Transport};
 
 use crate::windowing::{Compositable, PlatformWindowing, WindowingServer};
+use crate::Error;
 
 /// A window being served, as one boxed future.
 ///
 /// Boxed because a window's servant starts the servants of the windows it opens: that shape is a
 /// future whose child futures are of its own type, which only a box can express.
-type Proxy = futures::future::BoxFuture<'static, io::Result<()>>;
+type Proxy = futures::future::BoxFuture<'static, Result<(), Error>>;
 
 /// How long one turn of the window session dispatches for at most.
 ///
@@ -72,7 +73,7 @@ pub async fn run(
     debug: crate::DebugOptions,
     program: std::path::PathBuf,
     transport: tokio::sync::oneshot::Receiver<Box<dyn Transport>>,
-) -> io::Result<()> {
+) -> Result<(), Error> {
     let mut windowing = PlatformWindowing::new(options, codec, debug)?;
     windowing.spawn(&program)?;
     // The program's own words, for the screen that prints them. Taken once: a pipe has one reader.
@@ -116,9 +117,14 @@ pub async fn run(
         tokio::select! {
             // The session's windows: it is over when the last of them is.
             ended = &mut serve => return ended,
-            // What the far side says, handed to every servant waiting on it.
-            msg = connection.recv() => {
-                msg?.and_then(|msg| rebroadcaster.send(msg).ok());
+            // What the far side says, handed to every servant waiting on it — except the far side
+            // saying something failed. That one is the session's ending, and the servants are what
+            // it is about: handing it on would be asking them to fail one by one. It is returned
+            // instead, so the draw loop can cross back to the screen it is read on.
+            msg = connection.recv() => match msg? {
+                Some(Message::Error(said)) => return Err(Error::Io(io::Error::other(said))),
+                Some(msg) => drop(rebroadcaster.send(msg)),
+                None => (),
             },
             // A turn of the session: what dispatches a client's requests and what lets it commit its
             // next picture. Raced against the windows rather than run on a thread, because a session

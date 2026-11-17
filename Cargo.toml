@@ -21,6 +21,12 @@ license = "EUPL-1.2"
 
 [workspace.dependencies]
 thiserror = "2"
+# The failure a client exits on, drawn as a diagram rather than as a line: the pane shows the
+# program's window and its own log above it, so what went wrong is read off a screen, not off a
+# scrollback. `fancy-no-syscall` is the graphical renderer without terminal probing or a
+# backtrace: the reader is a ratatui buffer, so the width is the caller's and the answer to
+# "is this a tty" is not one a subprocess of a pty can be asked.
+miette = { version = "7", default-features = false, features = ["derive", "fancy-no-syscall"] }
 derive_builder = "0.20"
 # `#[derive(Default)]`, with two things std's derive cannot do: a field's default given
 # inline, and no `T: Default` bound for a `T` that is only a marker. That second one is why

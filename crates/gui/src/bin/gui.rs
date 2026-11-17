@@ -11,22 +11,9 @@ use gui::Gui;
 // count as `tui`, because a session started from either side should schedule its work the same
 // way.
 #[tokio::main(worker_threads = 8)]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let gui = Gui::parse();
-    // tokio's stdin, not `std::io`'s: the client reads this terminal as a stream, and the async
-    // handle is the same descriptor with a future attached.
-    //
-    // The exit is `std::process::exit` for the reason given next to the same call in `tuigui`:
-    // a read is parked on this terminal when the session ends, and dropping the runtime waits
-    // for it.
-    match gui.run(tokio::io::stdin(), std::io::stdout()).await {
-        Ok(()) => std::process::exit(0),
-        Err(e) => {
-            // Never to stderr: this process draws inside the server's pty, so a line
-            // there lands on the pane it is working in and is wiped by the next frame.
-            // `Gui::run` installed the log before this could fail.
-            tracing::error!("gui: {e}");
-            std::process::exit(1);
-        }
-    }
+async fn main() -> miette::Result<()> {
+    Gui::parse()
+        .run(tokio::io::stdin(), std::io::stdout())
+        .await?;
+    Ok(())
 }
