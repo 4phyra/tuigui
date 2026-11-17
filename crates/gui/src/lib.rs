@@ -247,7 +247,7 @@ impl Gui {
         // reading keys and reading the echo of keys.
         // Held for the whole session: dropping it restores the terminal, which is
         // what the name and the lack of an underscore say.
-        let _tty = Raw::install()?;
+        let _tty = ModeGuard::install()?;
 
         // The pane's input, as a stream of the bytes that arrive. One line, because a stream of bytes
         // is what the loop's `select!` wants: it is woken by the descriptor rather than by a thread,
@@ -320,6 +320,22 @@ impl Gui {
                     log::info!("run: the session is over");
                     return ended.and(main_widget.render());
                 }
+                // The user asked to stop.
+                //
+                // The signal's own action would kill this process outright, and a process that is
+                // killed runs no destructor: the terminal would stay in the mode this session took
+                // it in. So it becomes a normal ending — the same crossing the cross on the dock
+                // asks for, which blanks the dock's rows on the way out and leaves nothing of the
+                // furniture over the logs.
+                //
+                // The error is none: being interrupted is what the user asked for, and a session
+                // that ended as asked did not fail.
+                _ = tokio::signal::ctrl_c() => {
+                    log::info!("run: interrupted");
+                    main_widget.finish();
+                    log::info!("run: the session is over");
+                    return Ok(()).and(main_widget.render());
+                }
                 // A key or a press: this terminal's own bytes, parsed into the events the loop hands
                 // to the program's windows and then to the dock. One read per turn, because a read
                 // can carry half a sequence and the parser is what says when it has a whole one.
@@ -386,19 +402,21 @@ fn output_size() -> std::io::Result<(u32, u32)> {
     Ok(output)
 }
 
-/// Holds this terminal in raw mode, and restores the old settings when dropped.
+/// Holds this terminal in the mode the session draws in, and gives it back when dropped.
 ///
-/// Raw mode is not optional for a program that reads keys: with the line
-/// discipline on, every keystroke is echoed by the kernel, keys are held until a
-/// newline, and `Ctrl+C` never arrives as a byte because `ISIG` turns it into a
-/// signal for this process. The session is a client, so it must be the one that
-/// sees the bytes.
-struct Raw {
+/// Two things are taken: the line discipline, because a program that reads keys must see the
+/// bytes rather than the kernel's echo of them, and the screen, because the stream is drawn on
+/// the alternate one. Both are the device's, so both are switched once and given back once.
+///
+/// Drop is what gives them back, so it covers an ending that unwinds as well as one that
+/// returns. It does not cover `process::exit`, which runs no destructor.
+struct ModeGuard {
+    /// The line discipline the kernel had before the first key was read.
     original: rustix::termios::Termios,
 }
 
-impl Raw {
-    /// Put this process's stdin in raw mode, and put it back on drop.
+impl ModeGuard {
+    /// Take the terminal, and put it back on drop.
     fn install() -> std::io::Result<Self> {
         let stdin = std::io::stdin();
         let original = rustix::termios::tcgetattr(&stdin).map_err(std::io::Error::from)?;
@@ -415,8 +433,16 @@ impl Raw {
     }
 }
 
-impl Drop for Raw {
+impl Drop for ModeGuard {
+    /// Give the terminal back as the shell left it: the main screen, no capture, a visible
+    /// cursor, and the line discipline the kernel had before the first key was read.
     fn drop(&mut self) {
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture,
+            crossterm::cursor::Show
+        );
         let _ = rustix::termios::tcsetattr(
             std::io::stdin(),
             rustix::termios::OptionalActions::Now,
@@ -450,8 +476,13 @@ fn install_logger() -> std::path::PathBuf {
     // stderr, which under the pty is the pane the client is drawing on, so it is wiped by the next
     // frame or lost with the terminal. The hook puts the same text in the same file as everything
     // else, and then lets the default hook print it where a terminal would have shown it.
+    //
+    // The screen is given back first, by ratatui's own restore: a panic inside the alternate
+    // screen would otherwise leave the shell drawing where nobody can see it, and that includes
+    // the line this hook is about to write.
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        ratatui::restore();
         log::error!("panicked: {info}");
         previous(info);
     }));

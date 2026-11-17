@@ -15,5 +15,11 @@ async fn main() -> miette::Result<()> {
     Gui::parse()
         .run(tokio::io::stdin(), std::io::stdout())
         .await?;
-    Ok(())
+    // The exit is `std::process::exit`, not a return, because the runtime cannot be dropped:
+    // tokio's stdin read is a blocking task, and the one in flight when the session ends is
+    // parked on this pty, whose master the server still holds on the other side. It never
+    // returns input or end-of-file, and dropping the runtime waits for it — the process would
+    // hang here after the session is over. The terminal is already back: the guard that held it
+    // dropped as `run` returned.
+    std::process::exit(0);
 }
