@@ -1247,6 +1247,14 @@ impl<'a> Future for PendingSync<'a> {
     }
 }
 
+impl<F: Format> Drop for DynImage<F> {
+    /// The image goes with its handle: the terminal keeps an image until it is told to delete it,
+    /// and the id it was made under is known only here, so this is the last chance to say it.
+    fn drop(&mut self) {
+        self.send_delete();
+    }
+}
+
 impl<F: Format> DynImage<F> {
     /// The image's id on the wire.
     ///
@@ -1311,7 +1319,16 @@ impl<F: Format> DynImage<F> {
 
     pub fn restore(&mut self) {}
 
+    /// Delete the image on the terminal, and take the handle with it.
+    ///
+    /// The delete itself is [`Drop`]`'s: every image is deleted when it goes out of scope, and
+    /// this is the same act written out, for a caller that wants to say so where it happens
+    /// rather than leave it to the end of a scope.
     pub fn delete(self) {
+        drop(self);
+    }
+
+    fn send_delete(&self) {
         Message::new()
             .cd('a', "d")
             .cd('i', self.id.assigned())
