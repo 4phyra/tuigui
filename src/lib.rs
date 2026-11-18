@@ -42,6 +42,13 @@ pub struct TuiGui {
     /// The codec the session streams with, chosen here and announced on the wire.
     #[command(flatten)]
     pub streaming: gui::StreamingOptions,
+    /// How much larger the program's own interface should be drawn than a physical pixel.
+    ///
+    /// The client's switch, carried here because the client is a separate process whose options
+    /// arrive as a command line: this is the only way to say it for a session started by this
+    /// command. See [`gui::Gui::scale`] for what the number means.
+    #[arg(long, default_value_t = 1.25)]
+    pub scale: f64,
     /// The client's switches, passed on to the client this command starts.
     #[command(flatten)]
     pub gui: gui::DebugOptions,
@@ -62,6 +69,10 @@ impl TuiGui {
         // the default has to be the remote-capable one, since a bare `gui` may be anywhere.
         args.push("--channel".into());
         args.push("unix".into());
+        // The client's own scale, said here because the client is a separate process: it is what
+        // turns the pane's physical pixels into the logical units the program lays itself out in.
+        args.push("--scale".into());
+        args.push(self.scale.to_string());
         // The codec is a choice the client process is told about, because the
         // announcement on the wire is its to make. Neither flag means the
         // client's own default, which is JPEG.

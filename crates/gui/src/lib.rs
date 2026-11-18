@@ -83,7 +83,7 @@ pub struct Gui {
     /// ones; this is what turns one into the other, so a session at 2 asks its program for half
     /// as many units across and the interface comes out twice the size. The program's buffer is
     /// still the pane's size, so it is both larger *and* sharper — the picture is not stretched.
-    #[arg(long, default_value_t = 2.0)]
+    #[arg(long, default_value_t = 1.25)]
     pub scale: f64,
     /// The diagnostic switches, which belong to the client.
     #[command(flatten)]
