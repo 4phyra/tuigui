@@ -113,6 +113,20 @@ pub struct Window<F: Format> {
     pub decoder: Box<dyn codecs::Decoder>,
 }
 
+impl<F: Format> Drop for Window<F> {
+    /// The picture goes with the window.
+    ///
+    /// The terminal owns an image once it is transmitted, so dropping this frees nothing on the
+    /// screen: the last frame stays where it was for as long as the terminal keeps it. Saying so
+    /// is the only thing that removes it, and this is the one place that always runs — a window
+    /// closed, a session that ends, a link that dies.
+    fn drop(&mut self) {
+        if let Some(image) = self.image.take() {
+            image.delete();
+        }
+    }
+}
+
 /// One client the server has attached.
 ///
 /// Holds its link and what belongs to the link rather than to a window, and decides
@@ -177,9 +191,13 @@ impl<F: Format> Session<F> {
                 )
                 .await
                 .unwrap_or_else(|(e, attempts)| {
-                    panic!(
+                    // Not a failure of this side: a report that cannot be sent is a client that
+                    // is gone, and there is nothing left to tell. Logged so the reason is findable
+                    // afterwards, and the session simply ends.
+                    tracing::error!(
                         "could not report a failure to the client after {attempts} attempts: {e}"
-                    )
+                    );
+                    ((), attempts)
                 });
             }
         }
@@ -278,15 +296,11 @@ impl<F: Format> Session<F> {
             }
             Message::CloseWindow { surface } => {
                 match self.windows.remove(&surface) {
-                    // The picture is deleted with the window. The terminal owns an image once it
-                    // is transmitted, so dropping the window frees nothing on screen: the last
-                    // frame would stay where it was for the rest of the session. `delete` consumes
-                    // the image because its id goes with it, which is why the window comes out of
-                    // the map first.
+                    // Dropped, and dropping a window is what deletes its picture: see
+                    // [`Window`]'s own `Drop`. Nothing is said here because the window is the one
+                    // that knows the image's id, and it is going with it.
                     Some(window) => {
-                        if let Some(image) = window.image {
-                            image.delete();
-                        }
+                        drop(window);
                         anchors.rcu(|current| {
                             let mut next = HashMap::clone(current);
                             next.remove(&surface);
