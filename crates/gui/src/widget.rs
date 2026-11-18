@@ -229,6 +229,13 @@ impl MainWidget {
             );
         })?;
         log::info!("render: the frame is drawn");
+        // A draw that failed inside the widget could not say so: `render` returns nothing, so the
+        // stage keeps the failure and this is where it becomes the caller's. Without this the
+        // frame would report success for a pane that was half drawn, and the loop would keep
+        // turning on a session that is already broken.
+        if let Err(message) = &self.session.stage.0 {
+            return Err(crate::Error::Io(std::io::Error::other(message.clone())));
+        }
         self.area = match self.was_alternate {
             true => self.secondary.size()?.into(),
             false => {

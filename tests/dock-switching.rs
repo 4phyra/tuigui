@@ -25,7 +25,7 @@ mod common;
 
 use std::time::Duration;
 
-use termlens::{Graphics, Key, Screen, Terminal};
+use termlens::{Graphics, GraphicsAction, Key, Screen, Terminal};
 
 /// The pane the whole session is measured in.
 const SIZE: (u16, u16) = (100, 40);
@@ -54,24 +54,52 @@ const STILL: Duration = Duration::from_secs(5);
 /// it the evidence that frames are still being drawn.
 const LIGHT: &str = "•";
 
+/// How many pictures this session has asked the terminal to place, however it asked.
+///
+/// Both actions count, and they mean different things: `TransmitAndPlace` carries the pixels and
+/// places them in one command, `Place` places a picture the terminal already holds. A window that
+/// moves without changing its picture is the second kind, and a stream that comes back is either
+/// — what is being asserted is that a placement happened, not which shape it took.
+fn placements(screen: &Screen) -> usize {
+    screen
+        .graphics()
+        .payloads()
+        .iter()
+        .filter(|payload| {
+            matches!(
+                payload.action(),
+                GraphicsAction::Place | GraphicsAction::TransmitAndPlace
+            )
+        })
+        .count()
+}
+
+/// Click the program's window, in the middle of the pane, as a user does to focus it.
+///
+/// SGR counts from one; the grid counts from zero. The middle is where the root window is: it fills
+/// the pane above the dock, so no cell of it has to be searched for.
+fn click_window(session: &mut Terminal) -> termlens::Result<()> {
+    let (col, row) = (SIZE.0 / 2, SIZE.1 / 2);
+    session.send_str(&format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m"))
+}
+
 /// Press the tab named `label`, as a terminal reports a click on it.
 ///
 /// The two reports a terminal sends, rather than `Terminal::click`: `click` refuses to send one at
 /// all unless it has seen the application ask for mouse tracking, and what is under test is the
 /// client, not whether that request reached this terminal.
+///
+/// The tab is waited for rather than assumed: crossing to a screen and drawing the dock on it are
+/// two frames, so a screen that has just changed does not carry the buttons yet.
 fn press(session: &mut Terminal, label: &str) -> termlens::Result<()> {
-    let (row, col) = screen_find(session, label);
+    session.wait_until_for(|screen| screen.contains(label), SWITCH)?;
+    let (row, col) = session
+        .screen()
+        .find(label)
+        .unwrap_or_else(|| panic!("the {label} tab is on the dock's row: {}", session.screen()));
     // SGR counts from one; the grid counts from zero.
     let (col, row) = (u32::from(col) + 1, u32::from(row) + 1);
     session.send_str(&format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m"))
-}
-
-/// The row and column of `label` on the screen the session is showing.
-fn screen_find(session: &Terminal, label: &str) -> (u16, u16) {
-    session
-        .screen()
-        .find(label)
-        .unwrap_or_else(|| panic!("the {label} tab is on the dock's row: {}", session.screen()))
 }
 
 /// The dock's light: the cell its dot is drawn in, as a colour.
@@ -85,7 +113,12 @@ fn light(screen: &Screen) -> Option<String> {
         .map(|cell| format!("{:?}", cell.style()))
 }
 
-/// Assert the session is alive and still drawing, and return the screen it is on.
+/// Assert the session is alive, still drawing, and has not reported a failure.
+///
+/// Three questions, and the third is the one a terminal makes easy to miss. A failure is not only
+/// a process going away: it is drawn in the pane — `the session failed` with its cause under it —
+/// while everything else keeps looking healthy. So a test that only asks "is the process alive"
+/// passes through the failure it was written to find.
 ///
 /// Alive first, because it is the question the screen cannot answer: a session that died has left
 /// the alternate screen and blanked the dock, which is also what a session that switched screens
@@ -106,7 +139,15 @@ fn alive_and_drawing(session: &mut Terminal, after: &str) -> termlens::Result<Sc
         "the session is still drawing {after}; its light has stopped breathing: {}",
         session.screen()
     );
-    Ok(session.screen())
+    // And the pane is not carrying a report. This is checked last on purpose: the report is drawn
+    // a round trip after the press that caused it, so asking before any frame has passed would
+    // look at the screen the failure had not reached yet.
+    let screen = session.screen();
+    assert!(
+        !screen.contains("the session failed"),
+        "the session reported a failure {after}: {screen}"
+    );
+    Ok(screen)
 }
 
 #[test]
@@ -149,6 +190,13 @@ fn switching_screens_never_ends_the_session() -> termlens::Result<()> {
     alive_and_drawing(&mut session, "after w put the stream up")?;
 
     for round in 1..=ROUNDS {
+        // The window itself, clicked in the middle of the pane, before any screen is switched. It
+        // is the gesture that makes the failure happen — a window that has been used is the one
+        // that has to survive being left, and a session that only survives an untouched screen is
+        // a session that breaks the moment a user works in it.
+        click_window(&mut session)?;
+        alive_and_drawing(&mut session, &format!("after clicking the window, round {round}"))?;
+
         // The logs screen, by the pointer: it is the tab that is pressed, which is the route a
         // user takes with the mouse the dock asks for.
         press(&mut session, "Logs")?;
@@ -164,6 +212,11 @@ fn switching_screens_never_ends_the_session() -> termlens::Result<()> {
         session.send(Key::Char('w'))?;
         session.wait_until_for(|screen| screen.alternate_screen(), SWITCH)?;
         alive_and_drawing(&mut session, &format!("after w put the stream up, round {round}"))?;
+
+        // And the window again, now that it has been left and come back: a crossing that drops it
+        // leaves a pane nothing can be clicked on, and the client says so.
+        click_window(&mut session)?;
+        alive_and_drawing(&mut session, &format!("after clicking it again, round {round}"))?;
 
         // And the logs again, by the tab: a press the dock reads as the close is a press that ends
         // the session, and this is where that shows up.
@@ -198,5 +251,122 @@ fn switching_screens_never_ends_the_session() -> termlens::Result<()> {
         session.screen()
     );
 
+    Ok(())
+}
+
+/// Coming back to the stream must put the picture back.
+///
+/// A different question from the one above, which is why it is a test of its own: a session can
+/// survive every press and still draw nothing. The two screens are two terminals, and the picture
+/// is not the terminal's to keep — a placement is a request the client made, and the crossing
+/// tears down what was placed on the screen being left. So every return has to place the window
+/// again, or the pane comes back blank while everything else about the session looks healthy.
+///
+/// What is counted is the kitty traffic this harness received: a frame the client sends becomes a
+/// placement on this side, and nothing on the pane's grid says so. One command carries both the
+/// picture and its placement (`a=T`), so its count is both.
+#[test]
+fn returning_to_the_stream_places_the_window_again() -> termlens::Result<()> {
+    common::require_foot();
+    let runtime = common::runtime_dir("stream-placement");
+    // Foot's shell waits for this file, so the session outlives every crossing below: a program
+    // that ended mid-test would make a missing placement mean "nothing to draw" rather than
+    // "nothing was placed".
+    let stop = runtime.join("stop");
+    let runnable = common::script(
+        "stream-placement",
+        &format!(
+            "exec foot -- sh -c 'printf \"streaming\\n\"; \
+             while [ ! -e {} ]; do sleep 0.05; done'",
+            stop.display()
+        ),
+    );
+
+    let mut session = Terminal::builder()
+        .size(SIZE.0, SIZE.1)
+        .graphics(Graphics::Kitty)
+        .cell_size(8, 16)
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .timeout(Duration::from_secs(60))
+        .arg(&runnable)
+        .spawn(env!("CARGO_BIN_EXE_tuigui"))?;
+
+    // To the stream, and its first picture. Nothing below is about that first placement.
+    //
+    // `w` is the Windows tab's shortcut, and a shortcut *selects* its screen rather than toggling:
+    // from the stream it is a no-op, which is why the way back is the Logs tab itself.
+    session.wait_until(|screen| screen.contains("Windows"))?;
+    session.send(Key::Char('w'))?;
+    session.wait_until_for(|screen| screen.alternate_screen(), SWITCH)?;
+    session.wait_until(|screen| placements(screen) > 0)?;
+
+    for round in 1..=ROUNDS {
+        // The window is clicked first, in the middle of the pane, because that is what a user does
+        // before leaving it: the click is what makes the program take focus, and a window that has
+        // been clicked is the one that leaves afterwards. A session that only survives an
+        // untouched screen is a session that breaks the moment it is used.
+        session.send_str(&format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            SIZE.0 / 2,
+            SIZE.1 / 2,
+            SIZE.0 / 2,
+            SIZE.1 / 2
+        ))?;
+
+        // Away to the logs, by the tab.
+        press(&mut session, "Logs")?;
+        session.wait_until_for(|screen| !screen.alternate_screen(), SWITCH)?;
+        let before = placements(&session.screen());
+
+        // And back to the stream, where the picture has to be placed again.
+        session.send(Key::Char('w'))?;
+        session.wait_until_for(|screen| screen.alternate_screen(), SWITCH)?;
+        // Placed by the time the screen is back, not later: a stream that is up with nothing
+        // placed on it is the blank pane this test exists for.
+        let placed = session
+            .wait_until_for(|screen| placements(screen) > before, SWITCH)
+            .is_ok();
+        assert!(
+            placed && placements(&session.screen()) > before,
+            "the window is placed again on return {round}: {before} placements before, {} after; \
+             actions were {:?}",
+            placements(&session.screen()),
+            session
+                .screen()
+                .graphics()
+                .payloads()
+                .iter()
+                .map(|payload| payload.action())
+                .collect::<Vec<_>>()
+        );
+
+        // And the window is still there to be clicked: a crossing that drops it leaves a stream
+        // that is up with nothing behind it, and the client says so by exiting.
+        assert!(
+            session.wait_exit_for(Duration::from_millis(1)).is_err(),
+            "the session is still up after the crossing, round {round}: {}",
+            session.screen()
+        );
+        session.send_str(&format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            SIZE.0 / 2,
+            SIZE.1 / 2,
+            SIZE.0 / 2,
+            SIZE.1 / 2
+        ))?;
+        assert!(
+            session.wait_exit_for(Duration::from_millis(1)).is_err(),
+            "the window still takes a click after the crossing, round {round}: {}",
+            session.screen()
+        );
+    }
+
+    std::fs::write(&stop, b"").expect("the sentinel that ends foot");
+    let status = session.wait_exit()?;
+    assert!(
+        status.success(),
+        "the session exits cleanly: {status:?}\n{}",
+        session.screen().full_text()
+    );
     Ok(())
 }

@@ -25,16 +25,20 @@ async fn main() -> miette::Result<()> {
         // handle is the same descriptor with a future attached, so the draw loop can wait on a key
         // and on the program in one `select!`.
         //
-        // `?`, and not an exit here: a failure leaves the terminal as the client left it, and what
-        // it says is the report `main` draws on the way out.
-        gui.run(tokio::io::stdin(), std::io::stdout()).await?;
-        // The exit is `std::process::exit`, not a return, because the runtime cannot be dropped:
-        // tokio's stdin read is a blocking task, and the one in flight when the session ends is
-        // parked on this pty, whose master the server still holds on the other side. It will
-        // never return input or end-of-file, and dropping the runtime waits for it — the process
-        // would hang here after the session is already over. The terminal is already back: the
-        // guard that held it dropped as `run` returned.
-        std::process::exit(0);
+        // Both outcomes exit here, and neither returns. A return from this function — from the
+        // success path or the failure one — drops the runtime, and `Runtime::drop` waits for the
+        // blocking read parked on this pty: the master is held by the server on the other side, so
+        // that read never ends and the client hangs instead of going away. That is a session that
+        // never exits, and a server waiting for a child that is waiting for a reader.
+        //
+        // So the report is printed by hand rather than by std, and the exit is explicit.
+        match gui.run(tokio::io::stdin(), std::io::stdout()).await {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                println!("{:?}", miette::Report::new(e));
+                std::process::exit(1);
+            }
+        }
     }
 
     #[cfg(feature = "tracy")]

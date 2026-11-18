@@ -119,8 +119,14 @@ impl<'a> StatefulWidget for &'a mut StageResult {
     fn render(self, area: Rect, buf: &mut Buffer, props: &mut Self::State) {
         match &mut self.0 {
             Ok(stage) => {
+                // Kept, not logged. A widget's `render` cannot return a failure, so one that
+                // happens here has nowhere to go — and a warning in a file is not a place: the
+                // frame reports success, the loop keeps turning, and the pane shows whatever was
+                // half drawn. The failure is left on the stage instead, and the caller raises it
+                // where it can be seen.
                 if let Err(e) = stage.render_inner(area, buf, props) {
-                    log::warn!("{e}");
+                    log::error!("{e}");
+                    self.0 = Err(e.to_string());
                 }
             }
             Err(message) => {
