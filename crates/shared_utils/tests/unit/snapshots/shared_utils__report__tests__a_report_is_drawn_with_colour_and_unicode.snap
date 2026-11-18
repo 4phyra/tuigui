@@ -1,0 +1,6 @@
+---
+source: crates/shared_utils/src/../tests/unit/report.rs
+expression: drawn
+---
+  [31m×[0m the outer failure
+[31m  ╰─▶ [0mthe inner failure

@@ -71,6 +71,9 @@ log = { workspace = true }
 # with the labels and the cause chain, into a plain string, because the caller puts it on a
 # terminal this side draws itself.
 miette = { workspace = true }
+# The terminal's own report of itself, and the shape every failure this program prints has:
+# one handler, shared with the server, so a report does not look different per half.
+shared_utils = { workspace = true }
 # The failure itself, defined once so `?` can carry it out of every step of the run path.
 thiserror = { workspace = true }
 # Spans become zones in the Tracy profiler, for seeing where a frame's time goes.

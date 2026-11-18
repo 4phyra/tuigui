@@ -8,7 +8,7 @@ use clap::Parser as _;
 // parked. Both halves get the same count, and both binaries, because a session started from
 // either one should schedule its work the same way.
 #[tokio::main(worker_threads = 8)]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> miette::Result<()> {
     // Internal re-entry: this process *is* the client, started by the server
     // inside its pty. Checked first so the runnable's own path is never parsed as
     // this command's.
@@ -25,28 +25,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // handle is the same descriptor with a future attached, so the draw loop can wait on a key
         // and on the program in one `select!`.
         //
-        // The exit is `std::process::exit`, not `Ok(())`, because the runtime cannot be dropped:
+        // `?`, and not an exit here: a failure leaves the terminal as the client left it, and what
+        // it says is the report `main` draws on the way out.
+        gui.run(tokio::io::stdin(), std::io::stdout()).await?;
+        // The exit is `std::process::exit`, not a return, because the runtime cannot be dropped:
         // tokio's stdin read is a blocking task, and the one in flight when the session ends is
         // parked on this pty, whose master the server still holds on the other side. It will
         // never return input or end-of-file, and dropping the runtime waits for it — the process
-        // would hang here after the session is already over.
-        //
-        // Both outcomes exit here. Returning the error through `main` would drop the runtime too,
-        // and wait on the same read.
-        match gui.run(tokio::io::stdin(), std::io::stdout()).await {
-            Ok(()) => std::process::exit(0),
-            Err(e) => {
-                // Never to stderr: this process draws inside the server's pty, so a line
-                // there is a line printed over the pane it is working in. The client
-                // installed its own log before this could fail.
-                tracing::error!("gui: {e}");
-                std::process::exit(1);
-            }
-        }
+        // would hang here after the session is already over. The terminal is already back: the
+        // guard that held it dropped as `run` returned.
+        std::process::exit(0);
     }
 
     #[cfg(feature = "tracy")]
     tuigui::name_process("tui (server)");
     let config = tuigui::TuiGui::parse();
-    config.run().await
+    config.run().await?;
+    Ok(())
 }

@@ -19,6 +19,8 @@
 
 use std::path::{Path, PathBuf};
 
+use miette::IntoDiagnostic as _;
+
 /// Everything `tuigui` decides, assembled from the two halves it starts.
 ///
 /// The switches are the two halves' own, flattened in: what the server can change and
@@ -90,7 +92,10 @@ impl TuiGui {
     /// directly would have its bytes delivered unrewritten, so the terminal would show
     /// the raw text and never an image. Piping the client through the pty also makes
     /// the server the only reader of fd 0, so nothing steals a keystroke.
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> miette::Result<()> {
+        // The same handler the client installs, because the failure reported here is usually the
+        // client's own: two halves of one program should not print two shapes of report.
+        shared_utils::report::install_report_handler();
         let session = tui::Tui {
             command: server_command(&self.runnable, &self.client_args()),
             debug: self.tui.clone(),
@@ -101,7 +106,11 @@ impl TuiGui {
         //
         // `std::io`'s handles, not tokio's: the server takes plain streams and does its own reading,
         // so there is nothing async about them to wrap.
-        Ok(session.run(std::io::stdin(), std::io::stdout()).await?)
+        session
+            .run(std::io::stdin(), std::io::stdout())
+            .await
+            .into_diagnostic()?;
+        Ok(())
     }
 }
 

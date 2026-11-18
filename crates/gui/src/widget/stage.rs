@@ -72,6 +72,13 @@ pub enum Page {
     Exiting {
         /// Whether the screen has been crossed: the next frame draws the logs screen and ends.
         ready: bool,
+        /// The program's words, carried across the ending rather than dropped with it.
+        ///
+        /// The crossing happens after the program is over, and the words it printed while its
+        /// window was up are still in the ring: leaving them behind makes a session that ended
+        /// look like one that printed nothing, which is the opposite of what a user reads the
+        /// logs screen for.
+        stdout: ringbuf::HeapCons<u8>,
     },
 }
 
@@ -168,7 +175,16 @@ impl Stage {
             // Over. A page that is not ready is the frame that asked to leave: nothing is drawn on
             // it, because the screen it would be drawn on is the one being left. Flipping it ready is
             // what lets the next frame cross to the logs screen and clear what is left there.
-            Page::Exiting { ready } => *ready = true,
+            //
+            // The words are drained on the way out, for the reason they are drained on the logs
+            // screen: this is the last screen before the terminal's own, and a ring left full is a
+            // session whose program looks like it said nothing.
+            Page::Exiting { ready, stdout } => {
+                *ready = true;
+                while let Some(written) = stdout.write_into(props.program_stdout, None) {
+                    written?;
+                }
+            }
             // The program's words go into the caller's buffer: this screen *is* the terminal
             // underneath, and only the half holding that terminal can put a line above the pane.
             Page::Logs { stdout, .. } => {
@@ -228,7 +244,16 @@ impl Stage {
 
     /// Over, from wherever the session was, one frame short of the crossing.
     pub fn from_any_to_exiting(&mut self) {
-        self.page = Page::Exiting { ready: false };
+        let (Page::Stream { stdout, .. } | Page::Logs { stdout, .. }) =
+            std::mem::replace(&mut self.page, Page::Init)
+        else {
+            // Nothing was streaming, so there are no words to carry across.
+            return;
+        };
+        self.page = Page::Exiting {
+            ready: false,
+            stdout,
+        };
     }
 
     /// Offer one event to the program's windows, and answer whether a frame is owed.
@@ -281,7 +306,7 @@ impl Stage {
     /// Whether the session is over: the user asked to leave and the frame that carries the screen
     /// across has been drawn.
     pub fn finished(&self) -> bool {
-        matches!(self.page, Page::Exiting { ready: true })
+        matches!(self.page, Page::Exiting { ready: true, .. })
     }
 }
 
@@ -306,3 +331,7 @@ fn ring(stdout: std::io::PipeReader) -> ringbuf::HeapCons<u8> {
     });
     consumer
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/stage.rs"]
+mod tests;

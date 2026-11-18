@@ -203,8 +203,15 @@ path = "src/main.rs"
 [dependencies]
 tui = { workspace = true }
 gui = { workspace = true }
+# The shape every report is printed in, shared with the client: the failure reported on this
+# side is usually the client's own, and one program should not print two shapes of report.
+shared_utils = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
+# The failure a client exits on, drawn rather than described. The client's exit path reports
+# through this: it draws inside the server's pty, so what it writes is the last thing the user
+# reads of a session, and a report is what says where and why.
+miette = { workspace = true }
 # The client's exit path reports through this rather than to stderr: it draws inside
 # the server's pty, so a line on stderr is a line over the pane. Both halves install
 # the `log` capturer that turns it into a line of the log file.

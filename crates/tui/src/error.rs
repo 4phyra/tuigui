@@ -13,7 +13,7 @@
 //! chain printed by the binary still names the underlying cause.
 
 /// A failure while serving a session.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
 pub enum Error {
     /// The codec failed, encoding or decoding.
     ///

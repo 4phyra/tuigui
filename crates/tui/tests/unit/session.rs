@@ -249,3 +249,84 @@ async fn every_frame_reuses_one_id_and_places_itself_again() {
         "under the same placement id: {second:?}"
     );
 }
+
+/// A frame replaces the picture and does *not* remove it; a closed window does.
+///
+/// The terminal keeps an image until it is told to delete it, so something has to say so when a
+/// window goes — otherwise the last frame stays on the screen for the rest of the session. It
+/// must not be said per frame: every frame transmits under the same id, and a delete between two
+/// of them is the picture removed and put back, which a viewer sees as a flicker.
+#[tokio::test]
+async fn a_frame_keeps_its_picture_and_a_closed_window_removes_it() {
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let (answers, replies) = std::io::pipe().expect("a pipe for the terminal's answers");
+    let (controller, input) =
+        easytgp::Controller::init_with_pipe(answers).expect("the controller's pipes");
+    drop(input);
+    assert!(
+        easytgp::set_sink(Box::new(Terminal {
+            written: written.clone(),
+            keys: Mutex::new(replies),
+        })),
+        "this test installs the only sink in the process"
+    );
+
+    let (mut session, _peer) = {
+        let (accepted, peer) = connection::<UnixSocket>().await;
+        (
+            Session::<easytgp::Shm>::new(
+                accepted,
+                Arc::new(DebugOptions::default()),
+                controller,
+            ),
+            peer,
+        )
+    };
+    session
+        .handle_inner(
+            Message::OpenWindow {
+                surface: SURFACE,
+                codec: CodecId::H264,
+            },
+            &where_it_is(),
+        )
+        .await
+        .expect("the window is opened");
+
+    for _ in 0..2 {
+        session
+            .handle_inner(
+                Message::Frame {
+                    surface: SURFACE,
+                    z: 0,
+                    cols: 8,
+                    rows: 8,
+                    bytes: Some(codec_frame(8, 8)),
+                },
+                &where_it_is(),
+            )
+            .await
+            .expect("the frame is painted");
+    }
+
+    let painted = String::from_utf8(written.lock().unwrap().clone()).expect("escapes are text");
+    let delete = format!("a=d,i={}", image_id(&SURFACE));
+    assert!(
+        !painted.contains(&delete),
+        "a frame does not delete the picture it just put up: {painted:?}"
+    );
+
+    session
+        .handle_inner(
+            Message::CloseWindow { surface: SURFACE },
+            &where_it_is(),
+        )
+        .await
+        .expect("the window is closed");
+
+    let closed = String::from_utf8(written.lock().unwrap().clone()).expect("escapes are text");
+    assert!(
+        closed.contains(&delete),
+        "the window's picture is removed with it: {closed:?}"
+    );
+}

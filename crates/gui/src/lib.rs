@@ -186,6 +186,7 @@ impl Gui {
         // Before anything can fail, so the first failure is in the log rather than missing
         // from it.
         let log_path = install_logger();
+        shared_utils::report::install_report_handler();
         // Unconditional in a build that carries the profiler: a switch would have to be set
         // before the interesting session started, and the session worth profiling is the one
         // that is not already being profiled. Without the feature this is not compiled at all,
@@ -317,8 +318,11 @@ impl Gui {
                     // frame that leaves it has to be drawn here: this arm's future has just
                     // finished, so there is no later turn that could draw it.
                     main_widget.finish();
+                    // Two frames, because leaving takes two: the one that asks is drawn on the
+                    // screen being left, and only the one after it lands on the logs screen with
+                    // the dock's rows blanked. One frame leaves the dock standing over the logs.
                     log::info!("run: the session is over");
-                    return ended.and(main_widget.render());
+                    return ended.and(main_widget.render().and(main_widget.render()));
                 }
                 // The user asked to stop.
                 //
@@ -333,8 +337,10 @@ impl Gui {
                 _ = tokio::signal::ctrl_c() => {
                     log::info!("run: interrupted");
                     main_widget.finish();
+                    // Two frames, for the reason the arm above gives: the crossing is the frame
+                    // after the one that asks for it.
                     log::info!("run: the session is over");
-                    return Ok(()).and(main_widget.render());
+                    return main_widget.render().and(main_widget.render());
                 }
                 // A key or a press: this terminal's own bytes, parsed into the events the loop hands
                 // to the program's windows and then to the dock. One read per turn, because a read

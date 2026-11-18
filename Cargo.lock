@@ -1679,6 +1679,7 @@ dependencies = [
  "ratatui",
  "ringbuf",
  "rustix",
+ "shared_utils",
  "termina 0.4.0",
  "termlens",
  "thiserror 2.0.21",
@@ -4578,7 +4579,10 @@ dependencies = [
 name = "shared_utils"
 version = "0.1.0"
 dependencies = [
+ "insta",
+ "miette",
  "rustix",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -5473,6 +5477,7 @@ dependencies = [
  "futures-util",
  "image",
  "log",
+ "miette",
  "rustix",
  "shared_utils",
  "thiserror 2.0.21",
@@ -5493,7 +5498,9 @@ dependencies = [
  "compositor",
  "gui",
  "log",
+ "miette",
  "rustix",
+ "shared_utils",
  "termlens",
  "tokio",
  "tracing",

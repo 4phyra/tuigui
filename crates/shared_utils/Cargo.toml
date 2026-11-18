@@ -8,3 +8,12 @@ description = "What both halves of a session need and neither should own"
 [dependencies]
 rustix = { workspace = true }
 tokio = { workspace = true }
+# The handler every failure this program prints is drawn with, so both halves report the same way.
+miette = { workspace = true }
+
+[dev-dependencies]
+# The failures the report test prints: one error type per case, with a cause under it.
+thiserror = { workspace = true }
+# The rendered report is a snapshot, because what is reviewed is its shape — colour, glyphs,
+# where the cause hangs — and `just test-review` is where that shape is looked at.
+insta = "1"

@@ -32,6 +32,9 @@ futures-retry = { workspace = true }
 # One error type per failure instead of a string in an `io::Error`, so a caller can tell
 # a dropped frame from a failed transmit.
 thiserror = { workspace = true }
+# The derived diagnostic, so a session's failure carries its cause chain out to the process that
+# prints it rather than being flattened into a message on the way.
+miette = { workspace = true }
 
 # The codec the server decodes with, behind the trait a codec can be swapped
 # behind. Which codec it is arrives on the wire, and is not assumed here.
