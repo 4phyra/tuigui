@@ -17,7 +17,7 @@ use std::io;
 use std::sync::Arc;
 
 use codecs::CodecId;
-use easytgp::{Controller, DynImage, Format, PlacementRequest};
+use easytgp::{Controller, DynImage, Format, ImageRequest, PlacementRequest};
 use wire::message::{Message, SurfaceId};
 use wire::transport::Connection;
 
@@ -96,13 +96,79 @@ const BLUE: (u32, u32) = (64, 64);
 /// The window does not carry its own surface: the session keeps these in a map *keyed* by it, so
 /// the identity exists once. A copy here would be a second answer to "which cells is this window",
 /// and a frame naming the key would still have to search for the copy that matched.
-pub struct Window<F: Format> {
-    /// The image the frames are sent under, and the pending operations on it.
+/// What a window's picture is doing.
+///
+/// An `Option` could not say the difference that matters. A window that has not drawn has
+/// no picture anywhere; a window whose cells went away has one — the pixels are still here,
+/// the terminal was told to drop it — and coming back has to put it up again. Folded into
+/// `None`, the second was treated as the first, and the returning pane stayed blank until
+/// the program was given a reason to draw.
+pub enum Picture<F: Format> {
+    /// Nothing drawn yet, so there is nothing to place: every window starts here.
+    Nothing,
+    /// On the terminal, under the window's own id.
     ///
-    /// Kept across frames rather than rebuilt, because it owns the unacknowledged transmits and
-    /// placements: a frame adds to it and `sync` is what waits for those to land. `None` until the
-    /// first frame, since an image cannot be created before there are pixels for it.
-    pub image: Option<DynImage<F>>,
+    /// Kept across frames rather than rebuilt, because it owns the unacknowledged transmits
+    /// and placements: a frame adds to it and `sync` is what waits for those to land.
+    Shown(DynImage<F>),
+    /// Taken off the terminal, with the request that can put it back.
+    ///
+    /// The request is what came back from [`DynImage::delete`]: the pixels survive the
+    /// delete, so putting the picture up again costs one command where re-encoding a frame
+    /// costs a memcpy of every pixel.
+    Hidden(ImageRequest<F>),
+}
+
+impl<F: Format> Picture<F> {
+    /// Take the picture off the terminal, keeping what can put it up again.
+    ///
+    /// The whole of the move is here because only the enum can do it: `delete` consumes the
+    /// image, and the image lives inside the variant, so it has to be taken out before it can
+    /// be given away. Nothing to do for the other two — a hidden picture is already off the
+    /// screen and one that never drew has nothing to take off.
+    pub fn hide(&mut self) {
+        let taken = std::mem::replace(self, Picture::Nothing);
+        *self = match taken {
+            Picture::Shown(image) => Picture::Hidden(image.delete()),
+            other => other,
+        };
+    }
+
+    /// Put the picture up again, under `placement`, and wait for the terminal to take it.
+    ///
+    /// Both forms keep their pixels, so neither needs the client to draw anything: a shown
+    /// image re-sends what it holds, and a hidden one travels back up from the request the
+    /// delete handed over. `Nothing` is a window between opening and its first frame, which
+    /// has no picture to raise.
+    ///
+    /// A transmit, never a placement. A placement names an image the terminal may have
+    /// dropped, and it answers `ENOENT` when it has — a failure with no recovery in it,
+    /// since a placement carries no pixels.
+    pub async fn show(&mut self, image_id: u32, placement: PlacementRequest) -> Result<()> {
+        use Picture::*;
+
+        let taken = std::mem::replace(self, Nothing);
+        let mut image = match taken {
+            Nothing => return Ok(()),
+            Shown(image) => image.retransplace(placement)?.await?,
+            Hidden(request) => {
+                request
+                    .temp_remove_this_api_maybe_resend_shm()?
+                    .transplace(image_id, placement)
+                    .await?
+            }
+        };
+        tokio::time::timeout(TRANSMIT_TIMEOUT, image.sync())
+            .await
+            .map_err(|_| Error::TransmitTimeout(TRANSMIT_TIMEOUT))??;
+        *self = Picture::Shown(image);
+        Ok(())
+    }
+}
+
+pub struct Window<F: Format> {
+    /// What the picture is doing, and the operations pending on it.
+    pub picture: Picture<F>,
     /// The codec this window's frames are in, which is what its decoder was built from.
     pub codec: CodecId,
     /// The codec's decoder, kept across frames.
@@ -121,7 +187,7 @@ impl<F: Format> Drop for Window<F> {
     /// is the only thing that removes it, and this is the one place that always runs — a window
     /// closed, a session that ends, a link that dies.
     fn drop(&mut self) {
-        if let Some(image) = self.image.take() {
+        if let Picture::Shown(image) = std::mem::replace(&mut self.picture, Picture::Nothing) {
             image.delete();
         }
     }
@@ -246,12 +312,8 @@ impl<F: Format> Session<F> {
                     // window stays, because cells that scrolled away can come back, and its next
                     // frame transmits a fresh picture under the same id.
                     None => {
-                        if let Some(image) = self
-                            .windows
-                            .get_mut(&surface)
-                            .and_then(|window| window.image.take())
-                        {
-                            image.delete();
+                        if let Some(window) = self.windows.get_mut(&surface) {
+                            window.picture.hide();
                         }
                     }
                 }
@@ -270,7 +332,7 @@ impl<F: Format> Session<F> {
                     surface,
                     Window {
                         codec,
-                        image: None,
+                        picture: Picture::Nothing,
                         decoder: codec.to_decoder()?,
                     },
                 );
@@ -414,15 +476,14 @@ impl<F: Format> Session<F> {
                 image::RgbImage::from_pixel(BLUE.0, BLUE.1, image::Rgb([0, 0, 255]))
             } else {
                 match state.decoder.decode(data) {
-                    Ok(Some(frame)) => image::RgbImage::from_raw(
-                        frame.width,
-                        frame.height,
-                        frame.rgb,
-                    )
-                    .ok_or(Error::FrameSize {
-                        width: frame.width,
-                        height: frame.height,
-                    })?,
+                    Ok(Some(frame)) => {
+                        image::RgbImage::from_raw(frame.width, frame.height, frame.rgb).ok_or(
+                            Error::FrameSize {
+                                width: frame.width,
+                                height: frame.height,
+                            },
+                        )?
+                    }
                     // Headers, or a frame the codec held back: nothing to show yet,
                     // and nothing to ask for — the next frame the client sends is what
                     // the decoder held, and a static window sends again when it moves.
@@ -462,29 +523,17 @@ impl<F: Format> Session<F> {
                 .await
                 .map_err(|_| Error::TransmitTimeout(TRANSMIT_TIMEOUT))??;
             // `sync` returns nothing; the image is what is stored, and it is still held here.
-            state.image = Some(image);
+            state.picture = Picture::Shown(image);
         } else {
-            // A window that has not drawn has no picture to move, which is not a failure: it is
-            // the state every window is in between opening and its first frame.
-            let Some(image) = state.image.take() else {
-                return Ok(());
-            };
-
-            // Sent again rather than moved: the terminal is entitled to have forgotten the
-            // picture, and says `ENOENT` when it has — which `a=p` answers by drawing nothing
-            // and naming no way out, since nothing is left to place from. The image keeps its
-            // pixels, so `a=T` makes the picture and places it in one command.
-            let mut image = image.retransplace(placement)?.await?;
-            tokio::time::timeout(TRANSMIT_TIMEOUT, image.sync())
-                .await
-                .map_err(|_| Error::TransmitTimeout(TRANSMIT_TIMEOUT))??;
-            state.image = Some(image);
+            // The window moved or changed rank while its program drew nothing. Both forms
+            // still hold the pixels, so the picture goes back up without the client being
+            // asked for anything; a window that never drew has nothing to raise.
+            state.picture.show(image_id, placement).await?;
         }
 
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 #[path = "../tests/unit/session.rs"]

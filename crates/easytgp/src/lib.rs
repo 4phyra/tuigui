@@ -1089,6 +1089,24 @@ impl<F: Format + 'static> ImageRequest<F> {
             .send_medium(inline)
     }
 
+    // TEMPORARY API. Remove once `transplace` does this itself.
+    /// Put this request's pixels back into a shared memory object it can name again.
+    ///
+    /// A terminal unlinks a shared memory object once it has read it, so a request kept past
+    /// its transmit carries a name that no longer resolves and the terminal answers `EINVAL`.
+    /// The bytes are still here, so a fresh object is what makes the name mean something.
+    ///
+    /// Only the shared memory medium has an object; an inline one carries its pixels in the
+    /// payload and needs nothing.
+    pub fn temp_remove_this_api_maybe_resend_shm(mut self) -> Res<Self> {
+        if let Some(held) = self.shm.take() {
+            let frame = Arc::new(held.recreate()?);
+            self.data = frame.payload();
+            self.shm = Some(frame);
+        }
+        Ok(self)
+    }
+
     /// Transmit under an existing id *and* place it, in one command (`a=T`).
     ///
     /// This exists because [`ImageRequest::transmit_as`] followed by
@@ -1356,17 +1374,16 @@ impl<F: Format> DynImage<F> {
     pub fn retransplace(mut self, placement: PlacementRequest) -> Res<PendingTransfer<F>> {
         let id = self.id.assigned();
 
-        // A shared memory object is unlinked once the terminal has read it, so the name
-        // the payload carries no longer resolves: the bytes are what has to be sent, under
-        // a fresh name. The most recent frame if there is one, otherwise the image's own
-        // object. An inline medium needs neither, because its payload *is* the pixels.
-        if let Some(held) = self.held.take().or_else(|| self.request.shm.take()) {
-            let frame = Arc::new(held.recreate()?);
-            self.request.data = frame.payload();
-            self.request.shm = Some(frame);
+        // The most recent frame is newer than the image's own object, so it is the one worth
+        // sending: same pixels, one write, no re-encode.
+        if let Some(held) = self.held.take() {
+            self.request.shm = Some(held);
         }
 
-        Ok(self.request.transplace(id, placement))
+        Ok(self
+            .request
+            .temp_remove_this_api_maybe_resend_shm()?
+            .transplace(id, placement))
     }
 
     // TODO:
@@ -1386,11 +1403,17 @@ impl<F: Format> DynImage<F> {
 
     pub fn restore(&mut self) {}
 
-    pub fn delete(self) {
+    /// Free the image on the terminal, handing back the request that can make it again.
+    ///
+    /// The pixels are not lost with the image: they come back here, because a caller that
+    /// hid a window may want the same picture later, and re-encoding a frame is the
+    /// expensive way to get them.
+    pub fn delete(self) -> ImageRequest<F> {
         Message::new()
             .cd('a', "d")
             .cd('i', self.id.assigned())
             .send();
+        self.request
     }
 
     fn resolve_frame_selector(&self, selector: FrameSelector) -> usize {
