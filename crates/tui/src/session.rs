@@ -466,13 +466,19 @@ impl<F: Format> Session<F> {
         } else {
             // A window that has not drawn has no picture to move, which is not a failure: it is
             // the state every window is in between opening and its first frame.
-            let Some(image) = state.image.as_mut() else {
+            let Some(image) = state.image.take() else {
                 return Ok(());
             };
-            image.place(placement);
+
+            // Sent again rather than moved: the terminal is entitled to have forgotten the
+            // picture, and says `ENOENT` when it has — which `a=p` answers by drawing nothing
+            // and naming no way out, since nothing is left to place from. The image keeps its
+            // pixels, so `a=T` makes the picture and places it in one command.
+            let mut image = image.retransplace(placement)?.await?;
             tokio::time::timeout(TRANSMIT_TIMEOUT, image.sync())
                 .await
                 .map_err(|_| Error::TransmitTimeout(TRANSMIT_TIMEOUT))??;
+            state.image = Some(image);
         }
 
         Ok(())

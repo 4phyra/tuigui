@@ -210,21 +210,32 @@ impl ReplyRouter {
     }
 }
 
+#[derive(Debug)]
 pub struct Reply {
     // ident: CommandIdent,
     message: Option<Message>,
+    /// The command this answers.
+    ///
+    /// A terminal's answer names nothing: `ENOENT: image not found` is the same
+    /// sentence whether a transmit or a placement was refused. The command is
+    /// carried beside it so the refusal can say what was asked for and with what
+    /// arguments.
+    diagnostic: Diagnostic,
 }
 
 impl From<Reply> for Result<Reply, TGPError> {
     fn from(mut value: Reply) -> Self {
-        if let Some(ref mut msg) = value.message {
-            match str::from_utf8(msg.payload.take().unwrap().as_slice())? {
-                "OK" => (),
-                error => return Err(TGPError::Unknown(error.to_string())),
-            }
-        }
+        let Some(payload) = value.message.as_mut().and_then(|msg| msg.payload.take()) else {
+            return Ok(value);
+        };
 
-        Ok(value)
+        match str::from_utf8(&payload)? {
+            "OK" => Ok(value),
+            terminal_reply => Err(TGPError::Unknown {
+                terminal_reply: terminal_reply.to_string(),
+                diagnostic: value.diagnostic,
+            }),
+        }
     }
 }
 
@@ -258,6 +269,9 @@ impl<F: Format> PendingTransfer<F> {
 pub struct ReplyFuture {
     ident: ActionIdent,
     action_number: Marker,
+    /// The command whose answer this future resolves to, handed to the
+    /// [`Reply`] so a refusal can name it.
+    diagnostic: Diagnostic,
 }
 
 #[derive(Debug)]
@@ -267,7 +281,7 @@ enum ActionIdent {
 }
 
 impl ReplyFuture {
-    fn new(ident: ActionIdent) -> Self {
+    fn new(ident: ActionIdent, diagnostic: Diagnostic) -> Self {
         // TODO: fix this nonesense
         let marker = id::alloc() + 99999;
 
@@ -293,6 +307,7 @@ impl ReplyFuture {
         ReplyFuture {
             ident,
             action_number: marker,
+            diagnostic,
         }
     }
 }
@@ -320,12 +335,16 @@ impl Future for ReplyFuture {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
+        let s = self.get_mut();
         let mut r = R.write();
 
-        if let Some(reply) = r.ready.remove(&self.action_number) {
-            return std::task::Poll::Ready(Reply { message: reply });
+        if let Some(reply) = r.ready.remove(&s.action_number) {
+            return std::task::Poll::Ready(Reply {
+                message: reply,
+                diagnostic: s.diagnostic.clone(),
+            });
         }
-        r.pending.insert(self.action_number, cx.waker().clone());
+        r.pending.insert(s.action_number, cx.waker().clone());
 
         std::task::Poll::Pending
     }
@@ -534,6 +553,36 @@ impl PlacementHandle {
 // }
 
 pub type Res<R> = Result<R, TGPError>;
+
+/// A command as a failure reports it: its control data, and how large its payload was.
+///
+/// The payload's bytes are dropped rather than carried: they are base64 of pixel data
+/// or an object name, so printing them says nothing about what was asked for and can
+/// be megabytes long. Its size is kept, because a refusal of a two-megabyte transmit
+/// is a different report from a refusal of a placement.
+#[derive(Debug, Clone)]
+pub struct Diagnostic(Message, Option<usize>);
+
+impl Diagnostic {
+    fn of(command: &Message) -> Self {
+        Self(
+            Message {
+                cds: command.cds.clone(),
+                payload: None,
+            },
+            command.payload.as_ref().map(Vec::len),
+        )
+    }
+}
+
+impl Display for Diagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.1 {
+            Some(len) => write!(f, "{} with {len} bytes of payload", self.0),
+            None => write!(f, "{}", self.0),
+        }
+    }
+}
 pub type Id = u32;
 pub type ImgNumber = u32;
 pub type FrameIdx = usize;
@@ -1137,8 +1186,9 @@ impl<F: Format + 'static> ImageRequest<F> {
         match placement.at {
             Some((row, col)) => {
                 let aident = request.ident();
+                let diagnostic = Diagnostic::of(&request);
                 writer::send(around_cursor(row, col, &request.into_escape()));
-                ReplyFuture::new(aident)
+                ReplyFuture::new(aident, diagnostic)
             }
             None => request.send_medium(inline),
         }
@@ -1292,6 +1342,31 @@ impl<F: Format> DynImage<F> {
         self.pending.push(fut);
 
         handle
+    }
+
+    /// Send this image's pixels again and place them, in one command.
+    ///
+    /// [`DynImage::place`] moves a picture the terminal is holding, and the terminal is
+    /// entitled to have stopped holding it: an image whose placements have all gone, or a
+    /// screen it cleared, leaves `a=p` answering `ENOENT`, and `ENOENT` on a placement is
+    /// a dead end — there is nothing to move and the caller has already given up its
+    /// pixels. They are still here, in the medium's own object or in the payload, which is
+    /// why re-sending them is the whole answer. `a=T` is the one command that makes a
+    /// picture and places it, so the pane is never briefly empty.
+    pub fn retransplace(mut self, placement: PlacementRequest) -> Res<PendingTransfer<F>> {
+        let id = self.id.assigned();
+
+        // A shared memory object is unlinked once the terminal has read it, so the name
+        // the payload carries no longer resolves: the bytes are what has to be sent, under
+        // a fresh name. The most recent frame if there is one, otherwise the image's own
+        // object. An inline medium needs neither, because its payload *is* the pixels.
+        if let Some(held) = self.held.take().or_else(|| self.request.shm.take()) {
+            let frame = Arc::new(held.recreate()?);
+            self.request.data = frame.payload();
+            self.request.shm = Some(frame);
+        }
+
+        Ok(self.request.transplace(id, placement))
     }
 
     // TODO:
@@ -1731,8 +1806,9 @@ impl PlacementRequest {
         match self.at {
             Some((row, col)) => {
                 let aident = request.ident();
+                let diagnostic = Diagnostic::of(&request);
                 writer::send(around_cursor(row, col, &request.into_escape()));
-                ReplyFuture::new(aident)
+                ReplyFuture::new(aident, diagnostic)
             }
             None => request.send(),
         }
@@ -1938,6 +2014,7 @@ impl Message {
         // TODO: might be missed because of mismatching spaces
         let is_frame_edit = self.cds.contains(&ControlData('a', "f".to_string()));
 
+        let diagnostic = Diagnostic::of(&self);
         let payload = self.payload.take().unwrap_or_default();
         let aident = self.ident();
 
@@ -1948,7 +2025,7 @@ impl Message {
             let guard = lock.lock().unwrap();
             self.payload(payload).send_raw(false);
             drop(guard);
-            return ReplyFuture::new(aident);
+            return ReplyFuture::new(aident, diagnostic);
         }
 
         let mut chunks = payload.chunks(CHUNK_SIZE).into_iter().peekable();
@@ -1974,7 +2051,7 @@ impl Message {
         }
 
         // TODO: maybe do in the critical section.
-        ReplyFuture::new(aident)
+        ReplyFuture::new(aident, diagnostic)
     }
 
     fn send_raw(mut self, no_reply: bool) {
@@ -2008,14 +2085,41 @@ impl Message {
         format!("\x1b_G{cds};{payload}\x1b\\").into_bytes()
     }
 }
+
+/// The operation and its arguments, as the control data spells them: `a=T,i=7,p=1`.
+///
+/// The payload is deliberately not printed: it is base64 of pixel data or an object
+/// name, and neither answers the question a failure raises, which is which command
+/// was refused and with what arguments.
+impl Display for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.cds
+                .iter()
+                .map(|cd| cd.format())
+                .collect_vec()
+                .join(",")
+        )
+    }
+}
 #[derive(thiserror::Error, Debug)]
 pub enum TGPError {
     #[error("Entity was evicted")]
     Evicted(Box<dyn Restorable>),
     #[error("Entity you are trying to use was indirectly or directly deleted")]
     Deleted(Box<dyn Restorable>),
-    #[error("Terminal emulator returned an error: {0}")]
-    Unknown(String),
+    /// The terminal refused a command.
+    ///
+    /// Both halves are kept because neither is enough on its own: the answer is a
+    /// sentence about the thing (`ENOENT: image not found`), and the command says
+    /// which image, and whether it was a transmit or a placement that asked for it.
+    #[error("Terminal emulator returned an error: {terminal_reply} (for {diagnostic})")]
+    Unknown {
+        terminal_reply: String,
+        diagnostic: Diagnostic,
+    },
 
     #[error(transparent)]
     ImageProcessing(#[from] image::ImageError),
@@ -2106,3 +2210,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/unit/cursor_recovery.rs"]
 mod cursor_recovery;
+
+#[cfg(test)]
+#[path = "../tests/unit/diagnostic.rs"]
+mod diagnostic;

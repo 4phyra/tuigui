@@ -250,6 +250,100 @@ async fn every_frame_reuses_one_id_and_places_itself_again() {
     );
 }
 
+/// A frame with no new pixels sends the picture again rather than moving it.
+///
+/// A window that moves without its program drawing anything sends `bytes: None`, and the
+/// obvious answer is `a=p`: place the image the terminal already holds. But the terminal is
+/// entitled to have forgotten it — a delete removes the data, an off-screen window has its
+/// placement drop — and then `a=p` answers `ENOENT`, which the session reports as a failure
+/// and which has no recovery in it: there is nothing left to place from. The image keeps its
+/// own pixels, so `a=T` makes them again and places them, and it is right whether or not the
+/// terminal still has the old copy.
+#[tokio::test]
+async fn a_frame_with_no_new_pixels_sends_its_picture_again() {
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let (answers, replies) = std::io::pipe().expect("a pipe for the terminal's answers");
+    let (controller, input) =
+        easytgp::Controller::init_with_pipe(answers).expect("the controller's pipes");
+    drop(input);
+    assert!(
+        easytgp::set_sink(Box::new(Terminal {
+            written: written.clone(),
+            keys: Mutex::new(replies),
+        })),
+        "this test installs the only sink in the process"
+    );
+
+    let (mut session, _peer) = {
+        let (accepted, peer) = connection::<UnixSocket>().await;
+        (
+            Session::<easytgp::Shm>::new(
+                accepted,
+                Arc::new(DebugOptions::default()),
+                controller,
+            ),
+            peer,
+        )
+    };
+    session
+        .handle_inner(
+            Message::OpenWindow {
+                surface: SURFACE,
+                codec: CodecId::H264,
+            },
+            &where_it_is(),
+        )
+        .await
+        .expect("the window is opened");
+    session
+        .handle_inner(
+            Message::Frame {
+                surface: SURFACE,
+                z: 0,
+                cols: 8,
+                rows: 8,
+                bytes: Some(codec_frame(8, 8)),
+            },
+            &where_it_is(),
+        )
+        .await
+        .expect("the first frame is painted");
+    let after_first = written.lock().unwrap().len();
+
+    session
+        .handle_inner(
+            Message::Frame {
+                surface: SURFACE,
+                z: 0,
+                cols: 8,
+                rows: 8,
+                bytes: None,
+            },
+            &where_it_is(),
+        )
+        .await
+        .expect("a frame with nothing new is not a failure");
+
+    let all = written.lock().unwrap().clone();
+    let moved = String::from_utf8(all[after_first..].to_vec()).expect("escapes are text");
+    assert!(
+        moved.contains("a=T"),
+        "the picture travels with its placement: {moved:?}"
+    );
+    assert!(
+        !moved.contains("a=p"),
+        "a placement would name an image the terminal may have dropped: {moved:?}"
+    );
+    assert!(
+        moved.contains(&format!("i={}", image_id(&SURFACE))),
+        "under the same id, so the window's cells keep naming it: {moved:?}"
+    );
+    assert!(
+        moved.contains("t=s"),
+        "the pixels go again, through the medium the image was opened with: {moved:?}"
+    );
+}
+
 /// A frame replaces the picture and does *not* remove it; a closed window does.
 ///
 /// The terminal keeps an image until it is told to delete it, so something has to say so when a

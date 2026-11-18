@@ -83,6 +83,54 @@ fn click_window(session: &mut Terminal) -> termlens::Result<()> {
     session.send_str(&format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m"))
 }
 
+/// Every id the client placed after deleting it.
+///
+/// `a=p` places a picture the terminal is already holding, so one sent after `a=d` of the same id
+/// asks for pixels the client itself told the terminal to forget. foot answers `ENOENT` and the
+/// session ends; this harness answers `OK` and draws nothing, so no check on the screen can see it.
+/// The log is the only evidence, and a placement naming an id whose delete came first is the
+/// failure, whichever order it reached the terminal in.
+///
+/// A transmit of the id clears it again: re-sending the pixels makes a later placement legitimate,
+/// which is the whole difference between the two cases.
+fn placements_of_a_deleted_image(screen: &Screen) -> Vec<u32> {
+    let mut deleted: Vec<u32> = Vec::new();
+    let mut offending = Vec::new();
+    for payload in screen.graphics().payloads() {
+        let Some(id) = payload.id() else { continue };
+        match payload.action() {
+            GraphicsAction::Delete => deleted.push(id),
+            GraphicsAction::Place if deleted.contains(&id) => offending.push(id),
+            GraphicsAction::Transmit | GraphicsAction::TransmitAndPlace => {
+                deleted.retain(|held| *held != id)
+            }
+            _ => (),
+        }
+    }
+    offending
+}
+
+/// Assert no picture was placed under an id the client had already deleted.
+///
+/// The one failure this harness cannot see on the screen: it answers every placement `OK` and
+/// draws nothing, where foot answers `ENOENT` and the session ends. So what ended the session on
+/// foot has to be read off the traffic here.
+fn assert_nothing_placed_after_its_delete(session: &Terminal, after: &str) {
+    let offending = placements_of_a_deleted_image(&session.screen());
+    assert!(
+        offending.is_empty(),
+        "no picture is placed under an id it was deleted from {after}, but {offending:?} was; \
+         actions were {:?}",
+        session
+            .screen()
+            .graphics()
+            .payloads()
+            .iter()
+            .map(|payload| (payload.action(), payload.id()))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// Press the tab named `label`, as a terminal reports a click on it.
 ///
 /// The two reports a terminal sends, rather than `Terminal::click`: `click` refuses to send one at
@@ -233,6 +281,9 @@ fn switching_screens_never_ends_the_session() -> termlens::Result<()> {
         session.send(Key::Char('w'))?;
         session.wait_until_for(|screen| screen.alternate_screen(), SWITCH)?;
         alive_and_drawing(&mut session, &format!("after w put the stream up, round {round}"))?;
+        // And no picture was asked for under an id the client had already deleted on the way: the
+        // failure that ended the session on a real terminal, which this one answers `OK`.
+        assert_nothing_placed_after_its_delete(&session, &format!("round {round}"));
     }
 
     // The program ends, and the session with it.
@@ -339,6 +390,7 @@ fn returning_to_the_stream_places_the_window_again() -> termlens::Result<()> {
                 .map(|payload| payload.action())
                 .collect::<Vec<_>>()
         );
+        assert_nothing_placed_after_its_delete(&session, &format!("the return {round}"));
 
         // And the window is still there to be clicked: a crossing that drops it leaves a stream
         // that is up with nothing behind it, and the client says so by exiting.
