@@ -165,7 +165,12 @@ fn exec(cmd: &[String], slave: &std::fs::File) -> io::Result<Child> {
     c.kill_on_drop(true);
     c.stdin(Stdio::from(slave.try_clone()?));
     c.stdout(Stdio::from(slave.try_clone()?));
-    c.stderr(Stdio::from(slave.try_clone()?));
+    // Not the pty: everything written there is forwarded to the real terminal and drawn into the
+    // pane, so a diagnostic would scroll the interface it is about. A file keeps it readable
+    // without putting it on the picture.
+    c.stderr(Stdio::from(std::fs::File::create(
+        "/tmp/tuigui-child.log",
+    )?));
     unsafe {
         c.pre_exec(|| {
             // New session, then adopt the pts as the controlling terminal so job control and

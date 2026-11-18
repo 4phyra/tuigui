@@ -2237,3 +2237,7 @@ mod cursor_recovery;
 #[cfg(test)]
 #[path = "../tests/unit/diagnostic.rs"]
 mod diagnostic;
+
+#[cfg(test)]
+#[path = "../tests/unit/leak.rs"]
+mod leak;
