@@ -88,6 +88,13 @@ pub struct WaylandWindow {
     /// `Mutex` rather than `&mut`: a frame is taken through `&self`, because the
     /// window is behind an `Arc` that the pane holds for drawing.
     encoder: Mutex<Option<Box<dyn codecs::Encoder>>>,
+    /// The rank and cell box the far side was last told about.
+    ///
+    /// A frame carries pixels, a rank, and a box, and each of those can be the reason it is
+    /// worth sending. With no new pixels and neither of the other two changed, there is
+    /// nothing in it — and sending it anyway makes the frame rate the rate the caller's
+    /// loop turns over, which is pointer motion's when a mouse moves.
+    sent: Mutex<Option<(u32, (u16, u16))>>,
 }
 
 impl WaylandWindow {
@@ -123,6 +130,7 @@ impl WaylandWindow {
             codec,
             debug,
             encoder: Mutex::new(None),
+            sent: Mutex::new(None),
         })
     }
 }
@@ -260,8 +268,10 @@ impl Compositable for WaylandWindow {
     /// the picture still has to travel. `None` bytes is exactly that: place what you already have
     /// in this box.
     ///
-    /// The box the picture goes into travels with it, in cells: the far side puts a
-    /// picture on a grid of cells, and this is the side that decided which cells those are.
+    /// A message goes out when there is something in it: new pixels, a new rank, or a new box.
+    /// With none of the three, it is the frame clock firing and nothing else — sending it makes
+    /// the wire the rate the caller's loop turns over, which is why pointer motion used to
+    /// stutter the picture.
     #[tracing::instrument(name = "window.frame", skip_all)]
     async fn frame(
         &self,
@@ -273,11 +283,6 @@ impl Compositable for WaylandWindow {
         // window nobody has touched since the last frame.
         let window = self.inner.upgrade().ok_or(Error::Gone)?;
         let captured = window.capture();
-        log::info!(
-            "window.frame: captured {}, size {:?}",
-            captured.is_some(),
-            captured.as_ref().map(|(_, size)| *size)
-        );
         let bytes = match captured {
             Some((pixels, size)) => {
                 let mut held = self.encoder.lock().unwrap_or_else(|e| e.into_inner());
@@ -298,6 +303,16 @@ impl Compositable for WaylandWindow {
             }
             None => None,
         };
+
+        // Dropped before the send: the guard is not `Send`, and holding it across the await
+        // would also hold it for the whole round trip.
+        {
+            let mut sent = self.sent.lock().unwrap_or_else(|e| e.into_inner());
+            if bytes.is_none() && *sent == Some((rank, cells)) {
+                return Ok(());
+            }
+            *sent = Some((rank, cells));
+        }
 
         let message = Message::Frame {
             surface: self.surface,
