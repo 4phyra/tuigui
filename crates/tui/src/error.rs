@@ -35,8 +35,22 @@ pub enum Error {
     /// Raised by staging the pixels for the terminal — a shared memory object that
     /// cannot be created, a PNG that cannot be encoded — so it is the medium's failure
     /// rather than the frame's.
-    #[error("staging a frame for the terminal: {0}")]
-    Stage(#[source] easytgp::TGPError),
+    ///
+    /// The label names the window and points at the call that could not stage the frame,
+    /// with that line of code quoted under the report. Three facts a reader needs and the
+    /// message alone cannot give: which picture, which function, and the code itself.
+    #[error("staging a frame for the terminal")]
+    #[diagnostic(help("the terminal could not take the pixels; the medium's error is below"))]
+    Stage {
+        #[source]
+        source: easytgp::TGPError,
+        /// The window the frame belonged to, so a report says which picture failed.
+        surface: wire::message::SurfaceId,
+        #[label("could not stage the frame for {surface:?}")]
+        site: miette::SourceSpan,
+        #[source_code]
+        source_code: miette::NamedSource<&'static str>,
+    },
 
     /// The graphics protocol rejected an operation.
     ///

@@ -147,7 +147,13 @@ pub fn set_sink(out: Box<dyn std::io::Write + Send>) -> bool {
     writer::set_sink(out)
 }
 
-pub trait Restorable: std::fmt::Debug + Send {
+/// Something an error can hand back so the caller can rebuild it.
+///
+/// `Sync` as well as `Send`: a failure is put into a `miette::Report`, which requires
+/// `Sync`, and an error that could not be reported would be one the caller has to stringify
+/// — losing the type it needs to recover. Nothing here is shared across threads at once; the
+/// bound is what the reporting machinery asks of every error it draws.
+pub trait Restorable: std::fmt::Debug + Send + Sync {
     fn restore(&mut self, renew_dependents: bool) -> Res<()>;
     // fn renew_one();
 }

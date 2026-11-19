@@ -25,6 +25,13 @@ use crate::error::{Error, Result};
 use crate::proxy::Position;
 use crate::DebugOptions;
 
+/// This file, compiled in, so a label can quote the line it points at.
+///
+/// miette renders a snippet from whatever `SourceCode` the error carries; it does not read
+/// files. Compiling the text in is what makes the quoted line the line that failed rather
+/// than whatever is on disk when the report is printed.
+const SESSION_SOURCE: &str = include_str!("session.rs");
+
 /// The image id a window's frames are sent under.
 ///
 /// Named by the window's own surface, not by a constant: two windows are two
@@ -250,7 +257,7 @@ impl<F: Format> Session<F> {
                 // and a failure it is not told about is a pane that stops changing for no stated
                 // reason. Retried because this is the last thing the peer is ever told — a report
                 // that is itself lost leaves that same silent pane.
-                let report = Message::Error(e.to_string());
+                let report = Message::Error(shared_utils::report::drawn(miette::Report::new(e)));
                 futures_retry::FutureRetry::new(
                     || self.connection.send(&report),
                     crate::error::ReportFailure,
@@ -501,7 +508,12 @@ impl<F: Format> Session<F> {
                 }
             };
 
-            let request = F::request(&self.controller, pixels).map_err(Error::Stage)?;
+            let request = F::request(&self.controller, pixels).map_err(|source| Error::Stage {
+                source,
+                surface,
+                site: shared_utils::report::line_span(SESSION_SOURCE, line!() as usize),
+                source_code: miette::NamedSource::new("crates/tui/src/session.rs", SESSION_SOURCE),
+            })?;
             // One command, not two. Transmitting and placing separately leaves the image on
             // screen with nothing drawing it in between — the terminal frees an image's
             // placements when its data is replaced — and that gap is a round trip wide, which is
