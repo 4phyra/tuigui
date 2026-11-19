@@ -122,7 +122,7 @@ pub async fn run(
             // it is about: handing it on would be asking them to fail one by one. It is returned
             // instead, so the draw loop can cross back to the screen it is read on.
             msg = connection.recv() => match msg? {
-                Some(Message::Error(said)) => return Err(Error::Io(io::Error::other(said))),
+                Some(Message::Error(said)) => return Err(Error::Reported(said)),
                 Some(msg) => drop(rebroadcaster.send(msg)),
                 None => (),
             },

@@ -40,7 +40,6 @@ pub enum Error {
     /// with that line of code quoted under the report. Three facts a reader needs and the
     /// message alone cannot give: which picture, which function, and the code itself.
     #[error("staging a frame for the terminal")]
-    #[diagnostic(help("the terminal could not take the pixels; the medium's error is below"))]
     Stage {
         #[source]
         source: easytgp::TGPError,
@@ -143,3 +142,10 @@ impl From<Error> for std::io::Error {
         std::io::Error::other(error.to_string())
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/error.rs"]
+mod tests;
+
+#[cfg(test)]
+pub(crate) use crate::session::SESSION_SOURCE;

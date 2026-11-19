@@ -133,6 +133,10 @@ impl Tui {
         // place left. Installed unconditionally, because the failures this exists for are
         // the ones nobody asked to reproduce.
         install_logger();
+        // The report this process draws is the one the client prints: a failure crosses the
+        // link already rendered, so without this the server's half of the report is ascii and
+        // the client's half is unicode — two shapes inside one message.
+        shared_utils::report::install_report_handler();
         // Unconditional in a build that carries the profiler: a switch would have to be set
         // before the interesting session started, and the session worth profiling is the one
         // that is not already being profiled. Without the feature this is not compiled at all,

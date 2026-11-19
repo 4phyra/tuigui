@@ -16,6 +16,16 @@ pub enum Error {
     /// context. The arrow is what says "the session failed" and then what it failed on.
     #[error("the session failed")]
     Io(#[from] std::io::Error),
+
+    /// The server failed, and this is its own report.
+    ///
+    /// Its own variant because the failure is not this side's: it happened in the process that
+    /// decodes, stages and places, and the report already says everything — the message, the
+    /// line, the code, the medium's own reason. Wrapping it in "the session failed" would put
+    /// this side's words over the other side's, which is what made a server failure read like
+    /// a client one. The text is printed as it arrived, and it is the whole message.
+    #[error("{0}")]
+    Reported(String),
 }
 
 #[cfg(test)]

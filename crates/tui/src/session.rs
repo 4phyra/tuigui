@@ -30,7 +30,7 @@ use crate::DebugOptions;
 /// miette renders a snippet from whatever `SourceCode` the error carries; it does not read
 /// files. Compiling the text in is what makes the quoted line the line that failed rather
 /// than whatever is on disk when the report is printed.
-const SESSION_SOURCE: &str = include_str!("session.rs");
+pub(crate) const SESSION_SOURCE: &str = include_str!("session.rs");
 
 /// The image id a window's frames are sent under.
 ///
@@ -508,10 +508,14 @@ impl<F: Format> Session<F> {
                 }
             };
 
+            // Where this is, taken before the call rather than inside the error: `line!()`
+            // evaluates to the line it is written on, and written in the struct literal below
+            // it would point at the literal instead of at the call that failed.
+            let site = line!() as usize + 1;
             let request = F::request(&self.controller, pixels).map_err(|source| Error::Stage {
                 source,
                 surface,
-                site: shared_utils::report::line_span(SESSION_SOURCE, line!() as usize),
+                site: shared_utils::report::line_span(SESSION_SOURCE, site),
                 source_code: miette::NamedSource::new("crates/tui/src/session.rs", SESSION_SOURCE),
             })?;
             // One command, not two. Transmitting and placing separately leaves the image on
