@@ -5476,6 +5476,7 @@ dependencies = [
  "futures-retry",
  "futures-util",
  "image",
+ "insta",
  "log",
  "miette",
  "rustix",

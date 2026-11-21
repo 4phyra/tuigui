@@ -1,0 +1,13 @@
+---
+source: crates/tui/src/../tests/unit/error.rs
+expression: "format!(\"{:?}\", miette::Report::new(error))"
+---
+  [31m×[0m staging a frame for the terminal
+[31m  ╰─▶ [0mshared memory: creating /dev/shm/easytgp1-0: Too many open files
+     ╭─[[36;1;4mcrates/tui/src/session.rs:515:1[0m]
+ [2m514[0m │             let site = line!() as usize + 1;
+ [2m515[0m │             let request = F::request(&self.controller, pixels).map_err(|source| Error::Stage {
+     · [35;1m───────────────────────────────────────────────┬──────────────────────────────────────────────[0m
+     ·                                                [35;1m╰── [35;1mcould not stage the frame for SurfaceId { symbol: '❋', fg: (1, 2, 3), bg: (4, 5, 6) }[0m[0m
+ [2m516[0m │                 source,
+     ╰────

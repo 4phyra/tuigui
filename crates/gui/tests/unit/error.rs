@@ -1,11 +1,11 @@
 use super::*;
 
-/// A failure keeps the error it came from under it.
+/// A failure keeps the error it came from under it, two links deep.
 ///
-/// `#[error(transparent)]` forwards `Display` *and* `source` to the inner error, so there is
-/// nothing above the leaf: a report drawn from it is one line with no arrow and no context. The
-/// variant names itself and keeps the [`std::io::Error`] as its source instead, which is what
-/// gives a reader "the session failed" and then what it failed on.
+/// The chain is now `Error` → `InternalError` → the stream's own error, because the wrapper is
+/// what carries the location and the kind is what carries the cause. A reader gets "the session
+/// failed" at the line, then which kind, then what the stream said — and a test that only looked
+/// one hop down would miss the leaf that actually explains it.
 #[test]
 fn the_failure_keeps_its_cause() {
     let error = Error::from(std::io::Error::new(
@@ -13,12 +13,9 @@ fn the_failure_keeps_its_cause() {
         "the program is not there",
     ));
 
-    assert_eq!(error.to_string(), "the session failed");
-    assert_eq!(
-        std::error::Error::source(&error)
-            .map(ToString::to_string)
-            .as_deref(),
-        Some("the program is not there"),
-        "the error it came from is its source, so a report has a chain to draw"
-    );
+    let kind = std::error::Error::source(&error).expect("the kind is the source");
+    assert_eq!(kind.to_string(), "the session failed");
+
+    let leaf = kind.source().expect("the stream's error is under the kind");
+    assert_eq!(leaf.to_string(), "the program is not there");
 }

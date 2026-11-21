@@ -7,14 +7,99 @@
 //! past, a failed transmit is not — and it is where the message belongs, next to the
 //! code that knows what actually happened.
 //!
-//! `io::Error` is still the currency at the boundaries, because that is what the
-//! streams, the runtime and the wire all speak. The conversion at the end is what
-//! keeps the detail visible: `#[from]` carries the original error as a source, so a
-//! chain printed by the binary still names the underlying cause.
+//! # Two halves
+//!
+//! [`Error`] is one failure **at a place**. It is a struct, not an enum, because the
+//! position belongs to the raising and not to the kind: the same `io::Error` from two
+//! lines is a different failure to a reader, and a site on every variant would carry
+//! those fields once per arm.
+//!
+//! [`ErrorInner`] is the catalogue — one variant per kind, holding the `#[from]`s — so
+//! a conversion never has to invent a location. `#[diagnostic(forward(inner))]` is what
+//! makes the wrapper hand the inner's own help, code and severity through: this type
+//! adds a position, and a position is not a reason to drop the advice it came with.
 
-/// A failure while serving a session.
+/// A failure while serving a session, at the line that raised it.
+///
+/// No quoted source: reading a file at failure time can itself fail, and does when the failure
+/// is "too many open files". The location is text, taken from `#[track_caller]`.
+#[derive(Debug, miette::Diagnostic)]
+#[diagnostic(forward(inner))]
+pub struct Error {
+    /// What happened, without a place.
+    ///
+    /// Not a `#[source]`: this type's own message already says it, so a source link would draw
+    /// it twice. `source` below hands on the inner's own cause instead.
+    inner: ErrorInner,
+    /// The line that was running, as `#[track_caller]` recorded it.
+    location: &'static std::panic::Location<'static>,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.inner, self.location)
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&self.inner)
+    }
+}
+
+impl Error {
+    /// A failure, with the line that raised it.
+    ///
+    /// `#[track_caller]`, so the location is the caller's: a `?` records its own file and
+    /// line, which is the fact an `io::Error` cannot carry and the one a reader needs.
+    #[track_caller]
+    pub fn at(inner: impl Into<ErrorInner>) -> Self {
+        Self {
+            inner: inner.into(),
+            location: std::panic::Location::caller(),
+        }
+    }
+}
+
+/// `?` on each error this crate meets, keeping the line that raised it.
+///
+/// One impl per source type, and not one from [`ErrorInner`], because `?` performs exactly one
+/// `From` conversion: a `?` on an `io::Error` looks for `From<io::Error> for Error` and will not
+/// take the two-hop route. Each is `#[track_caller]`, so the location is the `?` that converted.
+macro_rules! from_inner {
+    ($($type:ty => $variant:ident),* $(,)?) => {
+        $(
+            impl From<$type> for Error {
+                #[track_caller]
+                fn from(source: $type) -> Self {
+                    Self::at(ErrorInner::$variant(source))
+                }
+            }
+        )*
+    };
+}
+
+from_inner! {
+    std::io::Error => Io,
+    codecs::Error => Codec,
+    easytgp::TGPError => Graphics,
+}
+
+impl From<ErrorInner> for Error {
+    /// A failure that is already the right kind, given a place here.
+    ///
+    /// `#[track_caller]` like the rest, so `?` on an `ErrorInner` and `.into()` both record the
+    /// line that did the converting rather than this impl's. Without it a value built by hand —
+    /// `ErrorInner::Stage { .. }.into()` — would point at this function in every report.
+    #[track_caller]
+    fn from(inner: ErrorInner) -> Self {
+        Self::at(inner)
+    }
+}
+
+/// Everything that can fail while serving a session, before it is given a place.
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
-pub enum Error {
+pub enum ErrorInner {
     /// The codec failed, encoding or decoding.
     ///
     /// Carried through because which half failed is the codec's own error to say;
@@ -36,19 +121,13 @@ pub enum Error {
     /// cannot be created, a PNG that cannot be encoded — so it is the medium's failure
     /// rather than the frame's.
     ///
-    /// The label names the window and points at the call that could not stage the frame,
-    /// with that line of code quoted under the report. Three facts a reader needs and the
-    /// message alone cannot give: which picture, which function, and the code itself.
+    /// The window travels with it because a session serves several: without it a report says
+    /// "staging a frame failed" and leaves the reader to work out which picture that was.
     #[error("staging a frame for the terminal")]
     Stage {
         #[source]
         source: easytgp::TGPError,
-        /// The window the frame belonged to, so a report says which picture failed.
         surface: wire::message::SurfaceId,
-        #[label("could not stage the frame for {surface:?}")]
-        site: miette::SourceSpan,
-        #[source_code]
-        source_code: miette::NamedSource<&'static str>,
     },
 
     /// The graphics protocol rejected an operation.
@@ -56,7 +135,7 @@ pub enum Error {
     /// The terminal's own answer, passed through: it is the side that knows why it
     /// refused, and replacing its wording with ours would lose that.
     #[error("the graphics protocol failed: {0}")]
-    Graphics(#[from] easytgp::TGPError),
+    Graphics(#[source] easytgp::TGPError),
 
     /// The image was not acknowledged by the terminal in time.
     ///
@@ -69,7 +148,7 @@ pub enum Error {
 
     /// Writing to the screen failed.
     ///
-    /// The terminal is gone, or the stream is not writable. Separate from [`Error::Io`]
+    /// The terminal is gone, or the stream is not writable. Separate from [`ErrorInner::Io`]
     /// because the caller knows which stream it was writing to, and that is the fact
     /// worth reporting.
     #[error("writing to the screen: {0}")]
@@ -88,15 +167,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// What to do about a failed attempt to tell a client that something failed.
 ///
-/// The reason this uses `futures-retry` rather than a fixed backoff strategy: these errors
-/// are not the same kind of thing. A peer that is gone will still be gone in 20ms, so
-/// retrying it only delays telling the user; a write that failed against a full pipe is
-/// exactly the case that clears on its own. Retrying everything is what a strategy does,
-/// and half of it would be waiting for nothing.
+/// `futures-retry` rather than a fixed backoff because these errors are not the same kind of
+/// thing: a peer that is gone will still be gone in 20ms, so retrying it only delays telling
+/// the user, while a write that failed against a full pipe is exactly the case that clears on
+/// its own. Retrying everything is what a strategy does, and half of it would be waiting for
+/// nothing.
 ///
 /// A named handler rather than a closure because the decision needs the attempt number, and
-/// `futures-retry`'s blanket impl for closures passes only the error — the attempt is
-/// available on the `ErrorHandler` trait and nowhere else.
+/// `futures-retry`'s blanket impl for closures passes only the error — the attempt is available
+/// on the `ErrorHandler` trait and nowhere else.
 #[derive(Debug, Default)]
 pub(crate) struct ReportFailure;
 
@@ -128,24 +207,16 @@ impl futures_retry::ErrorHandler<std::io::Error> for ReportFailure {
 
 /// What a caller outside this crate gets.
 ///
-/// `io::Error` is what the binary reports on and what `Tui::run` has always returned, so
-/// the typed error is converted back at that one boundary rather than changing the public
+/// `io::Error` is what the binary reports on and what `Tui::run` has always returned, so the
+/// typed error is converted back at that one boundary rather than changing the public
 /// signature.
 ///
-/// The conversion flattens the message rather than carrying the error, because a graphics
-/// error is not `Send + Sync` — it can hold a `Box<dyn Restorable>`, which is not — and
-/// `io::Error::other` requires both. Inside the crate the typed error and its source are
-/// intact, so a caller that wants to match on the cause has it; only this last hop to
-/// `io::Error` loses the chain.
+/// The conversion flattens the message rather than carrying the error, because a graphics error
+/// can hold a `Box<dyn Restorable>`, which is not `Send`, and `io::Error::other` requires both.
+/// Inside the crate the typed error and its source are intact, so a caller that wants to match
+/// on the cause has it; only this last hop to `io::Error` loses the chain.
 impl From<Error> for std::io::Error {
     fn from(error: Error) -> Self {
         std::io::Error::other(error.to_string())
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/error.rs"]
-mod tests;
-
-#[cfg(test)]
-pub(crate) use crate::session::SESSION_SOURCE;

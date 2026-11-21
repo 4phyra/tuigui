@@ -67,6 +67,11 @@ tracing-subscriber = { workspace = true, optional = true }
 default = []
 tracy = ["dep:tracing-tracy", "dep:tracing-subscriber"]
 
+[dev-dependencies]
+# The drawn report is a snapshot: what is reviewed is its shape — the arrow, the label's
+# hang, the colours — which no assertion about its text can hold still.
+insta = "1"
+
 [[bin]]
 name = "tui"
 path = "src/bin/tui.rs"

@@ -18,7 +18,6 @@ pub use crate::session::Session;
 pub use dock::HEIGHT as DOCK_HEIGHT;
 pub use stage::{Page, Stage, StageProps, RING_BUF_CAPACITY};
 
-use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
@@ -38,9 +37,9 @@ pub struct MainWidget {
     /// What is being drawn: the screen, the dock, and the windows behind them.
     session: Session,
     /// The logs screen: three rows at the cursor, and the terminal's own history above them.
-    primary: Terminal<CrosstermBackend<std::io::Stdout>>,
+    primary: Terminal<crate::tracking::Tracking>,
     /// The stream: the alternate screen, with the program's window on it.
-    secondary: Terminal<CrosstermBackend<std::io::Stdout>>,
+    secondary: Terminal<crate::tracking::Tracking>,
     /// Whether the previous frame was drawn on the alternate screen.
     ///
     /// Kept because entering and leaving are transitions of the terminal device rather than of a
@@ -79,12 +78,12 @@ impl MainWidget {
         Ok(Self {
             session,
             primary: Terminal::with_options(
-                CrosstermBackend::new(std::io::stdout()),
+                crate::tracking::Tracking::new(ratatui::backend::CrosstermBackend::new(std::io::stdout()))?,
                 ratatui::TerminalOptions {
                     viewport: ratatui::Viewport::Inline(DOCK_HEIGHT),
                 },
             )?,
-            secondary: Terminal::new(CrosstermBackend::new(std::io::stdout()))?,
+            secondary: Terminal::new(crate::tracking::Tracking::new(ratatui::backend::CrosstermBackend::new(std::io::stdout()))?)?,
             was_alternate: false,
             area: Rect::ZERO,
             last: std::time::Instant::now(),
@@ -217,24 +216,31 @@ impl MainWidget {
             true => &mut self.secondary,
             false => &mut self.primary,
         };
-        terminal.draw(|frame| {
-            let area = frame.area();
-            frame.render_stateful_widget(
-                &mut self.session,
-                area,
-                &mut SessionProps {
-                    delta,
-                    program_stdout: &mut self.program_stdout,
-                },
-            );
-        })?;
+        // `draw` is where an inline viewport asks the terminal for its cursor, every frame:
+        // `Terminal::draw` calls `autoresize`, `autoresize` calls `resize` when the size moved,
+        // and `resize` measures the viewport with `compute_inline_size`, whose first act is
+        // `backend.get_cursor_position()`. That reply comes over stdin, where this process's own
+        // reader is waiting, so it is lost and the call fails after two seconds. The location is
+        // attached here because this is the call that asked.
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                frame.render_stateful_widget(
+                    &mut self.session,
+                    area,
+                    &mut SessionProps {
+                        delta,
+                        program_stdout: &mut self.program_stdout,
+                    },
+                );
+            })?;
         log::info!("render: the frame is drawn");
         // A draw that failed inside the widget could not say so: `render` returns nothing, so the
         // stage keeps the failure and this is where it becomes the caller's. Without this the
         // frame would report success for a pane that was half drawn, and the loop would keep
         // turning on a session that is already broken.
         if let Err(message) = &self.session.stage.0 {
-            return Err(crate::Error::Io(std::io::Error::other(message.clone())));
+            return Err(crate::error::InternalError::Stage(message.clone()))?;
         }
         self.area = match self.was_alternate {
             true => self.secondary.size()?.into(),
@@ -255,7 +261,7 @@ impl MainWidget {
     /// Above and not in the pane, because the pane the inline terminal draws is its visible rows
     /// and its own top row *is* the cursor row: a line written inside it would be painted over by
     /// the next frame, which is exactly the output a user wants to keep reading.
-    fn print_program_stdout(&mut self) -> std::io::Result<()> {
+    fn print_program_stdout(&mut self) -> std::result::Result<(), crate::Error> {
         if self.program_stdout.is_empty() {
             return Ok(());
         }
@@ -264,11 +270,18 @@ impl MainWidget {
         // what the program printed.
         let text = String::from_utf8_lossy(&self.program_stdout);
         let lines: Vec<&str> = text.lines().collect();
-        self.primary.insert_before(lines.len() as u16, |buf| {
-            for (row, line) in lines.iter().enumerate() {
-                buf.set_string(0, row as u16, line, ratatui::style::Style::new());
-            }
-        })?;
+        // The call that asks the terminal where the cursor is, and therefore the call whose
+        // failure a reader most needs located: `insert_before` keeps an inline viewport in
+        // place by reading the cursor, and the answer comes over stdin where this process's own
+        // reader is waiting. `at` puts this line in the report instead of leaving the terminal's
+        // sentence to speak for itself.
+        self.primary
+            .insert_before(lines.len() as u16, |buf| {
+                for (row, line) in lines.iter().enumerate() {
+                    buf.set_string(0, row as u16, line, ratatui::style::Style::new());
+                }
+            })
+            ?;
         // Emptied, not freed: a program that prints every frame allocates this buffer once for the
         // whole run rather than once per frame.
         self.program_stdout.clear();

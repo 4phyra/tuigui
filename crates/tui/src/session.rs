@@ -21,16 +21,9 @@ use easytgp::{Controller, DynImage, Format, ImageRequest, PlacementRequest};
 use wire::message::{Message, SurfaceId};
 use wire::transport::Connection;
 
-use crate::error::{Error, Result};
+use crate::error::{ErrorInner, Result};
 use crate::proxy::Position;
 use crate::DebugOptions;
-
-/// This file, compiled in, so a label can quote the line it points at.
-///
-/// miette renders a snippet from whatever `SourceCode` the error carries; it does not read
-/// files. Compiling the text in is what makes the quoted line the line that failed rather
-/// than whatever is on disk when the report is printed.
-pub(crate) const SESSION_SOURCE: &str = include_str!("session.rs");
 
 /// The image id a window's frames are sent under.
 ///
@@ -167,7 +160,7 @@ impl<F: Format> Picture<F> {
         };
         tokio::time::timeout(TRANSMIT_TIMEOUT, image.sync())
             .await
-            .map_err(|_| Error::TransmitTimeout(TRANSMIT_TIMEOUT))??;
+            .map_err(|_| ErrorInner::TransmitTimeout(TRANSMIT_TIMEOUT))??;
         *self = Picture::Shown(image);
         Ok(())
     }
@@ -257,7 +250,9 @@ impl<F: Format> Session<F> {
                 // and a failure it is not told about is a pane that stops changing for no stated
                 // reason. Retried because this is the last thing the peer is ever told — a report
                 // that is itself lost leaves that same silent pane.
-                let report = Message::Error(shared_utils::report::drawn(miette::Report::new(e)));
+                let report = Message::Error(shared_utils::report::drawn(
+                    miette::Report::new(e).wrap_err("the tui server failed:"),
+                ));
                 futures_retry::FutureRetry::new(
                     || self.connection.send(&report),
                     crate::error::ReportFailure,
@@ -484,12 +479,11 @@ impl<F: Format> Session<F> {
             } else {
                 match state.decoder.decode(data) {
                     Ok(Some(frame)) => {
-                        image::RgbImage::from_raw(frame.width, frame.height, frame.rgb).ok_or(
-                            Error::FrameSize {
+                        image::RgbImage::from_raw(frame.width, frame.height, frame.rgb).
+                            ok_or(ErrorInner::FrameSize {
                                 width: frame.width,
                                 height: frame.height,
-                            },
-                        )?
+                            })?
                     }
                     // Headers, or a frame the codec held back: nothing to show yet,
                     // and nothing to ask for — the next frame the client sends is what
@@ -508,16 +502,8 @@ impl<F: Format> Session<F> {
                 }
             };
 
-            // Where this is, taken before the call rather than inside the error: `line!()`
-            // evaluates to the line it is written on, and written in the struct literal below
-            // it would point at the literal instead of at the call that failed.
-            let site = line!() as usize + 1;
-            let request = F::request(&self.controller, pixels).map_err(|source| Error::Stage {
-                source,
-                surface,
-                site: shared_utils::report::line_span(SESSION_SOURCE, site),
-                source_code: miette::NamedSource::new("crates/tui/src/session.rs", SESSION_SOURCE),
-            })?;
+            let request = F::request(&self.controller, pixels)
+                .map_err(|source| ErrorInner::Stage { source, surface })?;
             // One command, not two. Transmitting and placing separately leaves the image on
             // screen with nothing drawing it in between — the terminal frees an image's
             // placements when its data is replaced — and that gap is a round trip wide, which is
@@ -529,15 +515,15 @@ impl<F: Format> Session<F> {
             let mut image =
                 tokio::time::timeout(TRANSMIT_TIMEOUT, request.transplace(image_id, placement))
                     .await
-                    .map_err(|_| Error::TransmitTimeout(TRANSMIT_TIMEOUT))?
-                    .map_err(Error::Graphics)?;
+                    .map_err(|_| ErrorInner::TransmitTimeout(TRANSMIT_TIMEOUT))?
+                    .map_err(ErrorInner::Graphics)?;
 
             // Waited on: until the placement lands nothing is on screen, so a frame that was
             // not placed is a frame the user never sees. Timed like the transmit above, and for
             // the same reason.
             tokio::time::timeout(TRANSMIT_TIMEOUT, image.sync())
                 .await
-                .map_err(|_| Error::TransmitTimeout(TRANSMIT_TIMEOUT))??;
+                .map_err(|_| ErrorInner::TransmitTimeout(TRANSMIT_TIMEOUT))??;
             // `sync` returns nothing; the image is what is stored, and it is still held here.
             state.picture = Picture::Shown(image);
         } else {
