@@ -6,6 +6,19 @@ They override convenience and habit. Follow them exactly.
 The coding style these rules assume is in [STYLE.md](STYLE.md) — read it first;
 it is the contract the code is written against.
 
+## Response length (hard rule) — this rule first
+
+- Short and super precise. Long answers are not acceptable.
+- Deliver the *understandable part* compactly. Do not lose important meaning
+  to brevity, but do not pad to fill space either.
+- Before sending: read the draft, filter it, and read it again. Strip anything
+  that is not load-bearing: restated questions, preambles, postambles,
+  checklists of options nobody asked for, and hedge paragraphs.
+- Aim for the fewest words that still carry the full meaning. Prose is the
+  default; tables and bullets only when they are genuinely shorter.
+- Never answer a short question with a long essay. If the answer is one
+  sentence, send one sentence.
+
 ## Builds (the user gets very annoyed at needless rebuilds)
 
 A full rebuild of `ring` / `rustls` / the TLS stack costs minutes. Avoid it.
@@ -103,6 +116,26 @@ A full rebuild of `ring` / `rustls` / the TLS stack costs minutes. Avoid it.
   `assert_snapshot!("name", screen.with_styles())`, never `assert_snapshot!(
   "name", screen)`.
 
+## Tests fail by assertion, not by timeout
+
+A test that only fails by timing out is a broken test, and a timeout is the
+last resort, never the mechanism. A timeout that produces the verdict hides
+whether the code is wrong, the machine is slow, or the premise never happened —
+and a timeout that lets the test *pass* is worse still, because it turns a
+suite green over a live bug.
+
+- A test passes only when its assertion observed the thing it is about. Wait
+  on the condition that proves the world got there (bytes arrived, a frame
+  rendered, a descriptor count moved) — with a deadline, and with the deadline
+  expiring into an explicit failure that says what was awaited and how long.
+- Never `sleep` and then assert. If the system under test cannot produce an
+  observable signal, the observability is the bug — fix that, do not stretch
+  the sleep.
+- Sleeping or waiting is only for pacing between probes, never as the thing
+  that decides the outcome.
+- When a failure needs a screen or a count as evidence, gather it in the
+  failure path and print it; silence is not a diagnosis.
+
 ## Debug switches: pass the whole struct, never a bool
 
 A `--dbg-` switch reaches the code it controls as the **whole
@@ -141,16 +174,3 @@ neither: what it needs arrives as parameters and is gone when it returns.
   stacking order, a drag in flight, an encoder's stream history — belongs on a
   struct. The rule is about new state that exists only because a parameter felt
   awkward.
-
-## Response length (hard rule)
-
-- Long answers are not acceptable. This agent cannot answer at length.
-- Deliver the *understandable part* compactly. Do not lose important meaning
-  to brevity, but do not pad to fill space either.
-- Before sending: read the draft, filter it, and read it again. Strip anything
-  that is not load-bearing: restated questions, preambles, postambles,
-  checklists of options nobody asked for, and hedge paragraphs.
-- Aim for the fewest words that still carry the full meaning. Prose is the
-  default; tables and bullets only when they are genuinely shorter.
-- Never answer a short question with a long essay. If the answer is one
-  sentence, send one sentence.
