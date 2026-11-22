@@ -147,7 +147,7 @@ impl WaylandServer {
     /// Start the session.
     ///
     /// The wait for the window the program draws is the caller's, taken from the session's own
-    /// channel by [`Self::recv_root`]: only a turn notices a client has committed, so the news can
+    /// channel by [`Self::take_root`]: only a turn notices a client has committed, so the news can
     /// only come from the session, and the wait can only live where it is awaited.
     pub fn new(
         options: wayland::Options,
@@ -189,10 +189,6 @@ impl WaylandServer {
 }
 
 impl WindowingServer for WaylandServer {
-    async fn recv_root(&mut self) -> std::io::Result<Box<dyn Compositable>> {
-        self.take_root()?.await
-    }
-
     fn spawn(&mut self, path: &std::path::Path) -> std::io::Result<Option<std::io::PipeReader>> {
         // The program's own words, kept until someone takes them: what a program says belongs to
         // whoever shows it, and this side only started it. Both of its streams arrive here, in
@@ -212,18 +208,6 @@ impl WindowingServer for WaylandServer {
 
     fn is_running(&self) -> bool {
         self.inner.is_running()
-    }
-
-    /// The session is resized: the output changes mode, and the root window is
-    /// measured against the new size on its next read.
-    ///
-    /// The caller states the size the pane is every frame, so this is where the
-    /// comparing is done: a session already that size changes nothing, which is
-    /// what keeps an untouched terminal from a configure per frame.
-    fn set_size(&mut self, size: (u32, u32)) {
-        if self.inner.size() != size {
-            self.inner.set_size(size);
-        }
     }
 }
 

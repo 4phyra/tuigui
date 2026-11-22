@@ -1,5 +1,4 @@
 use super::*;
-use ringbuf::traits::{Producer as _, Split as _};
 
 /// A stage with a window up and words waiting to be printed.
 ///

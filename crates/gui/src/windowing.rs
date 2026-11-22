@@ -30,13 +30,6 @@ pub mod event_map;
 /// program drew. The holder works through this trait, so a backend with no real program behind it —
 /// a dummy one that only draws — is as good a session as a wayland one.
 pub trait WindowingServer {
-    /// The window the program drew, waited for once.
-    ///
-    /// A wait rather than a lookup, because a program has to connect and commit before it has a
-    /// window at all. The session only moves when it is stepped, so a backend that is asked is a
-    /// backend that steps itself until there is something to answer with.
-    async fn recv_root(&mut self) -> std::io::Result<Box<dyn Compositable>>;
-
     /// Start the session's program, and hand back what it says.
     ///
     /// A session whose program is not its own to start — a dummy's, or one attached to a session
@@ -62,9 +55,6 @@ pub trait WindowingServer {
     fn is_running(&self) -> bool {
         true
     }
-
-    /// Resize the session: the size every window is measured against.
-    fn set_size(&mut self, size: (u32, u32));
 }
 
 /// One admitted window: what it draws, where it sits, and what may be pushed into it.
@@ -165,9 +155,3 @@ pub trait Compositable: Send + Sync {
     fn terminate(&self) -> std::io::Result<()>;
 }
 
-/// How long one message is given to leave this side.
-///
-/// A message is a write to another process, which may be busy with the one before it. Bounded so a
-/// link that stopped draining is reported rather than waited on: without it the frame stalls with
-/// the message in hand and says nothing, which reads as a frozen pane.
-pub const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);

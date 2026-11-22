@@ -16,7 +16,7 @@ pub(crate) mod stage;
 
 pub use crate::session::Session;
 pub use dock::HEIGHT as DOCK_HEIGHT;
-pub use stage::{Page, Stage, StageProps, RING_BUF_CAPACITY};
+pub use stage::{Page, Stage, RING_BUF_CAPACITY};
 
 use ratatui::layout::Rect;
 use ratatui::Terminal;
