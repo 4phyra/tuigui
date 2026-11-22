@@ -122,8 +122,9 @@ stays simple.
 ## Frame source integration
 
 `crates/gui/src/compositor.rs` is that integration: it starts the compositor,
-spawns the program, captures on a thread, encodes each changed frame as JPEG and
-hands it to the link, and routes this client's keyboard into `Client::type_key`.
+spawns the program, captures on a thread, encodes each changed frame as H.264
+(the hardware codec; JPEG with `--jpeg`) and hands it to the link, and routes
+this client's keyboard into `Client::type_key`.
 It is chosen by the runnable's extension, not by a flag: `.mp4` is a clip, anything
 else is a program.
 

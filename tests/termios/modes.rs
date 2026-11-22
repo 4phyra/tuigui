@@ -40,7 +40,7 @@ pub fn run(name: &str, runnable: &Path) -> termlens::Result<Report> {
     let runnable = word(runnable);
     let script = format!(
         "before=$(stty -g)\n\
-         {tuigui} {runnable}\n\
+         {tuigui} --jpeg {runnable}\n\
          code=$?\n\
          after=$(stty -g)\n\
          printf 'MODE-BEFORE %s\\nMODE-AFTER %s\\nTUIGUI-EXIT %s\\n' \

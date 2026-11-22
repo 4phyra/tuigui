@@ -151,7 +151,8 @@ and has no DCT in it.
 - `gui`: argument handling, binding and announcing, answering the greeting, and
   the terminal surface it draws on
 - the frame path: `gui` decodes a clip with ffmpeg (or captures a program run in
-  `crates/compositor`), JPEG-encodes it, and `tui` transmits and places it as one
+  `crates/compositor`), H.264-encodes it on the hardware codec (`--jpeg` for
+  JPEG), and `tui` transmits and places it as one
   TGP image that the client's placeholder cells resolve against
 - `compositor`: an in-process headless Wayland session, one window, capture and
   input injection. shm clients only; a dma-buf client captures black

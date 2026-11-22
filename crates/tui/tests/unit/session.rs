@@ -62,7 +62,7 @@ impl Write for Terminal {
 /// Encoded through the codec itself rather than anything simpler: a test that
 /// feeds the decoder bytes another codec produced would pass by accident.
 fn codec_frame(width: u32, height: u32) -> Vec<u8> {
-    let mut encoder = codecs::h264::Encoder::new(width, height).expect("an encoder");
+    let mut encoder = codecs::jpeg::Encoder::new().expect("an encoder");
     let bgra = vec![20u8, 20, 20, 255].repeat((width * height) as usize);
     let stream = codecs::Encoder::encode(&mut encoder, &bgra, width, height, false)
         .expect("encode a frame");
@@ -160,7 +160,7 @@ async fn every_frame_reuses_one_id_and_places_itself_again() {
         .handle_inner(
             Message::OpenWindow {
                 surface: SURFACE,
-                codec: CodecId::H264,
+                codec: CodecId::Jpeg,
             },
             &where_it_is(),
         )
@@ -289,7 +289,7 @@ async fn a_frame_with_no_new_pixels_sends_its_picture_again() {
         .handle_inner(
             Message::OpenWindow {
                 surface: SURFACE,
-                codec: CodecId::H264,
+                codec: CodecId::Jpeg,
             },
             &where_it_is(),
         )
@@ -380,7 +380,7 @@ async fn a_frame_keeps_its_picture_and_a_closed_window_removes_it() {
         .handle_inner(
             Message::OpenWindow {
                 surface: SURFACE,
-                codec: CodecId::H264,
+                codec: CodecId::Jpeg,
             },
             &where_it_is(),
         )

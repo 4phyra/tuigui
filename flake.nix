@@ -90,7 +90,13 @@
             nativeBuildInputs = with pkgs; [
               pkg-config
               wayland-scanner
+              # bindgen (ffmpeg-sys-next) dlopens libclang at build time
+              libclang
             ];
+            # bindgen needs to be told where libclang lives and where the C
+            # library headers are; neither is in a system search path on NixOS.
+            LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+            BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${pkgs.glibc.dev}/include";
             buildInputs = with pkgs; [
               wayland
               wayland-protocols
@@ -105,9 +111,14 @@
               # has the SIMD kernels, so it is linked via pkg-config rather than
               # compiled from source: no cmake or nasm needed.
               libjpeg_turbo
-              # decoder backend for the renderer: ffmpeg-sidecar spawns the
-              # ffmpeg CLI, so it must be on PATH at build/run time
-              ffmpeg
+              # The FFmpeg linked into the client and server: static libraries,
+              # built without the software H.264 encoder.
+              (import ./ffmpeg.nix pkgs)
+              # ...and the CLI on PATH, because `ffmpeg-sidecar` spawns it to
+              # decode the `--video` clip; that is a separate process's codec,
+              # not ours. Its `.bin` output keeps its shared libraries' pkg-config
+              # out of this build.
+              pkgs.ffmpeg.bin
             ];
 
             meta = with pkgs.lib; {
@@ -296,6 +307,11 @@
         in
         {
           default = pkgs.mkShell {
+            # bindgen (ffmpeg-sys-next) dlopens libclang at build time and must
+            # be told where the C library headers are; neither is in a system
+            # search path on NixOS.
+            LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+            BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${pkgs.glibc.dev}/include";
             shellHook = ''
               export CAPY_VID_PATH="${capy}/capybara.mp4"
               export CAPYBARA_IMG_DIR="${capys}/train"
@@ -355,8 +371,14 @@
               # dma-buf, which the compositor's shm-only capture cannot read, so
               # they capture black; the shm clients and `foot` do not.
               pkgs.weston
-              # video decode for the `--video` streaming path (bypasses wayland)
-              pkgs.ffmpeg
+              # The FFmpeg the codec links: static libraries without the software
+              # H.264 encoder. Also gives the dev shell the headers and .pc files
+              # that `ffmpeg-next` builds against.
+              (import ./ffmpeg.nix pkgs)
+              # The CLI for the `--video` path: `ffmpeg-sidecar` spawns it, so it
+              # is a separate process's decoder. Its `.bin` output keeps the
+              # shared build's pkg-config from shadowing the static one.
+              pkgs.ffmpeg.bin
               # X11 side: xeyes + glxgears, plus a virtual X server and input
               # driver for the Xvfb capture path
               pkgs.xeyes

@@ -11,9 +11,16 @@
 //! crosses the wire is whatever [`Encoder`] produced, and a decoder that
 //! cannot follow it is rebuilt from a fresh keyframe rather than from its
 //! own history.
+//!
+//! H.264 here is hardware-only: it runs on the silicon vendor's codec through
+//! the OS and driver (VAAPI, NVENC/CUVID, V4L2 M2M, VideoToolbox), and there is
+//! no software H.264 compiled in, linked in, or called — tests included. A
+//! machine with no hardware H.264 path fails loudly and names `--jpeg`;
+//! JPEG is the hardware-free codec, and the escape hatch.
 
 pub mod h264;
 pub mod jpeg;
+mod hw;
 
 /// The codec a session streams with, named so both halves can agree.
 ///
@@ -82,7 +89,7 @@ impl CodecId {
     /// report back as an [`wire::message::Message::Error`] rather than a guess.
     pub fn to_decoder(self) -> Result<Box<dyn Decoder>, Error> {
         match self {
-            Self::H264 => Ok(Box::new(h264::Decoder::new())),
+            Self::H264 => Ok(Box::new(h264::Decoder::new()?)),
             Self::Jpeg => Ok(Box::new(jpeg::Decoder::new()?)),
         }
     }
@@ -179,6 +186,21 @@ pub enum Error {
     /// A codec this build does not carry was asked for.
     #[error("the {0:?} codec is not implemented")]
     Unsupported(CodecId),
+
+    /// No hardware H.264 path for one half of the pair.
+    ///
+    /// This is the designed failure on a machine without a hardware codec,
+    /// not a bug: the error says which direction failed, what was tried, why
+    /// the last candidate refused, and the escape hatch.
+    #[error(
+        "no hardware H.264 {direction} available (tried {tried}): {reason}; \
+         pass --jpeg to stream JPEG instead"
+    )]
+    HardwareUnavailable {
+        direction: &'static str,
+        tried: String,
+        reason: String,
+    },
 
     /// A pixel conversion between the capture's colors and the codec's failed.
     #[error("converting pixels: {0}")]

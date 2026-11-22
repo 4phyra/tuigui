@@ -6,11 +6,15 @@ license.workspace = true
 description = "The codec pair a session streams with, behind traits a codec can be swapped behind"
 
 [dependencies]
-# A ground-up pure-Rust H.264 encoder and decoder: SIMD by default, no C, no
-# GPU, no driver, so a session works on any machine that can run the binary.
-# Both halves of the codec live in this one dependency, which is also how the
-# two halves of a session agree on the codec: by sharing it.
-rusty_h264 = "0.16"
+# Hardware H.264 only, through the system's FFmpeg (linked statically from the
+# dev shell / tuiguiBin build): the driver underneath — VAAPI, NVENC/CUVID,
+# V4L2 M2M, VideoToolbox — is what does the codec work, and there is no
+# software fallback anywhere, tests included. `static` links FFmpeg's archives
+# into our binary, so libav* is not a run-time dependency; `format` is enabled
+# because ffmpeg-next's codec half does not build without it (its packet type
+# names the avformat contexts); nothing here opens a container. No swscale, no
+# resampler.
+ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "static"] }
 # The JPEG pair: libjpeg-turbo, SIMD, linked via pkg-config against the dev
 # shell's library. Chosen because it was the codec the project streamed with
 # before H.264, and because a JPEG frame is a complete picture, which makes it

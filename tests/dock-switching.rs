@@ -223,6 +223,9 @@ fn switching_screens_never_ends_the_session() -> termlens::Result<()> {
         .cell_size(8, 16)
         .env("XDG_RUNTIME_DIR", &runtime)
         .timeout(Duration::from_secs(60))
+        // The session's plumbing, not the codec: JPEG keeps this test on every
+        // machine, hardware H.264 or not.
+        .arg("--jpeg")
         .arg(&runnable)
         .spawn(env!("CARGO_BIN_EXE_tuigui"))?;
 
@@ -344,6 +347,9 @@ fn returning_to_the_stream_places_the_window_again() -> termlens::Result<()> {
         .cell_size(8, 16)
         .env("XDG_RUNTIME_DIR", &runtime)
         .timeout(Duration::from_secs(60))
+        // The session's plumbing, not the codec: JPEG keeps this test on every
+        // machine, hardware H.264 or not.
+        .arg("--jpeg")
         .arg(&runnable)
         .spawn(env!("CARGO_BIN_EXE_tuigui"))?;
 
