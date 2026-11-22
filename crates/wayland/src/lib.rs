@@ -336,6 +336,17 @@ impl WaylandServer {
         ] {
             command.env_remove(name);
         }
+        // Every switch a toolkit reads to draw its own chrome off: the session answers
+        // `server_side` over xdg-decoration, and a client that cannot be told draws
+        // nothing either, which is the outcome this session wants. GTK reads GTK_CSD even
+        // where it ignores the decoration configure; Qt drops its decoration object
+        // entirely on the second; SDL/libdecor loses the library it would fall back to
+        // client-side drawing with, and negotiates xdg-decoration natively instead.
+        // Chromium, Electron and Firefox read none of these; they follow the protocol.
+        command
+            .env("GTK_CSD", "0")
+            .env("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1")
+            .env("SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR", "0");
         command
     }
 
