@@ -44,6 +44,9 @@ png = "0.18"
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64-turbo = "0.5"
 itertools = "0.15"
+# The upload-rate readout on the dock: a byte count as a word ("340 KiB/s") instead of a
+# number plus a unit the format string made up. No features of its own, no dependencies.
+humansize = "2"
 idalloc = "0.1"
 static_init = "1.0"
 # Its default feature is the ffmpeg *downloader*, which drags in ureq ->

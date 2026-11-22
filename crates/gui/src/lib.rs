@@ -28,6 +28,7 @@ use widget::Session;
 pub mod client;
 mod error;
 mod session;
+mod stats;
 mod tracking;
 mod widget;
 mod windowing;

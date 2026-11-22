@@ -43,6 +43,8 @@ tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 # Where the program's output waits while its window is on screen: the thread
 # reading the pipe produces, the frame that prints consumes.
 ringbuf = { workspace = true }
+# Byte counts as words ("340 KiB/s") for the upload-rate mark on the dock's border.
+humansize = { workspace = true }
 # `Default` on a widget that names the type of its state without storing one: std's derive
 # would demand `T: Default` of the window session, which a `Box<dyn WindowingServer>` is not.
 better_default = { workspace = true }

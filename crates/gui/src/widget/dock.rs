@@ -175,12 +175,21 @@ impl<'a> StatefulWidget for &'a mut Dock {
 
         // The light, always: on the dock's own top border, because what it says — this pane is
         // waiting, paired, or streaming — is true in every state. Only the word beside it and the
-        // colour it breathes in change, so the mark itself never appears or disappears.
-        let (said, colour) = match self.state {
-            DockState::Pairing { .. } => ("pairing", (0xFF, 0x69, 0xB4)),
-            DockState::Streaming => ("streaming", (0xFF, 0x7F, 0x50)),
+        // colour it breathes in change, so the mark itself never appears or disappears. While
+        // the session streams, the mark also carries the rate the pane is putting on the wire,
+        // windowed to the last second.
+        let (said, colour, suffix) = match &self.state {
+            DockState::Pairing { .. } => ("pairing", (0xFF, 0x69, 0xB4), None),
+            DockState::Streaming => (
+                "streaming",
+                (0xFF, 0x7F, 0x50),
+                Some(format!(
+                    "{}/s ↑",
+                    humansize::format_size(crate::stats::bytes_per_sec(), humansize::BINARY)
+                )),
+            ),
         };
-        light(area, buf, said, colour);
+        light(area, buf, said, colour, suffix.as_deref());
     }
 }
 
@@ -307,13 +316,17 @@ fn render_waiting(
     }
 }
 
-/// The dot that says what this pane is doing, and the word for it.
+/// The dot that says what this pane is doing, the word for it, and — while the program runs —
+/// how fast its frames are going out.
 ///
 /// Drawn on the dock's top border, so it is the same place in every state: the mark is
 /// furniture, and only what it says changes. Its brightness comes from the clock alone — a
 /// sine with a two-second cycle, never fully dark and never at the full colour — because a
 /// stored brightness would need a caller to advance it, and every frame already redraws.
-fn light(area: Rect, buf: &mut Buffer, said: &str, rgb: (u8, u8, u8)) {
+///
+/// The border is drawn before this every frame, so the cells the mark overwrites are fresh
+/// each time: blanking only what this frame paints is enough, and no width is kept around.
+fn light(area: Rect, buf: &mut Buffer, said: &str, rgb: (u8, u8, u8), suffix: Option<&str>) {
     /// The dot that breathes.
     const DOT: char = '•';
 
@@ -335,11 +348,12 @@ fn light(area: Rect, buf: &mut Buffer, said: &str, rgb: (u8, u8, u8)) {
         (rgb.2 as f32 * level) as u8,
     );
 
-    // On the border, a cell in from the corner: the word is drawn after the border, so it
-    // lands in cells the border already put a line in, and they are blanked first.
+    // On the border, a cell in from the corner: dot, word, and — while streaming — the upload
+    // rate. One cell of clearance before the mark so the border does not touch it; the cells
+    // the mark itself covers are blanked so its glyphs sit on a clean background.
     let start = area.x + 2;
-    let to = start + said.len() as u16 + 2;
-    for x in start.saturating_sub(1)..=to {
+    let span = 1 + 2 + said.len() as u16 + suffix.map_or(0, |s| 2 + s.len() as u16);
+    for x in start.saturating_sub(1)..start.saturating_sub(1) + span {
         buf.set_string(x, area.y, " ", Style::new());
     }
     buf.set_string(start, area.y, DOT.to_string(), Style::new().fg(colour));
@@ -349,6 +363,14 @@ fn light(area: Rect, buf: &mut Buffer, said: &str, rgb: (u8, u8, u8)) {
         said,
         Style::new().fg(Color::Rgb(0x80, 0x80, 0x80)),
     );
+    if let Some(suffix) = suffix {
+        buf.set_string(
+            start + 2 + said.len() as u16 + 2,
+            area.y,
+            suffix,
+            Style::new().fg(Color::Rgb(0x80, 0x80, 0x80)),
+        );
+    }
 }
 
 /// The dock dialed: a coral bar at the start of the row, and the command after it.

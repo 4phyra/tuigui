@@ -298,6 +298,9 @@ impl Compositable for WaylandWindow {
             *sent = Some((rank, cells));
         }
 
+        // The payload's size is taken before the message is handed over, because the message
+        // takes ownership of the bytes: what goes on the wire is what counts as upload.
+        let payload = bytes.as_ref().map_or(0, |bytes| bytes.len() as u64);
         let message = Message::Frame {
             surface: self.surface,
             z: rank,
@@ -305,7 +308,9 @@ impl Compositable for WaylandWindow {
             rows: u32::from(cells.1),
             bytes,
         };
-        connection.send(&message).await
+        connection.send(&message).await?;
+        crate::stats::record(payload);
+        Ok(())
     }
 
     /// How big this window is, in pixels: what its program last committed, or the size it was
