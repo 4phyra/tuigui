@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
-use wire::message::{Message, SurfaceId};
+use wire::message::{Message, SurfaceId, FramePosition};
 use wire::transport::{Connection, Transport};
 
 /// A link that drains at `rate` bytes per second, with at most `burst` bytes of slack.
@@ -192,9 +192,11 @@ fn frame(index: u32, payload: usize) -> Message {
     bytes[..4].copy_from_slice(&index.to_le_bytes());
     Message::Frame {
         surface: surface(),
-        z: 0,
-        cols: 80,
-        rows: 24,
+        position: FramePosition {
+            z: 0,
+            cols: 80,
+            rows: 24,
+        },
         bytes: Some(bytes),
     }
 }
@@ -298,7 +300,11 @@ async fn two_producers_keep_their_own_order() {
         tokio::spawn(async move {
             for i in 0..24u32 {
                 let mut message = frame(i, 8 * 1024);
-                if let Message::Frame { z: ref mut slot, .. } = message {
+                if let Message::Frame {
+                    position: FramePosition { z: ref mut slot, .. },
+                    ..
+                } = message
+                {
                     *slot = z;
                 }
                 link.send(&message).await.expect("the link stays up");
@@ -325,9 +331,11 @@ async fn two_producers_keep_their_own_order() {
         let indices: Vec<u32> = got
             .iter()
             .filter_map(|message| match message {
-                Message::Frame { z: mine, bytes, .. } if *mine == z => {
-                    bytes.as_ref().map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                }
+                Message::Frame {
+                    position,
+                    bytes,
+                    ..
+                } if position.z == z => bytes.as_ref().map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])),
                 _ => None,
             })
             .collect();

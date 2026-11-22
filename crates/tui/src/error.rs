@@ -61,6 +61,15 @@ impl Error {
     }
 }
 
+impl From<tokio::time::error::Elapsed> for Error {
+    /// The only wait in this crate is the transmit's, so a timeout is that one: the
+    /// variant carries the duration that passed, which the bare `Elapsed` does not.
+    #[track_caller]
+    fn from(_: tokio::time::error::Elapsed) -> Self {
+        Self::at(ErrorInner::TransmitTimeout(crate::video_stream::TRANSMIT_TIMEOUT))
+    }
+}
+
 /// `?` on each error this crate meets, keeping the line that raised it.
 ///
 /// One impl per source type, and not one from [`ErrorInner`], because `?` performs exactly one

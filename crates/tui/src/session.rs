@@ -17,13 +17,19 @@ use std::io;
 use std::sync::Arc;
 
 use codecs::CodecId;
-use easytgp::{Controller, DynImage, Format, ImageRequest, PlacementRequest};
-use wire::message::{Message, SurfaceId};
+use easytgp::{Controller, Format, ImageRequest};
+use futures_retry::FutureRetry;
+use wire::message::{FramePosition, Message, SurfaceId};
 use wire::transport::Connection;
 
 use crate::error::{ErrorInner, Result};
-use crate::proxy::Position;
+use crate::proxy::{Anchors, Position};
+use crate::video_stream::VideoStream;
 use crate::DebugOptions;
+
+// The unit tests drive the session from the outside and need what it builds frames from.
+#[cfg(test)]
+pub(crate) use crate::video_stream::stacking;
 
 /// The image id a window's frames are sent under.
 ///
@@ -44,38 +50,12 @@ pub fn image_id(surface: &SurfaceId) -> u32 {
     (hasher.finish() % 9998) as u32 + 2
 }
 
-/// The z index a window's picture is drawn at.
+/// How often the windows are checked against the cells the scan found.
 ///
-/// Strictly below `INT32_MIN / 2`, which is the band `docs/kitty-graphics-protocol.rst` says is
-/// drawn under cells with non-default backgrounds as well as under the text. A window's box is
-/// full of non-default backgrounds — the client draws them to mark where the picture goes — so
-/// anything at or above that boundary would be covered by the very cells it is placed behind.
-///
-/// The order comes from the gui, which is the side with a window manager: it sends a rank per
-/// frame, `0` being furthest away and larger being closer to the user. That rank is shifted into
-/// the band, so the order is the gui's and only the position is this side's business.
-fn stacking(z: u32) -> i32 {
-    // The band is the whole lower half of the range, so a rank large enough to saturate is not one
-    // the gui can produce: the furthest it could go is the front of the band, which is where
-    // saturating puts it.
-    const FLOOR: i32 = i32::MIN;
-    const CEILING: i32 = i32::MIN / 2 - 1;
-    let rank = i32::try_from(z).unwrap_or(i32::MAX);
-    FLOOR.saturating_add(rank).min(CEILING)
-}
-
-///
-/// Distinct from [`IMAGE_ID`] because the two are different facts: the image is
-/// the pixels, the placement is the box they are fitted into.
-pub const PLACEMENT_ID: u32 = 98;
-
-/// How long to wait for a terminal to acknowledge an image transmit.
-///
-/// A terminal that never answers is a terminal that will never draw the frame, so
-/// waiting is pointless past the point where a working one would have replied.
-/// Generous rather than tight: an acknowledgement is one short escape, and the cost
-/// of being wrong is failing a session on a terminal that was merely slow.
-const TRANSMIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+/// A frame is what carries a picture's placement, and a window whose pane is not on screen sends
+/// no frames. The scan already knows the cells are gone; this is the clock that notices. 16ms is
+/// one video frame's worth of latency, which is as fast as a human switch needs.
+const RECONCILE: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// The frame that is painted when [`DebugOptions::blue_pixel`] is set.
 ///
@@ -96,79 +76,9 @@ const BLUE: (u32, u32) = (64, 64);
 /// The window does not carry its own surface: the session keeps these in a map *keyed* by it, so
 /// the identity exists once. A copy here would be a second answer to "which cells is this window",
 /// and a frame naming the key would still have to search for the copy that matched.
-/// What a window's picture is doing.
-///
-/// An `Option` could not say the difference that matters. A window that has not drawn has
-/// no picture anywhere; a window whose cells went away has one — the pixels are still here,
-/// the terminal was told to drop it — and coming back has to put it up again. Folded into
-/// `None`, the second was treated as the first, and the returning pane stayed blank until
-/// the program was given a reason to draw.
-pub enum Picture<F: Format> {
-    /// Nothing drawn yet, so there is nothing to place: every window starts here.
-    Nothing,
-    /// On the terminal, under the window's own id.
-    ///
-    /// Kept across frames rather than rebuilt, because it owns the unacknowledged transmits
-    /// and placements: a frame adds to it and `sync` is what waits for those to land.
-    Shown(DynImage<F>),
-    /// Taken off the terminal, with the request that can put it back.
-    ///
-    /// The request is what came back from [`DynImage::delete`]: the pixels survive the
-    /// delete, so putting the picture up again costs one command where re-encoding a frame
-    /// costs a memcpy of every pixel.
-    Hidden(ImageRequest<F>),
-}
-
-impl<F: Format> Picture<F> {
-    /// Take the picture off the terminal, keeping what can put it up again.
-    ///
-    /// The whole of the move is here because only the enum can do it: `delete` consumes the
-    /// image, and the image lives inside the variant, so it has to be taken out before it can
-    /// be given away. Nothing to do for the other two — a hidden picture is already off the
-    /// screen and one that never drew has nothing to take off.
-    pub fn hide(&mut self) {
-        let taken = std::mem::replace(self, Picture::Nothing);
-        *self = match taken {
-            Picture::Shown(image) => Picture::Hidden(image.delete()),
-            other => other,
-        };
-    }
-
-    /// Put the picture up again, under `placement`, and wait for the terminal to take it.
-    ///
-    /// Both forms keep their pixels, so neither needs the client to draw anything: a shown
-    /// image re-sends what it holds, and a hidden one travels back up from the request the
-    /// delete handed over. `Nothing` is a window between opening and its first frame, which
-    /// has no picture to raise.
-    ///
-    /// A transmit, never a placement. A placement names an image the terminal may have
-    /// dropped, and it answers `ENOENT` when it has — a failure with no recovery in it,
-    /// since a placement carries no pixels.
-    pub async fn show(&mut self, image_id: u32, placement: PlacementRequest) -> Result<()> {
-        use Picture::*;
-
-        let taken = std::mem::replace(self, Nothing);
-        let mut image = match taken {
-            Nothing => return Ok(()),
-            Shown(image) => image.retransplace(placement)?.await?,
-            Hidden(request) => {
-                request
-                    .temp_remove_this_api_maybe_resend_shm()?
-                    .transplace(image_id, placement)
-                    .await?
-            }
-        };
-        tokio::time::timeout(TRANSMIT_TIMEOUT, image.sync())
-            .await
-            .map_err(|_| ErrorInner::TransmitTimeout(TRANSMIT_TIMEOUT))??;
-        *self = Picture::Shown(image);
-        Ok(())
-    }
-}
-
 pub struct Window<F: Format> {
     /// What the picture is doing, and the operations pending on it.
-    pub picture: Picture<F>,
+    pub picture: VideoStream<F>,
     /// The codec this window's frames are in, which is what its decoder was built from.
     pub codec: CodecId,
     /// The codec's decoder, kept across frames.
@@ -187,7 +97,7 @@ impl<F: Format> Drop for Window<F> {
     /// is the only thing that removes it, and this is the one place that always runs — a window
     /// closed, a session that ends, a link that dies.
     fn drop(&mut self) {
-        if let Picture::Shown(image) = std::mem::replace(&mut self.picture, Picture::Nothing) {
+        if let VideoStream::Shown(image, _) = std::mem::replace(&mut self.picture, VideoStream::Nothing) {
             image.delete();
         }
     }
@@ -241,35 +151,74 @@ impl<F: Format> Session<F> {
     /// left to read.
     pub async fn run(
         mut self,
-        anchors: std::sync::Arc<arc_swap::ArcSwap<HashMap<SurfaceId, Option<Position>>>>,
+        anchors: Anchors,
     ) -> Result<()> {
-        while let Some(message) = self.connection.recv().await? {
-            if let Err(e) = self.handle_inner(message, &anchors).await {
-                log::error!("{e}");
-                // Reported rather than returned: the link is the only channel a client listens on,
-                // and a failure it is not told about is a pane that stops changing for no stated
-                // reason. Retried because this is the last thing the peer is ever told — a report
-                // that is itself lost leaves that same silent pane.
-                let report = Message::Error(shared_utils::report::drawn(
-                    miette::Report::new(e).wrap_err("the tui server failed:"),
-                ));
-                futures_retry::FutureRetry::new(
-                    || self.connection.send(&report),
-                    crate::error::ReportFailure,
-                )
-                .await
-                .unwrap_or_else(|(e, attempts)| {
-                    // Not a failure of this side: a report that cannot be sent is a client that
-                    // is gone, and there is nothing left to tell. Logged so the reason is findable
-                    // afterwards, and the session simply ends.
-                    tracing::error!(
-                        "could not report a failure to the client after {attempts} attempts: {e}"
-                    );
-                    ((), attempts)
-                });
+        loop {
+            tokio::select! {
+                message = self.connection.recv() => {
+                    let Some(message) = message? else { return Ok(()) };
+                    if let Err(e) = self.handle_inner(message, &anchors).await {
+                        log::error!("{e}");
+                        // Reported rather than returned: the link is the only channel a client listens on,
+                        // and a failure it is not told about is a pane that stops changing for no stated
+                        // reason. Retried because this is the last thing the peer is ever told — a report
+                        // that is itself lost leaves that same silent pane.
+                        let report = Message::Error(shared_utils::report::drawn(
+                            miette::Report::new(e).wrap_err("the tui server failed:"),
+                        ));
+                        FutureRetry::new(
+                            || self.connection.send(&report),
+                            crate::error::ReportFailure,
+                        )
+                        .await
+                        .unwrap_or_else(|(e, attempts)| {
+                            // Not a failure of this side: a report that cannot be sent is a client that
+                            // is gone, and there is nothing left to tell. Logged so the reason is findable
+                            // afterwards, and the session simply ends.
+                            tracing::error!(
+                                "could not report a failure to the client after {attempts} attempts: {e}"
+                            );
+                            ((), attempts)
+                        });
+                    }
+                }
+                // A picture is placed against cells the pane drew, and a window that is off screen
+                // sends no frames to notice them leaving — so this is the clock that notices. The
+                // sleep is made fresh each turn: it fires 16 ms after the link has gone quiet,
+                // and a frame arriving first takes the arm out of the running — frames hide
+                // windows on the same rule, on their own path.
+                // TODO: be triggered by the proxy (the scan that finds the cells) rather than
+                // by this timer — the sleep is a stand-in until the proxy can say when a cell
+                // went away or came back.
+                _ = tokio::time::sleep(RECONCILE) => self.reconcile(&anchors).await,
             }
         }
-        Ok(())
+    }
+
+    /// Take every window's picture down whose cells the scan cannot find, and put back the
+    /// ones that are hidden but visible again.
+    ///
+    /// A window missing from the table, or in it without a position, is not on screen: its
+    /// picture goes. A window that went away and came back gets its picture re-placed at the
+    /// cells the scan now finds, without a frame from its program — a window that is not
+    /// drawing sends none, and waiting for one would leave the returning pane blank forever.
+    ///
+    /// Both questions are the same lookup, so they are answered in one pass.
+    async fn reconcile(&mut self, anchors: &Anchors) {
+        let snapshot = anchors.load();
+        for (surface, window) in &mut self.windows {
+            match snapshot.get(surface) {
+                Some(Some(at)) => {
+                    if window.picture.is_hidden() {
+                        if let Err(e) = window.picture.show(image_id(surface), *at).await {
+                            tracing::error!("could not put {surface:?}'s picture back: {e}");
+                        }
+                    }
+                }
+                // Not in the table, or in it without a position: either way, not on screen.
+                _ => window.picture.hide(),
+            }
+        }
     }
 
     /// One message, and what it means.
@@ -281,9 +230,7 @@ impl<F: Format> Session<F> {
         match message {
             Message::Frame {
                 surface,
-                z,
-                cols,
-                rows,
+                position,
                 bytes,
             } => {
                 // Where the window is, looked up rather than tracked: nothing about position
@@ -300,8 +247,7 @@ impl<F: Format> Session<F> {
                 {
                     Some(at) => {
                         if !self.debug.no_graphics {
-                            self.paint(bytes.as_deref(), surface, *at, z, (cols, rows))
-                                .await?
+                            self.place_frame(surface, *at, position, bytes.as_deref()).await?;
                         }
                     }
                     // A window with no cells is not placed. It has scrolled away, or been covered
@@ -334,7 +280,7 @@ impl<F: Format> Session<F> {
                     surface,
                     Window {
                         codec,
-                        picture: Picture::Nothing,
+                        picture: VideoStream::Nothing,
                         decoder: codec.to_decoder()?,
                     },
                 );
@@ -393,147 +339,92 @@ impl<F: Format> Session<F> {
         Ok(())
     }
 
-    /// Paint one frame into this pane.
-    /// The frame that arrives is a stretch of the codec's stream, and the terminal does
-    /// not accept that, so it is decoded here and rebuilt as a request in this session's
-    /// medium. Which medium that is is the type parameter, not a runtime choice:
-    /// [`Format::request`] is what turns pixels into a request for it.
+    /// Put a window's frame on the screen.
     ///
-    /// The frame is painted into the window its surface names: the surface
-    /// identifies the cells, and the frame is a stretch of *that* window's stream, so
-    /// the decoder it continues is that window's. The pid is the report's own — the
-    /// client that sent it owns the window.
+    /// `bytes` is the program's frame, already known to have somewhere to go: `at` is where the
+    /// scan found the window's cells. `position` is the frame's own rank and box, which travel
+    /// with the placement whether or not there is anything to place — a window that moved or
+    /// changed rank while its program drew nothing still arrives as a frame, and the picture
+    /// the terminal already holds is what belongs in the new box.
     ///
     /// One span per frame, so the profiler's timeline is divided at the same
     /// boundary the pane's is. The awaits are inside it, which is why this is
     /// `#[instrument]` rather than a held guard: `Span::enter`'s guard must not
     /// outlive an `.await`, and the attribute enters and exits per poll instead.
-    /// The two waits it contains — the terminal's acknowledgement of the transmit, and
-    /// of the placement — are the two numbers this exists to see.
-    #[tracing::instrument(name = "frame", skip(self, stream))]
-    async fn paint(
+    #[tracing::instrument(name = "frame", skip_all, fields(surface = ?surface))]
+    async fn place_frame(
         &mut self,
-        stream: Option<&[u8]>,
         surface: SurfaceId,
         at: Position,
-        z: u32,
-        (cols, rows): (u32, u32),
+        position: FramePosition,
+        bytes: Option<&[u8]>,
     ) -> Result<()> {
-        // A frame for a window this side has not been told about is not a failure: the
-        // announcement and the picture are two messages, and a window that is already drawing
-        // can be announced after the drawer's first commit has been encoded. The frame is
-        // dropped and the next one — which arrives after the announcement — is painted, so
-        // nothing is lost but one turn.
-        let Some(state) = self.windows.get_mut(&surface) else {
+        let Some(window) = self.windows.get_mut(&surface) else {
             tracing::debug!("a frame for a window this session does not know: {surface:?}");
             return Ok(());
         };
-
-        let placement = PlacementRequest {
-            // The box the picture is scaled into, in cells, as the side that owns the window laid
-            // it out. `c`/`r` are the keys that scale: the terminal fits the image into that many
-            // cells and computes the other dimension from the picture's own aspect ratio, so the
-            // window keeps its shape at whatever size the pane gives it.
-            //
-            // Not `w`/`h`, which look like a size and are not: they name a *source* rectangle to
-            // crop the image by, so the pixels sent there would cut the picture down and leave it
-            // drawn at its own resolution inside a box of a different one.
-            cols: Some(cols),
-            rows: Some(rows),
-            // Behind the text *and* behind the cell backgrounds, so a window's
-            // picture cannot cover another window's content. Ordered among windows by
-            // `z`, which is what `stacking` is for.
-            z: Some(stacking(z)),
-            placement_id: Some(PLACEMENT_ID),
-            // A real placement draws at the cursor, and nothing here is virtual: the
-            // cells are the window's own area, so the picture goes where the cursor is
-            // put.
-            virtual_placement: false,
-            // Without this the terminal moves the cursor by the placement's own box
-            // after placing, once per frame: on a stream that is a scroll per frame.
-            fix_cursor: true,
-            // The picture is drawn from the cursor rather than from a key, so the cell it goes to
-            // *is* the placement: the protocol has no field for a screen position, which is why
-            // this is a cursor move. It rides the same write as the escape, and the writer puts
-            // the cursor back afterwards, so nothing lands between the move and the picture it
-            // positions and nothing is left moved.
-            at: Some((at.1, at.0)),
-            ..Default::default()
-        };
-
+        let request = bytes
+            .map(|data| Self::decode(&self.debug, &self.controller, window, surface, data))
+            .transpose()?
+            .flatten();
         let image_id = image_id(&surface);
-
-        // No pixels: the window moved or changed rank while its program drew nothing, so the
-        // picture the terminal already holds is what belongs in the new box. Placing it again is
-        // the whole of the work, under the same image and placement id, which the protocol
-        // replaces rather than duplicates.
-        //
-        // `?` on the image is the first frame of a window that has not drawn: there is no
-        // picture to move, and the frame carrying pixels is what puts one up.
-        if let Some(data) = stream {
-            let pixels = if self.debug.blue_pixel {
-                // The frame is ignored on purpose, so nothing in the wire path, the codec
-                // or the decode is exercised: what appears on screen is attributable to
-                // the encode, the transmit and the placement alone.
-                image::RgbImage::from_pixel(BLUE.0, BLUE.1, image::Rgb([0, 0, 255]))
-            } else {
-                match state.decoder.decode(data) {
-                    Ok(Some(frame)) => {
-                        image::RgbImage::from_raw(frame.width, frame.height, frame.rgb).
-                            ok_or(ErrorInner::FrameSize {
-                                width: frame.width,
-                                height: frame.height,
-                            })?
-                    }
-                    // Headers, or a frame the codec held back: nothing to show yet,
-                    // and nothing to ask for — the next frame the client sends is what
-                    // the decoder held, and a static window sends again when it moves.
-                    Ok(None) => return Ok(()),
-                    // The decoder's state is what failed: replace it, so the next frame starts
-                    // the stream over from the codec the window was opened with. The client is
-                    // not asked for a keyframe because a client cannot be asked: every message
-                    // it reads has to be one this side can answer for, and a request it cannot
-                    // answer is a stall.
-                    Err(e) => {
-                        state.decoder = state.codec.to_decoder()?;
-                        tracing::error!("the codec failed: {e}");
-                        return Ok(());
-                    }
-                }
-            };
-
-            let request = F::request(&self.controller, pixels)
-                .map_err(|source| ErrorInner::Stage { source, surface })?;
-            // One command, not two. Transmitting and placing separately leaves the image on
-            // screen with nothing drawing it in between — the terminal frees an image's
-            // placements when its data is replaced — and that gap is a round trip wide, which is
-            // a visible flicker on every frame.
-            //
-            // Timed, because this is the one await in the program that a terminal can leave
-            // hanging: the acknowledgement is a reply a terminal may not send, and a session that
-            // stalls here shows an empty pane forever with no clue why.
-            let mut image =
-                tokio::time::timeout(TRANSMIT_TIMEOUT, request.transplace(image_id, placement))
-                    .await
-                    .map_err(|_| ErrorInner::TransmitTimeout(TRANSMIT_TIMEOUT))?
-                    .map_err(ErrorInner::Graphics)?;
-
-            // Waited on: until the placement lands nothing is on screen, so a frame that was
-            // not placed is a frame the user never sees. Timed like the transmit above, and for
-            // the same reason.
-            tokio::time::timeout(TRANSMIT_TIMEOUT, image.sync())
-                .await
-                .map_err(|_| ErrorInner::TransmitTimeout(TRANSMIT_TIMEOUT))??;
-            // `sync` returns nothing; the image is what is stored, and it is still held here.
-            state.picture = Picture::Shown(image);
-        } else {
-            // The window moved or changed rank while its program drew nothing. Both forms
-            // still hold the pixels, so the picture goes back up without the client being
-            // asked for anything; a window that never drew has nothing to raise.
-            state.picture.show(image_id, placement).await?;
+        match request {
+            Some(request) => window.picture.update(image_id, at, position, request).await,
+            // A frame with nothing to show: the remembered frame moves with it, and the picture
+            // the terminal holds is what belongs in the new box.
+            None => {
+                window.picture.set_frame_position(position);
+                window.picture.show(image_id, at).await
+            }
         }
+    }
 
-        Ok(())
+    /// Decode one frame's worth of bytes into a request ready to transmit.
+    ///
+    /// Answers `Ok(None)` for a frame with nothing to place: codec headers, a frame the codec
+    /// held back, or one it failed on. A failed codec is replaced from its own id, so the next
+    /// frame starts from a clean state; the stored picture is left alone, because a window
+    /// whose program stopped drawing keeps whatever it last showed.
+    fn decode(
+        debug: &DebugOptions,
+        controller: &Controller,
+        state: &mut Window<F>,
+        surface: SurfaceId,
+        data: &[u8],
+    ) -> Result<Option<ImageRequest<F>>> {
+        let pixels = if debug.blue_pixel {
+            // The frame is ignored on purpose, so nothing in the wire path, the codec
+            // or the decode is exercised: what appears on screen is attributable to
+            // the encode, the transmit and the placement alone.
+            image::RgbImage::from_pixel(BLUE.0, BLUE.1, image::Rgb([0, 0, 255]))
+        } else {
+            match state.decoder.decode(data) {
+                Ok(Some(frame)) => {
+                    image::RgbImage::from_raw(frame.width, frame.height, frame.rgb).ok_or(
+                        ErrorInner::FrameSize {
+                            width: frame.width,
+                            height: frame.height,
+                        },
+                    )?
+                }
+                // Headers, or a frame the codec held back: nothing to show yet,
+                // and nothing to ask for — the next frame the client sends is what
+                // the decoder held, and a static window sends again when it moves.
+                Ok(None) => return Ok(None),
+                // The client is not asked for a keyframe because a client cannot be asked: every
+                // message it reads has to be one this side can answer for, and a request it cannot
+                // answer is a stall.
+                Err(e) => {
+                    state.decoder = state.codec.to_decoder()?;
+                    tracing::error!("the codec failed: {e}");
+                    return Ok(None);
+                }
+            }
+        };
+        match F::request(controller, pixels) {
+            Ok(request) => Ok(Some(request)),
+            Err(source) => Err(crate::error::Error::at(ErrorInner::Stage { source, surface })),
+        }
     }
 }
 

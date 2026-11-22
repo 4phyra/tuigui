@@ -45,7 +45,8 @@ codecs = { workspace = true }
 futures-util = { version = "0.3", features = ["alloc"] }
 # `ReaderStream`: the pty master is an `AsyncRead`, and the proxy consumes the
 # command's output as chunks. The bridge is the crate's job, not a loop here.
-tokio-util = { version = "0.7", default-features = false, features = ["io"] }
+# `time` for `FutureExt::timeout`, which is what times the transmit.
+tokio-util = { version = "0.7", default-features = false, features = ["io", "time"] }
 # The anchor set, read by the rewrite and replaced by the server: a window opening
 # reaches the next chunk without the rewrite waiting for it.
 arc-swap = { workspace = true }

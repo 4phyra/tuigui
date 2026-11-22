@@ -15,9 +15,11 @@ fn messages_round_trip() {
                 fg: (1, 2, 3),
                 bg: (4, 5, 6),
             },
-            z: 0,
-            cols: 80,
-            rows: 24,
+            position: FramePosition {
+                z: 0,
+                cols: 80,
+                rows: 24,
+            },
             bytes: Some(b"raw frame bytes".to_vec()),
         },
         // Not text, so a codec that assumed UTF-8 would show up here.
@@ -27,9 +29,11 @@ fn messages_round_trip() {
                 fg: (0, 0, 0),
                 bg: (255, 255, 255),
             },
-            z: 9,
-            cols: 1,
-            rows: 1,
+            position: FramePosition {
+                z: 9,
+                cols: 1,
+                rows: 1,
+            },
             bytes: Some(vec![0x00, 0xff, 0x1b, 0x9b]),
         },
         // No pixels at all: a frame that only moves the picture already on the far side.
@@ -39,9 +43,11 @@ fn messages_round_trip() {
                 fg: (7, 8, 9),
                 bg: (10, 11, 12),
             },
-            z: 1,
-            cols: 12,
-            rows: 5,
+            position: FramePosition {
+                z: 1,
+                cols: 12,
+                rows: 5,
+            },
             bytes: None,
         },
         Message::OpenWindow {

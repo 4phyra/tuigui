@@ -93,9 +93,12 @@ impl Server {
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .insert(magic.clone())
                         {
-                        let (debug, controller) = (self.debug.clone(), self.controller.clone());
-                        let anchors = self.anchors.clone();
-                        let in_flight = in_flight.clone();
+                        let (debug, controller, anchors, in_flight) = (
+                            self.debug.clone(),
+                            self.controller.clone(),
+                            self.anchors.clone(),
+                            in_flight.clone(),
+                        );
                         attached.spawn(async move {
                             async {
                                 let connection = match transport.connect().await {

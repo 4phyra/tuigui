@@ -15,7 +15,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use codecs::CodecId;
-use wire::message::{Message, SurfaceId};
+use wire::message::{FramePosition, Message, SurfaceId};
 use wire::transport::Connection;
 
 use crate::windowing::{Compositable, WindowingServer};
@@ -143,9 +143,11 @@ impl Compositable for TestWindow {
 
         let frame = Message::Frame {
             surface: self.surface,
-            z: rank,
-            cols: u32::from(cells.0),
-            rows: u32::from(cells.1),
+            position: FramePosition {
+                z: rank,
+                cols: u32::from(cells.0),
+                rows: u32::from(cells.1),
+            },
             bytes: Some(bytes),
         };
         FRAMES_SENT.fetch_add(1, Ordering::Relaxed);

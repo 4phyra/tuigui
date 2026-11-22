@@ -171,9 +171,11 @@ async fn every_frame_reuses_one_id_and_places_itself_again() {
         .handle_inner(
             Message::Frame {
                 surface: SURFACE,
-                z: 0,
-                cols: 8,
-                rows: 8,
+                position: FramePosition {
+                    z: 0,
+                    cols: 8,
+                    rows: 8,
+                },
                 bytes: Some(codec_frame(8, 8)),
             },
             &where_it_is(),
@@ -221,9 +223,11 @@ async fn every_frame_reuses_one_id_and_places_itself_again() {
         .handle_inner(
             Message::Frame {
                 surface: SURFACE,
-                z: 3,
-                cols: 8,
-                rows: 8,
+                position: FramePosition {
+                    z: 3,
+                    cols: 8,
+                    rows: 8,
+                },
                 bytes: Some(codec_frame(8, 8)),
             },
             &where_it_is(),
@@ -299,9 +303,11 @@ async fn a_frame_with_no_new_pixels_sends_its_picture_again() {
         .handle_inner(
             Message::Frame {
                 surface: SURFACE,
-                z: 0,
-                cols: 8,
-                rows: 8,
+                position: FramePosition {
+                    z: 0,
+                    cols: 8,
+                    rows: 8,
+                },
                 bytes: Some(codec_frame(8, 8)),
             },
             &where_it_is(),
@@ -314,9 +320,11 @@ async fn a_frame_with_no_new_pixels_sends_its_picture_again() {
         .handle_inner(
             Message::Frame {
                 surface: SURFACE,
-                z: 0,
-                cols: 8,
-                rows: 8,
+                position: FramePosition {
+                    z: 0,
+                    cols: 8,
+                    rows: 8,
+                },
                 bytes: None,
             },
             &where_it_is(),
@@ -392,9 +400,11 @@ async fn a_frame_keeps_its_picture_and_a_closed_window_removes_it() {
             .handle_inner(
                 Message::Frame {
                     surface: SURFACE,
-                    z: 0,
-                    cols: 8,
-                    rows: 8,
+                    position: FramePosition {
+                        z: 0,
+                        cols: 8,
+                        rows: 8,
+                    },
                     bytes: Some(codec_frame(8, 8)),
                 },
                 &where_it_is(),

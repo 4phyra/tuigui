@@ -32,6 +32,28 @@
 use codecs::CodecId;
 use rkyv::rancor;
 
+/// Where a window's frame sits, and how big it is: the stacking rank and the box, in cells.
+///
+/// One struct rather than loose fields because it travels: inside `Message::Frame`, and inside
+/// a picture's recollection of the frame it was last placed under, which is what lets a picture
+/// be put back without a frame from the program.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+pub struct FramePosition {
+    /// Stacking rank: 0 is behind everything, larger is closer to the user.
+    pub z: u32,
+    /// The window's box in terminal cells — the size to *scale the picture to*, which is what
+    /// `c`/`r` mean on a placement. Not pixels: `w`/`h` name a source rectangle to crop the
+    /// image by, so a far side sending the capture's pixel size there draws the picture at its
+    /// own size inside a box of a different one — small windows enlarged, large ones shrunk, and
+    /// nothing to say why. Only the side with the window knows its box, and only in cells: the
+    /// compositor decides where a window sits on the pane, and the pane is a grid.
+    pub cols: u32,
+    /// And how tall the box is, likewise.
+    pub rows: u32,
+}
+
 /// One message between a server and its client.
 #[derive(Debug, Clone, PartialEq, Eq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Message {
@@ -62,19 +84,10 @@ pub enum Message {
     Frame {
         /// The cells of the window this frame draws.
         surface: SurfaceId,
-
-        z: u32, // 0 - behind everything, bigger - closer to the user.
-        /// The window's box, in terminal cells, as the side that owns the window laid it out.
-        ///
-        /// The size to *scale the picture to*, which is what `c`/`r` mean on a placement. Not
-        /// pixels: `w`/`h` name a source rectangle to crop the image by, so a far side sending
-        /// the capture's pixel size there draws the picture at its own size inside a box of a
-        /// different one — small windows enlarged, large ones shrunk, and nothing to say why.
-        ///
-        /// Only the side with the window knows its box, and only in cells: the compositor
-        /// decides where a window sits on the pane, and the pane is a grid.
-        cols: u32,
-        rows: u32,
+        /// Where and how big this frame is: the rank and the box. The two change without
+        /// the picture changing — a window being dragged moves while its program draws
+        /// nothing — which is what makes it a separate thing from the pixels.
+        position: FramePosition,
         /// The codec's bytes, opaque to the link.
         ///
         /// `None` when the program drew nothing since the last frame, or when the codec is

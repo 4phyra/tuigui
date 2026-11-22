@@ -25,7 +25,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use wayland::WaylandServer as Native;
 use tokio::sync::broadcast;
-use wire::message::{Message, SurfaceId};
+use wire::message::{FramePosition, Message, SurfaceId};
 use wire::transport::Connection;
 
 use super::{Compositable, WindowingServer};
@@ -303,9 +303,11 @@ impl Compositable for WaylandWindow {
         let payload = bytes.as_ref().map_or(0, |bytes| bytes.len() as u64);
         let message = Message::Frame {
             surface: self.surface,
-            z: rank,
-            cols: u32::from(cells.0),
-            rows: u32::from(cells.1),
+            position: FramePosition {
+                z: rank,
+                cols: u32::from(cells.0),
+                rows: u32::from(cells.1),
+            },
             bytes,
         };
         connection.send(&message).await?;

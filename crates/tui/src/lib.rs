@@ -26,6 +26,7 @@ mod pty;
 mod raw;
 mod server;
 mod session;
+mod video_stream;
 
 use std::io::{self, Read, Write};
 
