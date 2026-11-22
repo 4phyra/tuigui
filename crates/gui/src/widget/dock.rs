@@ -184,7 +184,7 @@ impl<'a> StatefulWidget for &'a mut Dock {
                 "streaming",
                 (0xFF, 0x7F, 0x50),
                 Some(format!(
-                    "{}/s ↑",
+                    "· {}/s ↑",
                     humansize::format_size(crate::stats::bytes_per_sec(), humansize::BINARY)
                 )),
             ),
@@ -349,10 +349,16 @@ fn light(area: Rect, buf: &mut Buffer, said: &str, rgb: (u8, u8, u8), suffix: Op
     );
 
     // On the border, a cell in from the corner: dot, word, and — while streaming — the upload
-    // rate. One cell of clearance before the mark so the border does not touch it; the cells
-    // the mark itself covers are blanked so its glyphs sit on a clean background.
+    // rate, set off from the word by a middle dot. One
+    // cell of clearance before the mark so the border does not touch it; the cells the mark
+    // itself covers are blanked so its glyphs sit on a clean background, with one cell of
+    // clearance blanked on the right of the mark to match the one on the left. Widths are
+    // characters, not bytes: the rate carries an arrow the byte count would overstate.
     let start = area.x + 2;
-    let span = 1 + 2 + said.len() as u16 + suffix.map_or(0, |s| 2 + s.len() as u16);
+    let said_width = said.chars().count() as u16;
+    let suffix_width = suffix.map_or(0, |s| s.chars().count() as u16);
+    let gap = if suffix.is_some() { 1 } else { 0 };
+    let span = 1 + 2 + said_width + gap + suffix_width + 1;
     for x in start.saturating_sub(1)..start.saturating_sub(1) + span {
         buf.set_string(x, area.y, " ", Style::new());
     }
@@ -365,7 +371,7 @@ fn light(area: Rect, buf: &mut Buffer, said: &str, rgb: (u8, u8, u8), suffix: Op
     );
     if let Some(suffix) = suffix {
         buf.set_string(
-            start + 2 + said.len() as u16 + 2,
+            start + 2 + said_width + 1,
             area.y,
             suffix,
             Style::new().fg(Color::Rgb(0x80, 0x80, 0x80)),
