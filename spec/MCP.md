@@ -49,9 +49,10 @@ call. Three tools are enough to start.
   window.input(id, action)       -> click / key / scroll
 ```
 
-`window.list` is where a session becomes legible. Today `session.rs` holds exactly
-one image id because the design serves one pane; with a handful of windows this
-becomes the agent's model of what is running.
+`window.list` is where a session becomes legible. Image ids are derived per
+window from its surface signature (`tui::session::image_id`), and the server
+holds a map from signature to window — with a handful of windows this is the
+agent's model of what is running, minus the `window.list` call itself.
 
 Two design decisions are load-bearing here.
 
@@ -76,11 +77,11 @@ pixels we already have).
 
 So the honest position is:
 
-- **shm-apps: not yet.** The compositor records no window title and no `app_id`
-  today (`Window` in `crates/compositor/src/surface.rs` tracks geometry, pixels,
-  damage and the configure serial, and nothing else), so `window.list` cannot be
-  built as written. Titles are one `xdg_toplevel.title` handler away, and that is
-  the first piece of work.
+- **shm-apps: closer than it was.** The compositor records a window's title
+  (`CompositableWindow.title` in `crates/compositor/src/window.rs`, filled from
+  the toplevel's `xdg_toplevel.title` with `app_id` as the fallback, in
+  `crates/wayland/src/window.rs`). What `window.list` still lacks is a surface
+  that exposes the title outside the compositor, not the fact itself.
 - **What is already there: a text channel.** Many of the apps this is for are
   terminals themselves — the pane can be running a shell. Text goes over that
   channel at almost no cost, with no model needed to read it, and the app in the
@@ -95,7 +96,7 @@ idea grows.
 
 ## Where it sits in the stream
 
-The wire already carries opaque frames (`Message::Frame(Vec<u8>)`,
+The wire already carries opaque frames (`Message::Frame`,
 `crates/wire/src/message.rs`), so a second message type is a small change rather
 than a new protocol. The channel is the same one a client announces.
 
@@ -105,10 +106,12 @@ than a new protocol. The channel is the same one a client announces.
                                           └──▶ MCP server ──▶ agent
 ```
 
-The input half already exists on the far side: `Client::type_key`, `click`,
-`scroll`, `move_mouse` and `pointer_state` are all in the compositor's API. Nothing
-in `gui` calls the pointer ones yet — the client has no mouse reporting — so
-"click" is the part of this that needs new work in the terminal path, not here.
+The input half exists on the far side: key and pointer events flow from the
+terminal through `gui` into the compositor, which dispatches them to the
+focused window's seat (`crates/wayland/src/handlers/inputs.rs`); pointer
+reporting is on by default, `--dbg-no-mouse` turns it off. So the terminal
+path is wired; what is missing is the MCP tool surface on top of it, plus a
+reason to believe the reporting is exercised end to end.
 
 ## Input is the half that needs a policy first
 
@@ -147,17 +150,19 @@ human watches, and the way text gets in and out.
 
 ## What to build first
 
-1. **Window identity.** Handle `xdg_toplevel.title` and `app_id` in
-   `crates/compositor` and surface them on `WindowShared`. Without it there is no
-   `window.list`.
+1. **Window identity.** Partly done: the title (falling back to `app_id`) is
+   read and stored on the window (`crates/compositor/src/window.rs`). Missing:
+   any surface that exposes it outside the compositor, which is still required
+   before `window.list` can be built.
 2. **The MCP server skeleton.** `window.list` (which needs 1) and
    `window.capture`. Both are reads and neither needs a policy.
 3. **A `capture` that is honest about its channels.** The compositor's capture is
    `wl_shm` only today, so an EGL client (`kitty`, `weston-flower`) captures black.
    An MCP tool that returns a black PNG for a working window is worse than one that
    says it cannot see it.
-4. **Input last**, behind a flag, once there is a session to test it in — and after
-   the terminal path has mouse reporting at all.
+4. **Input last**, behind a flag, once there is a session to test it in. The
+   terminal path can already report the mouse (`--dbg-no-mouse` disables it),
+   so this is about the MCP tool and its policy, not about wiring.
 
 ## Related
 

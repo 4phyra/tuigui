@@ -1,7 +1,16 @@
 # DOCK — two screens, one line of furniture
 
-Status: design only, nothing built. Replaces the current footer, which is a fixed
-row at the bottom of a screen the client owns outright.
+Status: built. The dock exists as specified — a three-row bordered strip with
+Logs and Windows tabs, drawn under whatever is on screen — with two deviations
+and one gap, noted where they belong below: the "under the content" placement
+formula is not what the code does (the dock is bottom-pinned), the hold of
+program output on the Windows screen is bounded by a ring, not by the visit,
+and whether exit restores the terminal exactly as found is unverified.
+Implementation: `crates/gui/src/widget/dock.rs`, the alternate-screen swap in
+`crates/gui/src/widget.rs` (`was_alternate`, `Page::{Logs, Stream}`),
+`crates/gui/src/widget/stage.rs`. Built beyond the spec: a pairing stage with a
+barcode of the session's announcement, a streaming state with the upload rate
+marked, and an exiting page that carries the ring's contents out.
 
 ## The idea
 
@@ -40,7 +49,13 @@ of the screen**. The bottom is a floor, not a fixed position:
    dock_row = min(rows - DOCK_HEIGHT, last_content_row + 1)     DOCK_HEIGHT = 3
 ```
 
-Both halves are load-bearing. Three log lines leave the dock on the fourth row
+**Not built as written.** The code pins the dock to the bottom rows of the
+screen (`crates/gui/src/widget.rs`: `area.height - DOCK_HEIGHT`); nothing reads
+`last_content_row`. Consider the formula above still the design intent and the
+bottom pinning a placeholder, or this section stale — either way, what ships is
+the bottom pin, and the formula is unverified against any code.
+
+Both halves of the formula were load-bearing. Three log lines leave the dock on the fourth row
 with blank screen below it — a dock pinned to the bottom of a nearly empty screen
 is chrome pretending to be content. A full screen, or a window, pushes the dock
 down to the last three rows, where it stays, because there is nowhere further to
@@ -77,6 +92,16 @@ Returning to the Logs screen happens in three parts, and all three are needed:
 The release and the redraw of the dock are presented as one step, so a long hold
 does not appear a screenful at a time.
 
+**As built, the hold is bounded, and the bound is not the visit.** While the
+Windows screen is up, the program's output accumulates in a ring of
+`RING_BUF_CAPACITY` bytes (256 KiB, `crates/gui/src/widget/stage.rs`); when the
+ring fills, the oldest lines are dropped to make room — they were the ones
+about to scroll away anyway — and on the way back to Logs the ring is drained
+and printed (`print_program_stdout` in `crates/gui/src/widget.rs`). So a
+program that outtalks the ring loses its oldest lines silently, which is the
+"cap without a word" case the open questions below worry about, answered by the
+implementation rather than by a decision recorded there.
+
 There is no copy of the screen kept anywhere and nothing to reconstruct: the
 visible text is never the storage, the terminal is. That is why a session can be
 switched back and forth without limit and lose nothing.
@@ -112,7 +137,8 @@ would leave the terminal on a screen nobody chose.
 The child keeps writing. Nobody can see it, because the screen it would be written
 to is the one the client is drawing the window on. So it is held, and the hold is
 bounded by the **visit**, not by the session: it lasts until the client returns to
-the Logs screen, and it is released there.
+the Logs screen, and it is released there. (As built, the hold is the 256 KiB
+ring above, not the visit — see "The swap".)
 
 Holding costs nothing that matters. The bytes are also in the client's log, so
 nothing depends on the hold surviving a crash, and its length is a user's choice to
@@ -138,10 +164,14 @@ thought to raise.
 
 ## Exiting
 
-Leaving the Windows screen shows the Logs screen, and then the client leaves the
-Logs screen alone: the dock is cleared, the cursor is left after the last line, and
-the terminal is handed back as it was found. What remains is ordinary output with
-the shell's prompt below it, and history above it where it always was.
+Leaving the Windows screen shows the Logs screen, and then the client leaves
+the Logs screen alone: the dock is cleared, the cursor is left after the last line, and
+the terminal is handed back as it was found.
+
+As built, the exit path is `Page::Exiting` (`crates/gui/src/widget/stage.rs`):
+entering it drains whatever the ring still holds onto the Logs screen, and the
+session ends after one more frame. Whether the terminal is handed back exactly
+as found — dock cleared, cursor after the last line — is unverified.
 
 A session that ends while on the Windows screen therefore ends with history
 visible, not with a window-shaped hole — and with whatever the child wrote while
@@ -170,7 +200,9 @@ nothing to open *over* anything any more: the two panels become the two screens.
   refuses to start there, or runs with one screen and no switching, is not decided.
 - **The hold's size.** Bounded by the visit is not bounded in bytes. A chatty
   program left running while the user watches a window is the case that would make
-  a cap necessary, and a cap is a silent truncation unless it says so.
+  a cap necessary, and a cap is a silent truncation unless it says so. — Answered
+  in code, not in design: the ring caps at 256 KiB and drops the oldest lines
+  without saying so (see "Output while the Windows screen is up").
 - **Scrolling the Logs screen.** History above the screen belongs to the terminal,
   not to the client, so the client can scroll only what it wrote, and only by
   printing it again — which is not a scroll. The wheel in Logs mode is a no-op

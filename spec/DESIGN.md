@@ -1,8 +1,8 @@
 # DESIGN — what tuigui is
 
 Status: partly built. This is the shape of the whole thing; what exists today is
-the transport and the session between its two ends. What each piece is, and
-whether it is built, is in [Where this stands](#where-this-stands).
+the transports, the session between the two ends, and the windowing around a
+captured program. What each piece is, and whether it is built, is in [Where this stands](#where-this-stands).
 
 ## Problem statement
 
@@ -22,7 +22,9 @@ grows a subsystem's worth of code per feature, it has become the thing it was
 meant to replace. Two hard requirements:
 
 - **Keep all code under 10,000 LoC** (all `.rs` in the repository, excluding
-  build output and vendored dependencies). A feature that does not fit is a
+  build output and vendored dependencies). As of 2026-11 there are ~9,430
+  (`tokei -e tests -e examples -e spec -e docs`) — the cap still holds, with no
+  headroom. A feature that does not fit is a
   design problem to solve, not budget to raise.
 - **Prefer deletion.** New capability comes first from removing or unifying
   what exists; growth is the exception that needs an argument.
@@ -70,8 +72,10 @@ A transport owns its connection and everything done over it; see
 [TRANSPORT.md](TRANSPORT.md) for why it is shaped that way and why a read waits
 rather than polls.
 
-Today there is exactly one, `UnixSocket`: both ends on one machine. The
-announcement and the handshake are in [CONNECT.md](CONNECT.md).
+Two transports exist: `UnixSocket` for one machine, and `P2p` (iroh/QUIC, ALPN
+`tuigui/1`) for two — the default for new sessions (`--channel` on the client,
+`Channel` in `gui`). The announcement and the handshake are in
+[CONNECT.md](CONNECT.md).
 
 The channel carries **frames as opaque bytes**. It does not know what a tile is,
 which is what lets the pixel layer change without the session changing.
@@ -102,8 +106,9 @@ frames, the server to put them on the screen.
 
 ### The compositor
 
-An in-process Wayland compositor on a headless backend, with **Xwayland** inside
-it so X11 applications run too. Both app kinds then reach the same path: a client
+An in-process Wayland compositor on a headless backend, with **Xwayland**
+inside it so X11 applications run too (wired; whether it is exercised is
+unverified). Both app kinds then reach the same path: a client
 surface, damage, pixels in our own address space.
 
 Owning it rather than shelling out deletes a process boundary and a protocol
@@ -143,43 +148,51 @@ and has no DCT in it.
 
 **Built**
 
-- the transport, the announcement, the handshake, and the session between the two
-  ends: a client draws its pane, announces itself, a server finds it and dials it,
-  and both ends know the link is live
+- the transports (`UnixSocket`, and `P2p` — iroh/QUIC, the default), the
+  announcement, the handshake, and the session between the two ends
 - `tui`: pty ownership, byte forwarding, the announcement scan, the server loop,
   and the one serialized writer to the screen
 - `gui`: argument handling, binding and announcing, answering the greeting, and
   the terminal surface it draws on
-- the frame path: `gui` decodes a clip with ffmpeg (or captures a program run in
-  `crates/compositor`), H.264-encodes it on the hardware codec (`--jpeg` for
-  JPEG), and `tui` transmits and places it as one
-  TGP image that the client's placeholder cells resolve against
-- `compositor`: an in-process headless Wayland session, one window, capture and
-  input injection. shm clients only; a dma-buf client captures black
+- the frame path: `gui` captures a program run in the compositor,
+  H.264-encodes frames on the hardware codec (`--jpeg` for JPEG), and `tui`
+  decodes and places one TGP image per window; the client's signature cells
+  anchor it
+- `compositor`: an in-process headless Wayland session, multi-window,
+  capture and input injection. shm clients only; a dma-buf client captures black
+- multi-window: popups placed at their positioner's offset, extra toplevels
+  admitted and placed, stacking by rank, per-window image ids derived from the
+  surface signature, and the dock — alternate screen, Logs/Windows tabs —
+  built and swapping at runtime
+- cell-signature anchoring: `wire::message::SurfaceId` on the frame, the
+  `vt100`-backed rewriter that blanks signature cells, and rank-based
+  `z` placement in the sub-text band
 - `tuigui`: both halves as one command
 - `easytgp`: the TGP encoding, exercised by its own examples
 
 **Not built**
 
 - **dma-buf capture.** The compositor reads `wl_shm` buffers, so a client that
-  renders through EGL (kitty, `weston-flower`) runs but captures as black. See
-  [COMP.md](COMP.md).
-- **pointer input.** Keys reach an app run in the compositor; motion, clicks and
-  scroll do not reach it from the terminal yet.
-- **any transport but a local socket.** The remote case needs a second one; see
-  [CONNECT.md](CONNECT.md). The shape of it is in [REMOTE.md](REMOTE.md) and
-  [SSH_SEAM.md](SSH_SEAM.md).
+  renders through EGL (kitty, `weston-flower`) runs but captures as black. No
+  dma-buf code exists in the tree; whether the shm-only capture still holds is
+  unverified. See [COMP.md](COMP.md).
+- **pointer input, end to end.** Keys and pointer events reach an app run in
+  the compositor (`gui` decodes them; `--dbg-no-mouse` disables reporting),
+  but end-to-end verification against a real terminal is unverified.
+- **an ssh transport.** `p2p` covers the two-machine case without one; the
+  ssh seam ([SSH_SEAM.md](SSH_SEAM.md)) is unbuilt. See [CONNECT.md](CONNECT.md).
+- **detached windows** (detach modes 2 and 3 of [MULTIWINDOW.md](MULTIWINDOW.md)).
 
 ## Related
 
 | | |
 |---|---|
 | [COMP.md](COMP.md) | the compositor, with Xwayland. Built. |
-| [MULTIWINDOW.md](MULTIWINDOW.md) | who holds a window (compositor: registry; `gui`: layout) and why the compositor does not flatten. Decided, nothing built. |
+| [MULTIWINDOW.md](MULTIWINDOW.md) | who holds a window (compositor: registry; `gui`: layout) and why the compositor does not flatten. Decided; substantially built. |
 | [DIRECTION.md](DIRECTION.md) | wrapping the terminal instead of the muxer, evaluated and rejected; detach mode and the terminal-coverage ladder survive it. |
 | [SHARE.md](SHARE.md) | a `shared` transport: dial out to our relay, get a URL, view in any browser. Escape hatch and standalone sharing feature. An idea. |
 | [DEVSHARE.md](DEVSHARE.md) | the IDE slice of sharing: the run button launching a detached `gui`, and a coworker taking the wheel over a link. An idea. |
-| [REMOTE.md](REMOTE.md) | the app on another machine from the terminal. Planned. |
+| [REMOTE.md](REMOTE.md) | the app on another machine from the terminal. Transport built (p2p); the muxer-wrapping half is not. |
 | [SSH_SEAM.md](SSH_SEAM.md) | attaching a forward to an ssh we do not own, for that. Planned. |
 | [REVERSE_SSH.md](REVERSE_SSH.md) | the pane ssh-ing back to the user, instead. An idea. |
 | [EMULATOR.md](EMULATOR.md) | a terminal that accepts a compressed stream. An idea to hand to a terminal, not a plan here. |

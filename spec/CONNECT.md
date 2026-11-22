@@ -1,7 +1,8 @@
 # CONNECT — how the two ends find each other
 
-Status: **built** for one machine. The remote case is unbuilt and needs a second
-transport; see [TRANSPORT.md](TRANSPORT.md) for the channel itself.
+Status: **built** — on one machine, and across machines via the p2p channel.
+The announcement, handshake and provenance story is unchanged; the missing
+pice it waited on is [TRANSPORT.md](TRANSPORT.md)'s second transport.
 
 ## The idea
 
@@ -73,9 +74,15 @@ in the pane. Nothing has to be provisioned and nothing survives a crash.
 
 ## Across machines
 
-Unbuilt. The announcement travels fine, since a pane's output crosses ssh like
-any other text; what is missing is a channel on the far side to dial. Two
-proposals for it, and neither is built:
+Built, and the default. The announcement travels fine, since a pane's output
+crosses ssh like any other text — `p2p : <ticket>` is announced by the client
+and the server dials it, with no session setup beyond starting both halves.
+`tui! ssh host gui! foot` is the shape it enables (README). The two ends do
+not need a shared network beyond what iroh's NAT traversal can punch through,
+and the `--channel unix` flag opts back down to one machine.
+
+The two proposals below remain, for networks where a direct iroh path cannot
+be established or policy forbids it:
 
 - **[SSH_SEAM.md](SSH_SEAM.md)** — arrange a port forward on the ssh that
   started the session. It reaches the terminal side through the connection that
@@ -84,13 +91,16 @@ proposals for it, and neither is built:
   and ssh's back to the user's machine. Nothing to arrange, and it depends on
   the user's machine being reachable from the pane.
 
-Two things make the remote case different from the local one, and both are open:
+Two things made the remote case different from the local one, and where they
+landed:
 
-- **A second transport would bring ranking back.** Today there is exactly one
-  channel, so nothing has to choose. Either proposal above is the second member.
-- **The address would be stable.** The scan remembers addresses so a redraw is
-  not a second client, and never forgets them, which is right for a per-pid
-  socket path and wrong for a stable remote one.
+- **A second transport brought the question of ranking.** It did not bring
+  ranking: with p2p built, the choice is still the user's, made with
+  `--channel`; there is no ranking to design.
+- **The address is stable.** A p2p ticket names one endpoint until it is
+  re-announced, so the scan's "one sighting per address, forever" rule — right
+  for a per-pid socket path — also covers a fixed endpoint: a re-announcing
+  client with the same endpoint is one client, not many.
 
 ## Open problem: pane provenance
 

@@ -1,7 +1,10 @@
 # README — the crate credits panel
 
-Status: built. This is the shape of the "Built on excellent crates" block in
-[README.md](../README.md), and the constraints that force it.
+Status: built, in a smaller form. What shipped in
+[README.md](../README.md) is one row of shields.io badges — one line per crate,
+small logo, the name and description inside the badge text. The two-row,
+big-logo layout below is still the unmet ideal; the constraint analysis further
+down is why it stayed that way.
 
 ## What it looks like
 

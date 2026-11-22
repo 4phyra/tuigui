@@ -1,5 +1,7 @@
 # easytgp — Settled Architecture (session decisions, 2026-10-08)
 
+Historical working notes for `easytgp`; the "Next steps" list at the bottom is long done, and line-number citations from other documents refer to sections, not lines.
+
 This is the design contract for the crate. Everything here was argued to
 settlement; implement it, don't redesign it. When in doubt, this file wins
 over code comments.
@@ -115,9 +117,9 @@ cannot be relied on.
   app serializes ops through one task.
 - Router thread: blocking read on pty = kernel-descheduled until bytes
   (park/free). Canonical mode HOLDS replies until newline — termios raw-ish
-  mode (ICANON/ECHO off) MUST be set before spawning router (the commented
-  block at lib.rs:38-46 is the fix; put it in `ReplyRouter::start`, not in
-  the lazy slab init).
+  mode (ICANON/ECHO off) MUST be set before spawning router (`take_terminal_raw`
+  in `easytgp`'s lib.rs, called by `Controller::init_with_sink`, is the fix; it
+  used to live in the lazy slab init).
 - `map_while(Result::ok)` on stdin bytes kills the router on any transient
   read error — replace with explicit error handling.
 - Chunked load = critical section (LOCK) + kitty's single `currently_loading`

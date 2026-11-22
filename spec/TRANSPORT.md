@@ -1,6 +1,9 @@
 # TRANSPORT — the channel between a client and a server
 
-Status: **built**. `crates/wire/src/{transport,unix}.rs`.
+Status: **built**, twice. `crates/wire/src/{transport,unix,p2p}.rs`:
+`UnixSocket` for one machine, and `P2p` — an iroh/QUIC endpoint that works
+across machines. Selection is per session, on the client: `--channel` (the
+`Channel` enum in `crates/gui/src/lib.rs`, `unix` or `p2p`, default `p2p`).
 
 ## The shape
 
@@ -75,14 +78,10 @@ reason it cannot — never a link that is up but unproven.
 
 `Message` is what the two ends say, and it is not a transport concern:
 
-```rust
-pub enum Message {
-    Ping(String),   // server → client: the link is up, here is who you are talking to
-    Pong,           // client → server: I got it
-    Frame(Vec<u8>), // pixels, opaque here
-    Error(String),  // something failed
-}
-```
+`Message` is what the two ends say — `OpenWindow`, `Frame`, `WindowCreated`,
+`CloseWindow`, `CompositorRequest`, and the greeting — and it is not a
+transport concern; it is defined in `crates/wire/src/message.rs` and simply
+carried opaquely here.
 
 Framing is `Framing`: bytes in, whole messages out. A stream has no message
 boundaries, so each message is a one-byte tag and a body behind a 4-byte
@@ -96,10 +95,13 @@ A client cannot be dialed before the server knows a channel to dial, so it says
 so in the one place the other end is already looking: its own output.
 
 ```text
-   unix : /run/user/1000/tuigui.sock
+   unix : /run/user/1000/tuigui.sock     # the local channel
+   p2p : <ticket>                        # the QUIC channel
 ```
 
-Plain text, one line, written into the pane.
+Plain text, one line, written into the pane. The scan accepts either, via
+`crates/wire/src/transport.rs`'s `names()`; the ticket is a base32 string, so it
+survives the same scan a socket path does.
 
 **Not an escape sequence**, which is what it was first. A multiplexer is a
 terminal emulator as well as a relay: it parses a pane's output into a grid of
@@ -129,11 +131,14 @@ it out again. The same client seen twice is one client.
   ran, cleaned up after a crash, and kept in step with live processes; a stale one
   made a client dial a socket nobody was listening on. Announcing in band needs
   nothing provisioned and cannot go stale.
-- **A transport ranking or `Plan`.** There is one transport. Ranking, capability
-  comparison and fallback are for a set, and inventing the machinery before the
-  second member exists is how it ends up shaped around the first.
-- **The p2p protocol.** It was the frame encoding from an earlier design, with no
-  callers left.
+- **A transport ranking or `Plan`.** Ranking and capability comparison exist
+  for a set of interchangeable candidates, and this is not one: the two
+  transports are not interchangeable, and the choice between them is the
+  user's, made with `--channel` on the client. There is no machinery to rank
+  them, deliberately.
+- **The p2p frame encoding.** The old crate-internal p2p *framing* from the
+  first design is gone; what exists now is `P2p` (`crates/wire/src/p2p.rs`): an
+  iroh endpoint per side, ALPN `tuigui/1`, announced as a ticket.
 
 ## Files
 
@@ -141,10 +146,12 @@ it out again. The same client seen twice is one client.
 crates/wire/src/
   message.rs     Message, and its encoding
   transport.rs   Transport, Connection, Framing, the announcement format
-  unix.rs        UnixSocket — the one transport
+  unix.rs        UnixSocket — one machine
+  p2p.rs         P2p — QUIC via iroh, announced as a ticket
+  drain.rs       drain whatever a reader holds right now
 crates/tui/src/
   bytes.rs       the pty's output, fanned out to readers
-  announce.rs    the scan
+  proxy/scanner.rs  the scan (shares the cell grid with the rewriter)
   server.rs      one loop: the announcement, and every attached client
 crates/gui/src/
   lib.rs         bind, announce, accept, draw
@@ -152,13 +159,17 @@ crates/gui/src/
 
 ## Open questions
 
-1. **A second transport.** ssh is the candidate: one connection multiplexing
-   several clients, which is the case the routing in `Transport` exists for and
-   nothing exercises yet. Ranking comes back with it, and only then.
+1. **A ranking of the two transports.** Not wanted: the choice is `--channel`
+   on the client, not something the code arbitrates. A third transport would
+   face the same question, and the answer would still be the user's flag until
+   one channel is clearly better everywhere. ssh remains unbuilt; see
+   [SSH_SEAM.md](SSH_SEAM.md) and [REVERSE_SSH.md](REVERSE_SSH.md).
 2. **One sighting per address, forever.** The scan remembers addresses so a
-   redraw is not a second client, and never forgets them. A client that dies and
-   returns at the same path is therefore not re-dialed. Correct for unix, where
-   the path is per-pid; wrong for a transport with a stable address.
+   redraw is not a second client, and never forgets them. Correct for the
+   per-pid unix socket path; wrong for the p2p ticket, which is stable for the
+   endpoint's lifetime — a client that is gone and comes back with a fresh
+   endpoint ticket is fine, but re-announcing the same ticket would not be
+   re-dialed.
 3. **Pane provenance.** A pty has one master fd and a multiplexer puts every pane
    on it, so an announcement arrives with no indication of which pane wrote it.
    This is fine for one client and breaks for several; the fix needs the client

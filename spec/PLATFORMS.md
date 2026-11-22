@@ -1,7 +1,7 @@
 # PLATFORMS — same client/window tree on every OS, Wayland is only the Linux backend
 
-Status: decided (2026-10-22). Cross-platform plan, nothing built yet; the macOS
-half starts after the wayland rework compiles green.
+Status: decided (2026-10-22). Cross-platform plan; the Wayland half has landed
+(`crates/wayland`, `crates/compositor`), the macOS half is still unbuilt.
 
 ## Why this file exists
 

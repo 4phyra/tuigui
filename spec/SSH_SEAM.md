@@ -131,10 +131,11 @@ directory in `PATH`. No hardcoded paths.
 ## When this is not available
 
 If the ssh cannot be shimmed — it is absolute rather than looked up by name, or
-the directory cannot be prepended — the transport is simply not offered. The
-`Plan` skips a transport the server did not advertise, so a session with no
-tunnel falls back to the local socket, which is correct for a same-machine
-session and honest for a remote one.
+the directory cannot be prepended — the transport is simply not offered. There
+is no ranking or `Plan` in the code: the transport is chosen by the client's
+`--channel` flag (`Channel` in `crates/gui/src/lib.rs`), so a session with no
+tunnel runs `--channel unix`, which is correct for a same-machine session and
+honest about being local.
 
 ## Open questions
 

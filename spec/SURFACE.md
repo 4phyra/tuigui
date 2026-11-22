@@ -1,9 +1,16 @@
 # SURFACE — anchoring images by a cell signature, not by unicode placeholders
 
-Status: plan. Nothing built.
+Status: built, mostly as designed. The placeholder mechanism it replaced is
+gone. The replacement is
+`crates/cell_map` (the byte-walking cell map), `crates/tui/src/proxy/filter.rs`
+(blanking a window's cells on their way to the screen) and
+`crates/tui/src/proxy/scanner.rs` (finding a surface's rectangle on the grid).
+`SurfaceId` travels in `wire::message`; each window's image id is derived from
+it (`tui::session::image_id`), not allocated.
 
-This replaces the placeholder mechanism in `crates/tui/src/placeholder.rs` and the
-byte-stream proxy in `crates/tui/src/proxy.rs`.
+One place the build diverges from the letter of this document: the emitted
+stream is the child's own bytes with the signature cells blanked in place, not a
+re-rendered screen — see "How the proxy changes".
 
 ## Why
 
@@ -48,16 +55,31 @@ The signature is decided by the client's compositor (it is the side that admits
 windows) and sent up the link with the window:
 
 ```text
-  Message::WindowCreated { id, client, size, surface: SurfaceId }
+  Message::OpenWindow   { surface: SurfaceId, codec: CodecId }   // client → server
+  Message::Frame        { surface: SurfaceId, z, cols, rows, bytes }
+  Message::WindowCreated { surface: SurfaceId }                  // server → client
 ```
 
-The server records it on its window record. Nothing else about placement is
+The server records the signature on its window record. Nothing else about placement is
 negotiated: the server finds the cells, the server places the image.
 
 ### How the proxy changes
 
-Today the proxy forwards the command's bytes and rewrites them on the way out,
-which means it never holds a picture of the screen. That is what has to change.
+The proxy rewrites the command's bytes on the way out. As built, it holds a
+`vt100` grid as a *colour reference* for the cells — never as the thing it
+emits: `cell_map::CellMap` walks the byte stream, copies every escape sequence
+through untouched, and rewrites the cells whose `(symbol, fg, bg)` is a
+registered `SurfaceId` into a blank cell on the default background
+(`crates/tui/src/proxy/filter.rs`). The signature — not a rectangle, not a
+placeholder — is what ties a cell to a window.
+
+The rest of this section is the design as written. Where the build diverges,
+the bullet list below says so: there is no cell-by-cell writer and no
+diff-against-last-frame — the emission *is* the child's byte stream with
+signature cells swapped out, so "the strip happens only in the emitted copy"
+survives, but everything else about re-rendering does not. The `vt100` parser
+survives as the colour and geometry reference that makes a signature
+recognisable at a cell.
 
 **The model is `vt100`, not ratatui.** `vt100::Parser` is a real terminal state
 machine: `process(&[u8])` consumes arbitrary bytes and maintains a screen grid,
@@ -91,15 +113,13 @@ So `&mut Screen` exists but no cell can be written through it. And `Parser: Writ
 is the wrong direction: `write()` feeds bytes *into* the model and `flush()` is
 `Ok(())` — it is an input sink, not an escape emitter.
 
-- per frame, the session borrows `&Screen`, walks the grid, records each
-  `SurfaceId`'s rectangle, and places the images,
-- the emission is **ours**, cell by cell: `MoveTo(col, row)` plus the cell's SGR
-  and its text, with the signature cells written as a blank cell in the pane's
-  background. Every getter it needs is public; the writer is the only thing we own.
-- the diff is against **what we last emitted**, not against the model. `previous`
-  is a second `Parser`/`Screen` pair advanced by feeding it our own rendered bytes,
-  so a skipped cell is a cell that stayed blank in `previous` too and is therefore
-  not re-emitted every frame.
+- per frame, the session reads its grid and records each `SurfaceId`'s
+  rectangle (`crates/tui/src/proxy/scanner.rs`), and places the images there,
+- **as built**: the emission is the child's bytes with the signature cells
+  blanked, and nothing else — escape sequences are copied through verbatim.
+  The cell-by-cell re-emission and the diff against the last emitted frame
+  described here were not built: with the cells blanked in the byte stream
+  itself, there is nothing left to subtract.
 
 `contents_diff`/`contents_formatted` are still useful as the fallback for a single
 frame that must resynchronise in full (the passthrough case below), but they cannot
@@ -110,6 +130,10 @@ Cost of the alternative: stripping *in* the model needs `Cell::set` and
 crate to a patched dependency. Not worth it for a writer we need anyway.
 
 ### Passthrough
+
+(As designed; not how the built rewriter behaves — it forwards every byte
+class verbatim and wraps nothing, so there is no modelled span to consume and
+no repaint path. Kept for the argument about `unhandled_*` and queries.)
 
 `vt100` models almost everything, but not everything, and what it does not model
 it reports rather than silently dropping: `Callbacks::unhandled_char`,
@@ -162,9 +186,9 @@ to the placement path.
 
 ## What this removes
 
-- `crates/tui/src/placeholder.rs` and its cursor-tracking rewrite, in full.
-- The per-cell diacritic encoding, and with it the dependence on a terminal
-  supporting unicode placeholders.
+- The cursor-tracking rewrite of the output stream, and with it the per-cell
+  diacritic encoding and the dependence on a terminal supporting unicode
+  placeholders.
 - The virtual placement (`U=1`): a placement with a real position makes the
   anchor the cells' own rectangle, which is what the signature already gives.
 - The client's `❋` fill as a protocol: a window fills its cells with its
@@ -179,6 +203,8 @@ to the placement path.
   `Screen` to the session, write what comes back.
 
 ## Open questions
+
+All of these are still open as of 2026-11, except as noted:
 
 - **Occlusion.** A window whose cells are partly covered by another window yields
   a bounding box that also covers the covering content. Placing an image in that
@@ -202,6 +228,12 @@ to the placement path.
   variants in the search, is the mitigation.
 
 ## Z-order: answered
+
+Built: `stacking()` in `crates/tui/src/session.rs` shifts the rank the gui
+sends on each `Frame` (0 = furthest) into `INT32_MIN..=INT32_MIN/2 - 1`,
+saturating, so every window sits in the sub-background band and the gui's
+stacking is the only order. The rest of this section is the argument for that
+choice.
 
 The protocol gives the headroom, and the answer is in
 `docs/kitty-graphics-protocol.rst:554-562`:

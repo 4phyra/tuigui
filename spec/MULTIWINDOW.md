@@ -1,7 +1,10 @@
 # MULTIWINDOW — who holds a window, and who draws it
 
-Status: decided. Nothing built. This records the split between the compositor and
-`gui` for more than one window, and why the compositor does not flatten.
+Status: decided and substantially built. The split below is the one in the code
+(`crates/compositor`, `crates/wayland`, `crates/gui`): windows arrive from the
+client, are placed in pane cells by the compositor, stack by rank, and reach the
+terminal as rank-ordered placements. Popups and multiple toplevels are placed;
+detach modes 2 and 3 are not built.
 
 ## The decision
 
@@ -19,8 +22,8 @@ The compositor **hands windows up**; it does not composite them into one picture
 
 Flatten means detach needs a per-window path beside the composite path. Both must
 decide what a window *is* and where it *is*, over the same surfaces, and stay in
-step. That is the permanent version of the coordinate-drift bug already seen at
-`crates/compositor/src/state.rs:436`: a fact derived twice, reconciled by hand.
+step. That is the permanent version of the coordinate-drift bug seen in the
+first windowing code: a fact derived twice, reconciled by hand.
 
 The split that makes hand-up clean is that registry and layout are *different
 facts*, so one on each side is not duplication. Flatten-plus-detach duplicates
@@ -48,32 +51,43 @@ a client its configure. Single owner, one direction. There is no second derivati
 because the compositor never computes a placement: it receives the current one and
 uses it.
 
-## What is wrong today
+## What was wrong when this was written, and what is true now
 
-The split above describes nothing that exists. Today the compositor is worse than
-flattening; it has no scene at all:
+Fixed since this was written:
 
-- any child surface of the admitted window is copied into the window's pixel store
-  **at the origin**, so a subsurface or popup stomps the main buffer instead of
-  sitting at its offset (`state.rs:174`),
-- a second `xdg_toplevel` is rejected outright (`state.rs:248`),
-- a popup is dismissed on sight, so no menu or dropdown can open (`state.rs:296`).
+- a child surface copied into the window's pixel store at the origin — children
+  are placed now: popups at their positioner's offset inside their parent
+  (`crates/compositor/src/lib.rs`), extra toplevels admitted into the root
+  client's tree and placed as siblings (`crates/wayland/src/handlers/xdg_shell.rs`,
+  `admit_into_root_client`),
+- a second `xdg_toplevel` rejected outright — admitted, and centred in the pane,
+- a popup dismissed on sight — popups are configured, admitted, and placed.
 
-So popups are the first real requirement — they are the common case — and a second
-toplevel is the workspace case.
+Still true:
+
+- a subsurface of a window is not placed at all: its buffer is dropped rather
+  than composited (`crates/wayland/src/window.rs`, `commit_target`), so a window's
+  picture is its own surface only. A subsurface that must become visible is an
+  open problem, not a solved one.
 
 ## Wire
 
-The registry must be visible to `gui`, so the wire carries a **window id** in both
-directions:
+The registry is visible to `gui`, so the wire carries a **surface signature** in
+both directions:
 
-- up with each surface: id, parent id, kind, pixels;
-- down with input: which window the event targets.
+- up with each window: one `SurfaceId` (`OpenWindow` / `CloseWindow`, and on every
+  `Frame` with the box in cells and a stacking rank); pixels stay opaque, so
+  `easytgp` is unaffected — see `crates/wire/src/message.rs`,
+- down with input: which window an event targets. The compositor lives in the
+  same process as the routing (`crates/compositor` inside `gui`), so this does
+  not cross the wire today; `CompositorRequest` on the wire is the seam for when
+  a remote compositor needs it.
 
-Pixels stay opaque, so `easytgp` is unaffected. The per-terminal image id is the
-part that is not finished: `IMAGE_ID` is a fixed 99
-(`crates/tui/src/session.rs:31`) and two panes already collide, so ids must be
-allocated per window per session.
+Image ids are not fixed and are not negotiated: each window's id is derived from
+its `SurfaceId` by `tui::session::image_id` (`crates/tui/src/session.rs`), so two
+windows never collide and both ends agree without a round trip. The rank that
+orders placements rides on each `Frame` as `z`, shifted into the kitty
+sub-text band by `stacking` in the same file.
 
 ## Detach
 

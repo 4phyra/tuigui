@@ -1,6 +1,14 @@
 # REMOTE — streaming a remote GUI into the local terminal through a peer tunnel
 
-Status: proposal (design only, nothing built).
+Status: partially built. The transport half exists: `p2p` (iroh/QUIC) is the
+default channel (`--channel`, `Channel::P2p` in `crates/gui/src/lib.rs`), and
+the frame pipeline runs for local sessions. What this document describes — a
+remote computer's window streamed through a peer tunnel built around an
+existing muxer — is unbuilt, and the herdr-wrapping half is moot until the ssh
+seam ([SSH_SEAM.md](SSH_SEAM.md)) exists, since p2p already provides the
+cross-machine path without it. Not built and unverified: drop-on-late frame
+delivery (the transport is a single bidirectional stream, not datagrams), AV1,
+and the whole wrapper.
 
 ## Problem
 
@@ -106,12 +114,15 @@ frame switch is strictly cheaper and atomic, so it is the default.
 
 1. **Compositor** (remote): headless head, one client surface, damage-driven
    capture. This is the `spec/DESIGN.md` pipeline; nothing here changes it.
-2. **Encode** (remote): hardware-accelerated H.264/AV1 (VAAPI/NVENC/VideoToolbox)
-   so the remote's CPU stays free for the app. Encode is per-frame and
+2. **Encode** (remote): hardware-accelerated H.264 (the built codec is
+   `crates/codecs/src/hw.rs`; JPEG exists as the other option) so the remote's CPU stays free for the app. Encode is per-frame and
    rate-limited by the tunnel's send budget, not by the app's redraw rate.
 3. **Tunnel** (both): peer QUIC, separate streams for frames and control.
-   Frames use **drop-on-late** semantics: a superseded frame is discarded, never
-   queued behind a newer one. This is a *datagram* concern, not a stream concern.
+   Frames are meant to use **drop-on-late** semantics: a superseded frame is discarded, never
+   queued behind a newer one. As built, `P2p`
+   (`crates/wire/src/p2p.rs`) is one bidirectional stream per session; there is
+   no datagram path and no drop-on-late machinery — whether anything in the
+   pipeline drops a superseded frame is unverified.
 4. **Decode** (local): hardware-accelerated, into a local buffer, then staged
    into the `/dev/shm` object the TGP transmit reads. This is the existing
    `ShmFrame` path in `easytgp` (`crates/easytgp/src/lib.rs`), the same one the
@@ -135,8 +146,9 @@ Being a terminal toward herdr is not a pipe. Four jobs:
    component.
 2. **Demux kitty's input.** The server's own TGP replies and herdr's keystrokes
    arrive on the same fd. The server must consume its replies and forward only
-   keys/mouse to herdr. This is the single-reader split from
-   `docs/DESIGN.md:129-130`, and getting it wrong looks like dropped keys.
+   keys/mouse to herdr. This is the single-reader split from the *Runtime
+   invariants* section of `docs/DESIGN.md`, and getting it wrong looks like
+   dropped keys.
 3. **Serialize the output fd.** herdr→kitty bytes and the server's own escapes
    share one writer. An escape must land between herdr's writes, never inside
    one. One writer thread, FIFO, bounded queue.
@@ -167,18 +179,21 @@ used to sketch. What matters here is only that a transport owns its connection
 and carries **opaque bytes**, so a remote one is a second implementation of the
 same trait and nothing above it changes.
 
-Two candidates, and neither is built:
+Two candidates. One is built:
 
-- **SSH forwarding** is the right first one: the channel is already authenticated
+- **iroh** (QUIC, NAT traversal, encryption) is built and is the default
+  channel: `crates/wire/src/p2p.rs`, ALPN `tuigui/1`, announced as a ticket
+  (`p2p : <ticket>`), chosen with `--channel p2p`. It is a new egress, which
+  remains a policy question before it is a technical one.
+- **SSH forwarding** is still unbuilt: the channel is already authenticated
   and already pierced when you are sitting in a shell on the far side, and the
   work is a forward rather than a protocol. [SSH_SEAM.md](SSH_SEAM.md) is the
-  problem of attaching it to an ssh we do not own.
-- **iroh** (QUIC, NAT traversal, relay fallback, encryption) is the right one when
-  the two machines are true peers with no existing trusted channel, and it gives
-  datagram drop-on-late for free. It is a new egress, which is a policy question
-  before it is a technical one.
+  problem of attaching it to an ssh we do not own. Until it exists, the
+  wrapper design above has nothing to run on top of — p2p needs no wrapper,
+  because no muxer is in the path.
 
-Localhost needs neither: the socket transport covers both ends on one machine.
+Localhost needs neither: the unix socket transport covers both ends on one
+machine.
 
 Whatever is chosen must not assume shared memory crosses it. `t=s` names a
 `/dev/shm` object, which is only meaningful when the terminal is local, so
@@ -208,10 +223,11 @@ anything that needs an shm object or a local fd lives on the side that has one.
   server already owns the outer fd, so it can position the image anywhere.
 - **Quota.** Animation frames live under a separate terminal quota
   (`:1000`, kitty ~5× the base storage). The server must rotate frames and treat
-  `ENOSPC` as `ResourcePressure` (`docs/DESIGN.md:95-97`), shedding and retrying.
+  `ENOSPC` as `ResourcePressure` (the error-taxonomy section of
+  `docs/DESIGN.md`), shedding and retrying.
 - **`q=2` has no verdict.** A suppressed reply cannot confirm the transmit
   landed, so any ordering guarantee must come from an explicit ack or from
-  FIFO, per `docs/DESIGN.md:42-45`.
+  FIFO, per the `q=` rules in the ack-attribution section of `docs/DESIGN.md`.
 
 ## Milestones
 
@@ -223,6 +239,6 @@ anything that needs an shm object or a local fd lives on the side that has one.
 3. **Local display loop.** Feed the video example's `--shm` path from a canned
    frame source, driven by the animation protocol instead of image-per-frame.
    Success = flicker-free in-place playback.
-4. **Tunnel.** SSH/localhost first, then iroh behind the `Transport` trait.
+4. **Tunnel.** Done for p2p (default channel). SSH remains unbuilt.
 5. **End to end.** Remote compositor + encode, local decode + present, resize
    and re-negotiation, drop-on-late under load.
