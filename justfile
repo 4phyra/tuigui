@@ -1,9 +1,8 @@
 # Build and run the three binaries.
 #
-# The recipes exist because the invocations are long and fixed: a target directory that must
-# be `./target` (a different one invalidates every fingerprint and rebuilds the TLS stack), a
-# package to build, the feature to build it with, and a binary to run. Spelling that out each
-# time is where it goes wrong.
+# The recipes exist because the invocations are long and fixed: a package to build,
+# the feature to build it with, and a binary to run. Spelling that out each time is
+# where it goes wrong.
 #
 # Run inside the dev shell (`nix develop`), which is where cargo and the system libraries it
 # links against come from.
@@ -12,7 +11,6 @@
 # is one line the reader already knows, and a run should start with the program's own output
 # rather than with the command that started it.
 
-target := "./target"
 
 # The profiler's client, linked into every build these recipes make.
 #
@@ -24,11 +22,11 @@ tracy := "--features=tracy"
 
 # Build the server around a command, then run it in this terminal.
 #
-# The command is what the server puts on a pty, so `just tui ./target/release/gui` runs the
-# client inside the server — which is the usual shape, since the client announces itself in
-# the pane's output and the server is what reads it.
+# The command is what the server puts on a pty, so `just tui "$CARGO_TARGET_DIR/release/gui"`
+# runs the client inside the server — which is the usual shape, since the client announces
+# itself in the pane's output and the server is what reads it.
 tui *command:
-    @CARGO_TARGET_DIR={{target}} cargo run --release -p tui --bin tui {{tracy}} -- {{command}}
+    @cargo run --release -p tui --bin tui {{tracy}} -- {{command}}
 
 # Build and run the client.
 #
@@ -36,12 +34,12 @@ tui *command:
 # server is reading the pane it draws in. `just tui` with this as the command is the usual
 # way to start it.
 gui *args:
-    @CARGO_TARGET_DIR={{target}} cargo run --release -p gui --bin gui {{tracy}} -- {{args}}
+    @cargo run --release -p gui --bin gui {{tracy}} -- {{args}}
 
 # Build and run both halves as one command: the server owns this terminal, and the client
 # runs inside the pty it creates.
 tuigui *args:
-    @CARGO_TARGET_DIR={{target}} cargo run --release -p tuigui --bin tuigui {{tracy}} -- {{args}}
+    @cargo run --release -p tuigui --bin tuigui {{tracy}} -- {{args}}
 
 lines:
     tokei -e tests -e examples -e spec -e docs
@@ -51,7 +49,7 @@ lines:
 # and the resizing. No profiler here, because there is no session under it to profile, and
 # `q` or `Esc` ends it.
 dummy:
-    @CARGO_TARGET_DIR={{target}} cargo run --release -p compositor --example dummy
+    @cargo run --release -p compositor --example dummy
 
 # Draw every widget in `tuigui_components` and press them.
 #
@@ -60,7 +58,7 @@ dummy:
 # dispatch, where one frame's events are offered to each widget in draw order, and the tab strip's
 # move from one tab to the next.
 gallery:
-    @CARGO_TARGET_DIR={{target}} cargo run -p tuigui_components --bin gallery
+    @cargo run -p tuigui_components --bin gallery
 
 # Run the tests. Screens that changed are queued, not printed.
 #
@@ -70,8 +68,8 @@ gallery:
 # snapshot was stored is the whole report, and `just test-review` is where they
 # are looked at.
 test *args:
-    @CARGO_TARGET_DIR={{target}} cargo build -p tuigui_components --examples
-    @INSTA_OUTPUT=none CARGO_TARGET_DIR={{target}} cargo insta test --test-runner nextest --workspace --tests {{args}}
+    @cargo build -p tuigui_components --examples
+    @INSTA_OUTPUT=none cargo insta test --test-runner nextest --workspace --tests {{args}}
 
 # Run the frame-backpressure test: the client loop driven over a throttled in-memory
 # link, asserting every frame the client sends arrives intact.
@@ -79,7 +77,7 @@ test *args:
 # Needs the `test-windowing` feature, which swaps the wayland session for a scripted one —
 # running the rest of the suite under it would run binaries that expect the real one.
 test-frame:
-    @CARGO_TARGET_DIR={{target}} cargo nextest run -p gui --features test-windowing -E 'test(frame_backpressure)'
+    @cargo nextest run -p gui --features test-windowing -E 'test(frame_backpressure)'
 
 # Look at the screens a run left behind: accept, reject, or skip each one.
 #
