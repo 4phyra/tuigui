@@ -228,16 +228,16 @@ pub trait Transport: Send + Sync {
 
     /// Where this transport is reachable, as the text that goes in an announcement.
     ///
-    /// `None` means it cannot be announced, which makes it unreachable: a channel nothing
-    /// can find is a channel with no peer.
-    fn address(&self) -> Option<String>;
+    /// Always something: a transport that cannot name a place a peer can reach is not a
+    /// transport anyone can be announced to, so the answer is part of being built.
+    fn address(&self) -> String;
 
     /// The announcement this transport writes so a peer can find it.
     ///
     /// The transport's own, both halves: it builds the text and reads one back with
     /// [`Transport::from_magic`]. Nothing outside looks inside.
-    fn to_magic(&self) -> Option<String> {
-        self.address().map(|address| announcement(self.name(), &address))
+    fn to_magic(&self) -> String {
+        announcement(self.name(), &self.address())
     }
 
     /// The transport a peer's announcement describes, if it is one of ours.

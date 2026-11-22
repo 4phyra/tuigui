@@ -137,8 +137,9 @@ impl Transport for Throttled {
         ))
     }
 
-    fn address(&self) -> Option<String> {
-        None
+    fn address(&self) -> String {
+        // Never announced — links from `Throttle::pair` are passed directly, never scanned for.
+        "throttled".to_owned()
     }
 
     fn from_magic(_name: &str, _address: &str) -> Option<Self>

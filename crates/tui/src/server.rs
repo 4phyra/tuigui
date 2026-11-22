@@ -75,6 +75,10 @@ impl Server {
         // delay another's frames. `JoinSet` rather than a set of futures: a spawned task is
         // scheduled by the runtime instead of being polled in turn here.
         let mut attached = tokio::task::JoinSet::new();
+        // Dials in flight, keyed by the announcement that started them. The barcode is a standing
+        // mark offered on every chunk; without this a single client is dialed as often as it is
+        // scanned until the dial is answered or the process dies.
+        let in_flight = Arc::new(std::sync::RwLock::new(std::collections::HashSet::new()));
 
         loop {
             tokio::select! {
@@ -83,30 +87,47 @@ impl Server {
                     // another machine's time, and the attached clients have to keep being read
                     // while it happens.
                     Some(transport) => {
+                        let magic = transport.to_magic();
+                        if in_flight
+                            .write()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .insert(magic.clone())
+                        {
                         let (debug, controller) = (self.debug.clone(), self.controller.clone());
                         let anchors = self.anchors.clone();
+                        let in_flight = in_flight.clone();
                         attached.spawn(async move {
-                            let connection = match transport.connect().await {
-                                Ok(connection) => connection,
-                                // Reported rather than fatal: the announcement is still on the
-                                // screen, so the next chunk offers the same client again, and
-                                // failing to reach one that is still starting is the ordinary case.
-                                //
-                                // Through `log`, not `tracing`: a tracing event only reaches the
-                                // file capturer when no subscriber is installed, and the profiler
-                                // build installs one — a failed dial would leave no trace at all.
-                                Err(e) => {
-                                    log::warn!("could not reach an announced client: {e}");
-                                    return;
+                            async {
+                                let connection = match transport.connect().await {
+                                    Ok(connection) => connection,
+                                    // Reported rather than fatal: the announcement is still on the
+                                    // screen, so the next chunk offers the same client again, and
+                                    // failing to reach one that is still starting is the ordinary case.
+                                    //
+                                    // Through `log`, not `tracing`: a tracing event only reaches the
+                                    // file capturer when no subscriber is installed, and the profiler
+                                    // build installs one — a failed dial would leave no trace at all.
+                                    Err(e) => {
+                                        log::warn!("could not reach an announced client: {e}");
+                                        return;
+                                    }
+                                };
+                                let session = Session::<F>::new(connection, debug, controller);
+                                // A link that failed is nothing this loop can recover from, and a pane
+                                // that keeps drawing over it hides the failure.
+                                if let Err(e) = session.run(anchors).await {
+                                    log::error!("a client's session ended: {e}");
                                 }
-                            };
-                            let session = Session::<F>::new(connection, debug, controller);
-                            // A link that failed is nothing this loop can recover from, and a pane
-                            // that keeps drawing over it hides the failure.
-                            if let Err(e) = session.run(anchors).await {
-                                log::error!("a client's session ended: {e}");
                             }
+                            .await;
+                            // The dial is over, whatever its outcome: the announcement may be dialed
+                            // again.
+                            in_flight
+                                .write()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .remove(&magic);
                         });
+                        }
                     },
                     // Nothing can announce itself again. Every attached client is still worth
                     // reading, so the loop waits on those alone.

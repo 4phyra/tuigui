@@ -69,6 +69,12 @@ pub struct P2p {
     /// one dials in, and that peer comes out of the accept. Keeping an empty slot here would
     /// be a field whose emptiness means something other than emptiness.
     peer: Option<EndpointAddr>,
+    /// The address this transport announces.
+    ///
+    /// The peer's, when built by `from_magic`; this endpoint's own, once bound by `host`.
+    /// Known at construction either way, which is what lets `address` answer without touching
+    /// the endpoint and the lock a `connect` may be holding.
+    announce: EndpointAddr,
     /// This side's own endpoint, once bound.
     ///
     /// Held, not borrowed: it owns the socket the link runs on, so it has to outlive every
@@ -111,6 +117,7 @@ impl P2p {
             .map_err(|e| io::Error::other(format!("could not bind an endpoint: {e}")))?;
         Ok(Self {
             peer: None,
+            announce: endpoint.addr(),
             // Bound already, which is the whole point of this constructor: what `to_magic`
             // reads and what `accept` waits on are the same endpoint.
             endpoint: Arc::new(Mutex::new(Some(endpoint))),
@@ -178,21 +185,10 @@ impl Transport for P2p {
 
     /// The address to dial, as the text an announcement carries.
     ///
-    /// Our own when hosting — read from the bound endpoint, because the key is minted at
-    /// bind time and cannot be known before it. `None` when dialing, and that is the
-    /// honest answer: a dialer has no address for anyone to reach it at, which is exactly
-    /// what makes it unreachable in a scan.
-    fn address(&self) -> Option<String> {
-        let addr = self.peer.clone().or_else(|| {
-            // A bound endpoint answers for itself; one that is not bound has no address,
-            // and blocking here to find out would mean parking a thread on a lock that a
-            // connect may be holding.
-            self.endpoint
-                .try_lock()
-                .ok()
-                .and_then(|guard| guard.as_ref().map(Endpoint::addr))
-        })?;
-        Some(EndpointTicket::new(addr).to_string())
+    /// The peer's ticket when dialing, this endpoint's when hosting — known since
+    /// construction, so no lock is needed to read it.
+    fn address(&self) -> String {
+        EndpointTicket::new(self.announce.clone()).to_string()
     }
 
     /// Parse the ticket an announcement carries.
@@ -206,8 +202,10 @@ impl Transport for P2p {
             return None;
         }
         let ticket: EndpointTicket = address.parse().ok()?;
+        let addr: EndpointAddr = ticket.into();
         Some(Self {
-            peer: Some(ticket.into()),
+            peer: Some(addr.clone()),
+            announce: addr,
             endpoint: Arc::new(Mutex::new(None)),
             link: Arc::new(arc_swap::ArcSwapOption::empty()),
         })

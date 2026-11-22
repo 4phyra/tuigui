@@ -113,8 +113,9 @@ impl Transport for Throttled {
         Err(std::io::Error::other("a throttled link is made with Throttle::pair, not discovered"))
     }
 
-    fn address(&self) -> Option<String> {
-        None
+    fn address(&self) -> String {
+        // Never announced — links from this throttle are handed over directly, never scanned for.
+        "throttled".to_owned()
     }
 
     fn from_magic(_name: &str, _address: &str) -> Option<Self> {

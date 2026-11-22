@@ -14,7 +14,7 @@ async fn an_announcement_names_the_endpoint_it_came_from() {
     let host = <P2p as Transport>::new()
         .await
         .expect("an endpoint binds");
-    let magic = host.to_magic().expect("a bound endpoint has an address");
+    let magic = host.to_magic();
     let (name, address) = magic
         .split_once(crate::transport::ANNOUNCE_SEPARATOR)
         .expect("an announcement is a name, a separator and an address");
@@ -22,7 +22,7 @@ async fn an_announcement_names_the_endpoint_it_came_from() {
 
     let dialer = P2p::from_magic(name, address).expect("our own announcement parses");
     let dialer_addr = dialer.peer.expect("a parsed transport names its peer");
-    let host_addr = host.address().expect("a bound endpoint names itself");
+    let host_addr = host.address();
     assert_eq!(
         EndpointTicket::new(dialer_addr).to_string(),
         host_addr,

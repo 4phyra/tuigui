@@ -210,8 +210,8 @@ impl Transport for UnixSocket {
         Err(taken.expect("a path was offered"))
     }
 
-    fn address(&self) -> Option<String> {
-        Some(self.path.to_string_lossy().into_owned())
+    fn address(&self) -> String {
+        self.path.to_string_lossy().into_owned()
     }
 
     /// A dialer: the socket at the announced path, with nothing listening here.

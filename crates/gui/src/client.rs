@@ -86,11 +86,16 @@ pub async fn run(
     // The link first: the dial is what starts the program, so a dial that never comes is a session
     // that never runs. The announcement has already reached the terminal — the render path drew it
     // before handing this over — so there is something for the other side to have dialed.
-    let connection = transport
+    let transport = transport
         .await
-        .map_err(|_| io::Error::other("the render path is gone: no link to accept on"))?
-        .accept()
-        .await?;
+        .map_err(|_| io::Error::other("the render path is gone: no link to accept on"))?;
+    let connection = if debug.no_accept {
+        // Never answer the dial: the process stays on the pairing screen for as long as it
+        // lives, which is the state the server's dial path is exercised against.
+        std::future::pending().await
+    } else {
+        transport.accept().await?
+    };
 
     // What the far side says, handed to every servant waiting on it.
     let (rebroadcaster, rebroadcaster_recvr) = tokio::sync::broadcast::channel(64);

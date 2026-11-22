@@ -91,6 +91,9 @@ impl TuiGui {
         if self.gui.no_mouse {
             args.push("--dbg-no-mouse".into());
         }
+        if self.gui.no_accept {
+            args.push("--dbg-no-accept".into());
+        }
         args
     }
 

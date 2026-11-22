@@ -56,6 +56,9 @@ pub async fn run(
     let mut filter = Filter::new()?;
     let mut scanner = Scanner::new()?;
     let mut sink = std::io::stdout();
+    // The barcode is a standing mark: a busy command emits chunks far faster than it changes,
+    // and every one of them would re-find it. Scan for it at most every 100 ms.
+    let mut last_barcode_scan: Option<std::time::Instant> = None;
 
     // Held across turns rather than made per chunk: a resize that arrived while the last chunk was
     // being rewritten belongs to this future, and one made afresh each time would be a subscriber
@@ -115,11 +118,16 @@ pub async fn run(
 
                 // A client that cannot be dialed says so by drawing its address, and the scan is
                 // what turns that into a channel.
-                if let Some(announced) = scanner.scan_barcode() {
-                    new_barcodes
-                        .send(announced)
-                        .await
-                        .map_err(|_| std::io::Error::other("the server is no longer listening"))?;
+                if last_barcode_scan.map_or(true, |t| {
+                    t.elapsed() >= std::time::Duration::from_millis(100)
+                }) {
+                    last_barcode_scan = Some(std::time::Instant::now());
+                    if let Some(announced) = scanner.scan_barcode() {
+                        new_barcodes
+                            .send(announced)
+                            .await
+                            .map_err(|_| std::io::Error::other("the server is no longer listening"))?;
+                    }
                 }
             }
             // The terminal's own grid changed. Both models of the screen follow it, because the

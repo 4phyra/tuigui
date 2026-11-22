@@ -29,7 +29,7 @@ const PATIENCE: Duration = Duration::from_secs(5);
 /// this is the path a real session uses, not a shortcut past it.
 pub async fn linked<T: Transport + 'static>(host: T) -> (Connection, Connection) {
     let connected = async {
-        let magic = host.to_magic().expect("a hosted transport announces itself");
+        let magic = host.to_magic();
         let (name, address) = magic
             .split_once(crate::transport::ANNOUNCE_SEPARATOR)
             .expect("an announcement is a name, a separator and an address");

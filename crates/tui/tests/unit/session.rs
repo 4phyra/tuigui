@@ -80,7 +80,7 @@ fn codec_frame(width: u32, height: u32) -> Vec<u8> {
 /// told — a peer dropped here would make every answer a broken pipe rather than the message.
 async fn connection<T: Transport + 'static>() -> (Connection, Connection) {
     let host = T::new().await.expect("a transport hosts at its own address");
-    let magic = host.to_magic().expect("a hosted transport announces itself");
+    let magic = host.to_magic();
     let (name, address) = magic
         .split_once(wire::transport::ANNOUNCE_SEPARATOR)
         .expect("an announcement is a name, a separator and an address");

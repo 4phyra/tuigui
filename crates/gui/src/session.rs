@@ -58,9 +58,7 @@ impl Session {
             crate::Channel::P2p => Box::new(wire::p2p::P2p::new().await?),
             crate::Channel::Unix => Box::new(wire::unix::UnixSocket::new().await?),
         };
-        let advert = bound
-            .to_magic()
-            .ok_or_else(|| std::io::Error::other("a bound transport has no address to announce"))?;
+        let advert = bound.to_magic();
         let dock = dock::Dock::new(advert, program)?;
         transport
             .send(bound)

@@ -170,6 +170,12 @@ pub struct DebugOptions {
     /// arrive on the pane's input, so a stray sequence there is a stray sequence here.
     #[arg(long = "dbg-no-mouse", hide = true)]
     pub no_mouse: bool,
+    /// Never answer the dial the server makes.
+    ///
+    /// The session never starts: the client sits on the pairing screen with its listener open and
+    /// no dial ever answered, which is the state the server's dial path is measured against.
+    #[arg(long = "dbg-no-accept", hide = true)]
+    pub no_accept: bool,
 }
 
 impl Gui {
