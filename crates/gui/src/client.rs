@@ -283,7 +283,18 @@ async fn serve_window(
 }
 
 /// The terminal's own report of itself, which is what a picture's size is measured in.
+///
+/// Under `test-windowing` there is no terminal to ask, so a fixed 80x24 stands in: the scripted
+/// window never reads it anyway, but the frame path measures in cells and needs an answer.
 fn winsize() -> io::Result<rustix::termios::Winsize> {
+    if cfg!(feature = "test-windowing") {
+        return Ok(rustix::termios::Winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 800,
+            ws_ypixel: 480,
+        });
+    }
     rustix::termios::tcgetwinsize(std::io::stdin()).map_err(io::Error::from)
 }
 
@@ -321,3 +332,7 @@ fn paint_surface(
         }
     }
 }
+
+#[cfg(all(test, feature = "test-windowing"))]
+#[path = "../tests/unit/frame_backpressure.rs"]
+mod frame_backpressure;

@@ -91,6 +91,9 @@ tracing-subscriber = { workspace = true, optional = true }
 [features]
 default = []
 tracy = ["dep:tracing-tracy", "dep:tracing-subscriber"]
+# Swaps the wayland session for a scripted one, so the client's own session loop can run in a
+# test without a compositor. Not for release builds.
+test-windowing = []
 
 # The client tested as a program rather than as a widget: spawned in a real pty and asserted
 # on what its grid shows, which is the only way to see the raw mode, the inline viewport and

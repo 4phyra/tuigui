@@ -11,8 +11,17 @@
 #[cfg(target_os = "linux")]
 pub mod wayland;
 
+#[cfg(feature = "test-windowing")]
+#[path = "../tests/unit/testing_windowing.rs"]
+pub mod testing;
+
 /// The session a program on this machine runs in.
-#[cfg(target_os = "linux")]
+///
+/// Under `test-windowing` the scripted session stands in for the real one, which is the only
+/// reason the client's session loop can run without a compositor underneath it.
+#[cfg(feature = "test-windowing")]
+pub type PlatformWindowing = testing::TestingWindowing;
+#[cfg(all(target_os = "linux", not(feature = "test-windowing")))]
 pub type PlatformWindowing = wayland::WaylandServer;
 
 /// What a session is started with: the output's resolution, the size a window is drawn at before
@@ -22,6 +31,7 @@ pub type PlatformWindowing = wayland::WaylandServer;
 /// ([`crate::client`]) should not have to know which backend answered the question.
 pub use self::wayland::Options;
 
+#[cfg(target_os = "linux")]
 pub mod event_map;
 
 /// The window session as a whole: what a program runs in.

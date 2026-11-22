@@ -49,3 +49,8 @@ jobs:
 
       - name: Run the tests
         run: nix develop . -c just test
+
+      # Separate because this one rebuilds the gui with `test-windowing`, which swaps the
+      # wayland session for a scripted one; the plain suite above needs the real binary.
+      - name: Run the frame backpressure test
+        run: nix develop . -c just test-frame

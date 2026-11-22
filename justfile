@@ -73,6 +73,14 @@ test *args:
     @CARGO_TARGET_DIR={{target}} cargo build -p tuigui_components --examples
     @INSTA_OUTPUT=none CARGO_TARGET_DIR={{target}} cargo insta test --test-runner nextest --workspace --tests {{args}}
 
+# Run the frame-backpressure test: the client loop driven over a throttled in-memory
+# link, asserting every frame the client sends arrives intact.
+#
+# Needs the `test-windowing` feature, which swaps the wayland session for a scripted one —
+# running the rest of the suite under it would run binaries that expect the real one.
+test-frame:
+    @CARGO_TARGET_DIR={{target}} cargo nextest run -p gui --features test-windowing -E 'test(frame_backpressure)'
+
 # Look at the screens a run left behind: accept, reject, or skip each one.
 #
 # `snapshot-diff` shows each one: an empty old file is a new screen rendered
