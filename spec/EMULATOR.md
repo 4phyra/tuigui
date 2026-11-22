@@ -10,7 +10,7 @@ better placed to do:
 
 | `tui` does today | Why it is really the terminal's job |
 |---|---|
-| decode the wire codec (JPEG today) | the terminal already decodes PNG for TGP |
+| decode the wire codec (H.264 by default, JPEG with `--jpeg`) | the terminal already decodes PNG for TGP |
 | stage pixels in a `/dev/shm` object | it does that anyway, per transmit |
 | emit the TGP escapes | it is the only side that can |
 | own the image id and the placeholder grid | it owns the id namespace |

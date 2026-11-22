@@ -105,12 +105,29 @@ fn fds_do_not_grow_while_the_peer_never_accepts() -> termlens::Result<()> {
         .env("XDG_RUNTIME_DIR", &runtime)
         .timeout(Duration::from_secs(15))
         .arg("--dbg-no-accept")
+        // The session's plumbing, not the codec: JPEG keeps this test on every
+        // machine, hardware H.264 or not.
+        .arg("--jpeg")
         .arg(&runnable)
         .spawn(env!("CARGO_BIN_EXE_tuigui"))?;
     eprintln!("[no-fd-leak] spawned");
 
     let pid = server_pid(&runnable).expect("the tuigui server is running");
-    let first = fd_count(pid).expect("the server's descriptors are readable");
+    // The baseline is the session's own descriptor table once it has finished opening it —
+    // the pty, the screen's channels, the announcement queue. A leak is a count that keeps
+    // climbing after that, not the startup itself; the count is read until it holds still.
+    // (The process is matched from `/proc` at fork time, before it has opened anything, and
+    // how long the gap lasts is the binary's startup cost, which is not the test's subject.)
+    let mut first = fd_count(pid).expect("the server's descriptors are readable");
+    let settle = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < settle {
+        thread::sleep(Duration::from_millis(50));
+        let now = fd_count(pid).expect("the server's descriptors are readable");
+        if now == first {
+            break;
+        }
+        first = now;
+    }
 
     // No waiting on any external signal: the leak is visible the moment the client paints,
     // so poll from spawn and fail the instant the count moves. A client that never paints

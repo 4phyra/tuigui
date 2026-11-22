@@ -68,6 +68,9 @@ fn a_client_going_away_deletes_its_picture() -> termlens::Result<()> {
         .arg(half("gui"))
         .arg("--channel")
         .arg("unix")
+        // The session's plumbing, not the codec: JPEG keeps this test on every
+        // machine, hardware H.264 or not.
+        .arg("--jpeg")
         .arg(&runnable)
         .spawn(half("tui"))?;
 
