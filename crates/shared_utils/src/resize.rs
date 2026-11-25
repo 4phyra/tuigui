@@ -8,6 +8,7 @@
 ///
 /// A terminal that reports no cells is a failure rather than a guess: a pane laid out 24x80 on a
 /// real screen is a picture placed at the wrong cell, which looks like a bug in the placement.
+#[tracing::instrument(skip_all)]
 pub fn size() -> std::io::Result<rustix::termios::Winsize> {
     let ws = rustix::termios::tcgetwinsize(std::io::stdin()).map_err(std::io::Error::from)?;
     if ws.ws_row == 0 || ws.ws_col == 0 {
@@ -24,6 +25,7 @@ pub fn size() -> std::io::Result<rustix::termios::Winsize> {
 /// proxy both hold a size, and neither has to know about the other.
 ///
 /// `SIGWINCH` carries nothing, so the size is read after it arrives rather than from it.
+#[tracing::instrument(skip_all)]
 pub async fn resized() -> std::io::Result<rustix::termios::Winsize> {
     let mut changed = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
     // `None` is the handler gone, which tokio only reports when the process is losing it. Waiting

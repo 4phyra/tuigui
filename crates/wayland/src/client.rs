@@ -32,6 +32,7 @@ use crate::utils::{peer_pid, proc_parent};
 /// The per-connection compositor state, resolved whichever kind of client the
 /// connection belongs to. XWayland's client carries `XWaylandClientData`
 /// instead, which smithay owns.
+#[tracing::instrument(skip_all)]
 pub(crate) fn compositor_client_state(
     client: &smithay::reexports::wayland_server::Client,
 ) -> Option<&CompositorClientState> {

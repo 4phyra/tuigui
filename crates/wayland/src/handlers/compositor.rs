@@ -12,10 +12,12 @@ use crate::utils::map_rgba;
 
 impl CompositorHandler for State
 {
+    #[tracing::instrument(skip_all)]
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.globals.compositor_state
     }
 
+    #[tracing::instrument(skip_all)]
     fn client_compositor_state<'a>(
         &self,
         client: &'a smithay::reexports::wayland_server::Client,

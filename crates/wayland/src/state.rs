@@ -106,6 +106,7 @@ pub struct State {
 impl State {
     /// Build the session state: the globals, the seat with its keyboard and
     /// pointer, and the single output.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn new(
         dh: &DisplayHandle,
         output: smithay::output::Output,
@@ -160,6 +161,7 @@ impl State {
     }
 
     /// Record the spawned child: this becomes the session's root client.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn attach_root_client(&mut self, child: Child) -> Result<(), CompError> {
         if self.root_client.is_some() {
             return Err(CompError::Spawn("the session already has a root client".into()));
@@ -168,6 +170,7 @@ impl State {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     pub(crate) fn next_serial(&mut self) -> Serial {
         self.serial = self.serial.wrapping_add(1);
         Serial::from(self.serial as u32)

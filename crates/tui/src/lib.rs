@@ -124,6 +124,7 @@ pub struct DebugOptions {
 }
 
 impl Tui {
+    #[tracing::instrument(skip_all)]
     pub async fn run(
         self,
         stdin: impl Read + Send + 'static,
@@ -256,6 +257,9 @@ pub use raw::Raw;
 fn install_logger() {
     struct File(log::LevelFilter);
 
+    // Nothing here is instrumented: `tracing` forwards to `log` (the workspace enables
+    // its `log` feature), so a span created inside the logger would be logged by the
+    // logger — unbounded recursion.
     impl log::Log for File {
         fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
             metadata.level() <= self.0
@@ -298,7 +302,24 @@ fn install_logger() {
 /// frame, transmits it, and waits on the terminal's acknowledgement — three
 /// different waits that look identical from outside, which is what the profiler
 /// is for.
+/// Tell the profiler that one frame has been placed, so its timeline is cut at the same
+/// boundary the screen's is.
+///
+/// Nothing is emitted unless a profiler is attached: `Client::running` is the same check
+/// the tracer's own spans make.
 #[cfg(feature = "tracy")]
+pub(crate) fn frame_mark() {
+    if let Some(client) = tracing_tracy::client::Client::running() {
+        client.frame_mark();
+    }
+}
+
+/// Without the profiler there is no frame indicator to emit.
+#[cfg(not(feature = "tracy"))]
+pub(crate) fn frame_mark() {}
+
+#[cfg(feature = "tracy")]
+#[tracing::instrument(skip_all)]
 fn install_tracing() -> io::Result<()> {
     use tracing::Level;
     use tracing_subscriber::filter::Targets;
@@ -311,10 +332,17 @@ fn install_tracing() -> io::Result<()> {
     // opened and however many processes are writing to it.
     let ours = Targets::new()
         .with_target("compositor", Level::TRACE)
+        .with_target("wayland", Level::TRACE)
         .with_target("gui", Level::TRACE)
         .with_target("tui", Level::TRACE)
         .with_target("tuigui", Level::TRACE)
+        .with_target("tuigui_components", Level::TRACE)
         .with_target("wire", Level::TRACE)
+        .with_target("codecs", Level::TRACE)
+        .with_target("easytgp", Level::TRACE)
+        .with_target("cellcode", Level::TRACE)
+        .with_target("cell_map", Level::TRACE)
+        .with_target("shared_utils", Level::TRACE)
         .with_target("termputs", Level::TRACE);
 
     let layer = tracing_tracy::TracyLayer::default();

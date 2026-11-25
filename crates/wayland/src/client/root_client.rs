@@ -31,6 +31,7 @@ pub struct RootClient {
 }
 
 impl RootClient {
+    #[tracing::instrument(skip_all)]
     pub(crate) fn new(child: Child) -> Self {
         RootClient {
             child,
@@ -48,12 +49,14 @@ impl RootClient {
     /// running, anything else means exited (or already reaped). A child
     /// reaped here makes the final `wait` on drop return `ECHILD`, which is
     /// ignored there.
+    #[tracing::instrument(skip_all)]
     pub fn is_running(&self) -> bool {
         running(&self.child)
     }
 
     /// Dispatch the root's queued inputs: its own window tree, then every
     /// helper it started.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn dispatch_inputs(&self, state: &mut State) {
         if let Some(tree) = self.root_window.read().unwrap().as_ref() {
             tree.dispatch_inputs(state);
@@ -72,6 +75,7 @@ impl RootClient {
 }
 
 impl Drop for RootClient {
+    #[tracing::instrument(skip_all)]
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -79,7 +83,9 @@ impl Drop for RootClient {
 }
 
 impl ClientData for RootClient {
+    #[tracing::instrument(skip_all)]
     fn initialized(&self, _id: ClientId) {}
+    #[tracing::instrument(skip_all)]
     fn disconnected(&self, _id: ClientId, _reason: DisconnectReason) {}
 }
 
@@ -88,6 +94,7 @@ impl ClientData for RootClient {
 /// `WNOHANG` asks the kernel rather than the handle, because the handle cannot be taken
 /// through a shared reference. `0` means still running; anything else means it exited
 /// (or was already reaped, which the final `wait` on drop ignores).
+#[tracing::instrument(skip_all)]
 fn running(child: &Child) -> bool {
     let code = unsafe { libc::waitpid(child.id() as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG) };
     code == 0

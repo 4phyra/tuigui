@@ -11,6 +11,7 @@ use gui::Gui;
 // count as `tui`, because a session started from either side should schedule its work the same
 // way.
 #[tokio::main(worker_threads = 8)]
+#[tracing::instrument(skip_all)]
 async fn main() {
     // Printed here rather than returned from `main`. A returned error is drawn by the runtime
     // with `Error: ` in front of it, which puts a second frame around a report that miette has

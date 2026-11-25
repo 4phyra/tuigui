@@ -64,6 +64,7 @@ pub(crate) enum UnifiedSurface {
 impl UnifiedSurface {
     /// The canvas this role draws into. Both roles own one, so this is the one question they
     /// answer the same way.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn wl_surface(&self) -> &WlSurface {
         match self {
             Self::Toplevel(toplevel) => toplevel.wl_surface(),
@@ -72,6 +73,7 @@ impl UnifiedSurface {
     }
 
     /// The toplevel behind this surface, if it is one.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn toplevel(&self) -> Option<&ToplevelSurface> {
         match self {
             Self::Toplevel(toplevel) => Some(toplevel),
@@ -158,6 +160,7 @@ pub struct Window {
 impl Window {
     /// This window's size in pixels: what its program last committed, or the size it was adopted
     /// at before it drew.
+    #[tracing::instrument(skip_all)]
     pub fn size(&self) -> (u32, u32) {
         *self.size.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -165,6 +168,7 @@ impl Window {
     ///
     /// `logical_scale` is the session's: how large its programs draw themselves relative to a
     /// physical pixel, which is what turns the compositor's physical ask into a logical configure.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn new(
         surface: UnifiedSurface,
         physical_size: (u32, u32),
@@ -196,11 +200,13 @@ impl Window {
     /// is a `Mutex` because a commit writes it while the compositor is reading it.
 
     /// Queue one key event; drained by the session's next step.
+    #[tracing::instrument(skip_all)]
     pub fn queue_key(&self, event: KeyboardEvent) {
         self.keys.lock().unwrap().push_back(event);
     }
 
     /// Queue one pointer event; drained by the session's next step.
+    #[tracing::instrument(skip_all)]
     pub fn queue_pointer(&self, event: PointerEvent) {
         self.pointers.lock().unwrap().push_back(event);
     }
@@ -210,6 +216,7 @@ impl Window {
     /// The replaced frame is one nobody read: the client drew again before the picture it had
     /// already drawn was sent. Its buffer is released here rather than dropped, because a
     /// client waiting on that release would otherwise never draw again.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn commit(&self, frame: Committed) {
         *self.size.lock().unwrap_or_else(|e| e.into_inner()) = frame.size;
         let replaced = self.frame.send_replace(Some(frame));
@@ -222,6 +229,7 @@ impl Window {
     ///
     /// The buffer is already gone — released when it was read, because there was nothing to
     /// hold it for — so this is the one frame with no release waiting on presentation.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn adopt(&self, pixels: Vec<u8>, size: (u32, u32)) {
         *self.size.lock().unwrap_or_else(|e| e.into_inner()) = size;
         let _ = self.frame.send_replace(Some(Committed {
@@ -267,6 +275,7 @@ impl Window {
     ///
     /// Only a toplevel can be asked: a popup's size comes from its positioner, which the client
     /// owns. Asking one would be proposing a size it has no way to accept.
+    #[tracing::instrument(skip_all)]
     pub fn set_size(&self, physical: (u32, u32)) {
         let Some(toplevel) = self.surface.toplevel() else {
             log::info!("compositor: a popup was asked for {physical:?}; its positioner owns its size");
@@ -287,6 +296,7 @@ impl Window {
     /// What this window calls itself: the title its program set, or the app id it
     /// set instead. `None` when it set neither, which is a window with no name
     /// rather than one with an invented name.
+    #[tracing::instrument(skip_all)]
     pub fn title(&self) -> Option<String> {
         smithay::wayland::compositor::with_states(self.surface.wl_surface(), |states| {
             let attributes = states.data_map.get::<XdgToplevelSurfaceData>()?;
@@ -303,12 +313,14 @@ impl Window {
     /// The distinction that matters to the compositor, because a popup's size is its client's
     /// positioner's to state and cannot be asked for. A dialog is a toplevel, however much it
     /// looks like a small window, and is resized like any other.
+    #[tracing::instrument(skip_all)]
     pub fn is_popup(&self) -> bool {
         matches!(self.surface, UnifiedSurface::Popup(_))
     }
 
     /// Ask the program to close this window: an xdg close request, which the
     /// client may ignore. The window outlives this call until it does not.
+    #[tracing::instrument(skip_all)]
     pub fn terminate(&self) {
         match &self.surface {
             UnifiedSurface::Toplevel(toplevel) => toplevel.send_close(),
@@ -334,6 +346,7 @@ impl Window {
     /// and gets the window's answer, instead of the window having to know who is listening. A
     /// subscription starts at the moment it is made, so nothing earlier is replayed — what a
     /// reader is late for is the frame it did not draw.
+    #[tracing::instrument(skip_all)]
     pub fn subscribe_new_children(&self) -> broadcast::Receiver<Weak<Window>> {
         self.new_children.subscribe()
     }
@@ -342,6 +355,7 @@ impl Window {
     ///
     /// Apart from [`Window::subscribe_new_children`] because the two are placed differently: a
     /// child is put somewhere by the compositor, a popup by the client that asked for it.
+    #[tracing::instrument(skip_all)]
     pub fn subscribe_new_popups(&self) -> broadcast::Receiver<Weak<Window>> {
         self.new_popups.subscribe()
     }
@@ -351,6 +365,7 @@ impl Window {
     ///
     /// A helper's window lives beside this one rather than inside it, but it
     /// is drawn as a window of the session all the same, so it is read here.
+    #[tracing::instrument(skip_all)]
     pub fn descendants(&self) -> Vec<Arc<Window>> {
         let mut all = self.children.read().unwrap().clone();
         for sub in self.sub_clients() {
@@ -363,6 +378,7 @@ impl Window {
 
     /// The helper clients this window's program started, found through the
     /// connection that owns this window.
+    #[tracing::instrument(skip_all)]
     fn sub_clients(&self) -> Vec<Arc<crate::client::SubClient>> {
         use smithay::reexports::wayland_server::Resource as _;
         let Some(client) = self.surface.wl_surface().client() else {
@@ -391,6 +407,7 @@ impl Window {
     /// Keys go first, and as a group: a modified key is several key events that
     /// only mean something in order, so slipping a pointer event between the
     /// control press and the `c` press would leave the modifier dangling.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn dispatch_inputs(&self, state: &mut State) {
         let keys: Vec<KeyboardEvent> = self.keys.lock().unwrap().drain(..).collect();
         for event in &keys {
@@ -422,6 +439,7 @@ impl Window {
     /// last. Until children have somewhere of their own to land, they are dropped rather than
     /// allowed to overwrite: a missing decoration is a smaller fault than a frame that
     /// flickers between two buffers.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn commit_target(this: &Arc<Self>, surface: &WlSurface) -> Option<Arc<Self>> {
         if this.surface.wl_surface() == surface {
             return Some(this.clone());
@@ -436,6 +454,7 @@ impl Window {
 
     /// Remove the window whose surface is `surface` (a child, or a child's
     /// child). Returns whether something was removed.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn remove_surface(&self, surface: &WlSurface) -> bool {
         let mut children = self.children.write().unwrap();
         let before = children.len();

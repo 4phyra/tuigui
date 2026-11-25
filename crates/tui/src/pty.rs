@@ -50,6 +50,7 @@ impl Pty {    /// Start `command` on a fresh pty of this terminal's size.
     /// because it is this side's to pump: `stdin` is the keyboard the reply router already
     /// stripped of this side's own answers, and forwarding it into the master is the one thing
     /// the command cannot do for itself.
+    #[tracing::instrument(skip_all)]
     pub fn new(
         command: &[String],
         mut input: std::io::PipeReader,
@@ -93,6 +94,7 @@ impl Pty {    /// Start `command` on a fresh pty of this terminal's size.
     ///
     /// Dropping the child on the way out is the kill: it is `kill_on_drop`, so a session that
     /// ended for any reason leaves no command behind.
+    #[tracing::instrument(skip_all)]
     pub async fn run(mut self) -> io::Result<()> {
         loop {
             tokio::select! {
@@ -137,6 +139,7 @@ impl Pty {    /// Start `command` on a fresh pty of this terminal's size.
     /// The size is in the kernel now, but a full-screen program only notices by being
     /// signalled — the same `SIGWINCH` the terminal sent us is what it does not receive,
     /// because it is on a pty of its own.
+    #[tracing::instrument(skip_all)]
     fn signal(&self) {
         // A pid is always positive and fits an `i32`, which is what `from_raw` takes;
         // `and_then` keeps the failure visible instead of inventing a pid that would signal
@@ -159,6 +162,7 @@ impl Pty {    /// Start `command` on a fresh pty of this terminal's size.
 }
 
 /// Start `cmd` on `slave`, with the pty as its controlling terminal.
+#[tracing::instrument(skip_all)]
 fn exec(cmd: &[String], slave: &std::fs::File) -> io::Result<Child> {
     let mut c = Command::new(&cmd[0]);
     c.args(&cmd[1..]);

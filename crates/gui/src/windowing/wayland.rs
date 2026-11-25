@@ -107,6 +107,7 @@ impl WaylandWindow {
     ///
     /// `None` for a window the session has already let go, which is not a failure: the caller
     /// asked about a handle it was given and the answer is that there is nothing behind it.
+    #[tracing::instrument(skip_all)]
     fn new(
         inner: Weak<wayland::Window>,
         codec: codecs::CodecId,
@@ -140,6 +141,7 @@ impl Drop for WaylandWindow {
     ///
     /// The picture is named by a surface id that travels with every frame, and the far side frees
     /// it when the frames stop; a window that is over is one whose `Weak` no longer upgrades.
+    #[tracing::instrument(skip_all)]
     fn drop(&mut self) {}
 }
 
@@ -149,6 +151,7 @@ impl WaylandServer {
     /// The wait for the window the program draws is the caller's, taken from the session's own
     /// channel by [`Self::take_root`]: only a turn notices a client has committed, so the news can
     /// only come from the session, and the wait can only live where it is awaited.
+    #[tracing::instrument(skip_all)]
     pub fn new(
         options: wayland::Options,
         codec: codecs::CodecId,
@@ -167,6 +170,7 @@ impl WaylandServer {
     ///
     /// Owned rather than borrowed, because the caller has to keep turning the session while it
     /// waits: a future holding the session would make the very turn that answers it impossible.
+    #[tracing::instrument(skip_all)]
     pub fn take_root(
         &mut self,
     ) -> std::io::Result<impl std::future::Future<Output = std::io::Result<Box<dyn Compositable>>>>
@@ -189,6 +193,7 @@ impl WaylandServer {
 }
 
 impl WindowingServer for WaylandServer {
+    #[tracing::instrument(skip_all)]
     fn spawn(&mut self, path: &std::path::Path) -> std::io::Result<Option<std::io::PipeReader>> {
         // The program's own words, kept until someone takes them: what a program says belongs to
         // whoever shows it, and this side only started it. Both of its streams arrive here, in
@@ -197,6 +202,7 @@ impl WindowingServer for WaylandServer {
         Ok(None)
     }
 
+    #[tracing::instrument(skip_all)]
     fn take_stdout(&mut self) -> Option<std::io::PipeReader> {
         self.stdout.take()
     }
@@ -206,6 +212,7 @@ impl WindowingServer for WaylandServer {
         self.inner.step(timeout);
     }
 
+    #[tracing::instrument(skip_all)]
     fn is_running(&self) -> bool {
         self.inner.is_running()
     }
@@ -216,6 +223,7 @@ impl WindowingServer for WaylandServer {
 // describes a different signature than the one the vtable points at.
 #[async_trait::async_trait]
 impl Compositable for WaylandWindow {
+    #[tracing::instrument(skip_all)]
     fn key_input(&self, event: termina::event::KeyEvent) -> std::io::Result<()> {
         let window = self
             .inner
@@ -225,6 +233,7 @@ impl Compositable for WaylandWindow {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     fn pointer_input(&self, event: termina::event::MouseEvent) -> std::io::Result<()> {
         let window = self
             .inner
@@ -288,14 +297,19 @@ impl Compositable for WaylandWindow {
             None => None,
         };
 
-        // Dropped before the send: the guard is not `Send`, and holding it across the await
-        // would also hold it for the whole round trip.
-        {
+        // Dropped before the await: the guard is not `Send`, and holding it across the wait would
+        // also hold it for the whole round trip.
+        let nothing = {
             let mut sent = self.sent.lock().unwrap_or_else(|e| e.into_inner());
             if bytes.is_none() && *sent == Some((rank, cells)) {
-                return Ok(());
+                true
+            } else {
+                *sent = Some((rank, cells));
+                false
             }
-            *sent = Some((rank, cells));
+        };
+        if nothing {
+            return Ok(());
         }
 
         // The payload's size is taken before the message is handed over, because the message
@@ -311,12 +325,17 @@ impl Compositable for WaylandWindow {
             bytes,
         };
         connection.send(&message).await?;
+        // A frame mark is a picture that actually went on the wire: a capture the codec held
+        // back, or one whose box and rank did not change, leaves a gap here, which is exactly
+        // what a missing send looks like on the timeline.
+        crate::frame_mark();
         crate::stats::record(payload);
         Ok(())
     }
 
     /// How big this window is, in pixels: what its program last committed, or the size it was
     /// adopted at before it drew.
+    #[tracing::instrument(skip_all)]
     fn size_px(&self) -> std::io::Result<(u32, u32)> {
         Ok(self
             .inner
@@ -340,6 +359,7 @@ impl Compositable for WaylandWindow {
     }
 
     /// Whether this window is a popup, which its own program sized.
+    #[tracing::instrument(skip_all)]
     fn is_popup(&self) -> bool {
         self.inner
             .upgrade()
@@ -347,11 +367,13 @@ impl Compositable for WaylandWindow {
     }
 
     /// The signature this window's cells carry, which names it on both sides.
+    #[tracing::instrument(skip_all)]
     fn surface(&self) -> SurfaceId {
         self.surface
     }
 
     /// The codec this window's frames are in, which the far side needs to decode them.
+    #[tracing::instrument(skip_all)]
     fn codec(&self) -> codecs::CodecId {
         self.codec
     }
@@ -378,6 +400,7 @@ impl Compositable for WaylandWindow {
     ///
     /// In the parent's pixels, because that is what the client's own surface is measured in. The
     /// conversion into the pane's cells is the trait's, so it happens once for every backend.
+    #[tracing::instrument(skip_all)]
     fn offset_px(&self) -> std::io::Result<Option<(i32, i32)>> {
         Ok(*self
             .inner
@@ -388,6 +411,7 @@ impl Compositable for WaylandWindow {
 
     /// What the program calls its window: the title it set, or its app id when it set no title, or
     /// nothing when it set neither.
+    #[tracing::instrument(skip_all)]
     fn title(&self) -> std::io::Result<String> {
         Ok(self
             .inner
@@ -399,6 +423,7 @@ impl Compositable for WaylandWindow {
 
     /// Ask the program to close the window. It is a request: the client is told and decides, which
     /// is why the window may still be there afterwards.
+    #[tracing::instrument(skip_all)]
     fn terminate(&self) -> std::io::Result<()> {
         self.inner
             .upgrade()
@@ -413,6 +438,7 @@ impl Compositable for WaylandWindow {
 impl ratatui::widgets::StatefulWidgetRef for WaylandWindow {
     type State = compositor::widgets::WindowState;
 
+    #[tracing::instrument(skip_all)]
     fn render_ref(&self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
         let id = self.surface;
         let style = Style::new()

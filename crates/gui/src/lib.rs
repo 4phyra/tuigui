@@ -133,6 +133,7 @@ pub struct StreamingOptions {
 
 impl StreamingOptions {
     /// The codec this session streams with.
+    #[tracing::instrument(skip_all)]
     pub fn codec(&self) -> CodecId {
         match self.jpeg {
             true => CodecId::Jpeg,
@@ -188,6 +189,7 @@ impl Gui {
     /// lets the session be driven by a caller that is not a terminal (`tuigui`, or a
     /// test). The caller owns its own runtime, so this is `async` with no runtime of its
     /// own.
+    #[tracing::instrument(skip_all)]
     pub async fn run(
         self,
         stdin: impl tokio::io::AsyncRead + Send + Unpin + 'static,
@@ -405,6 +407,7 @@ impl Gui {
 /// reported pixels directly would be `0x0` in that case, and a zero-sized output is not a
 /// small window: it is no surface at all, so a program started into it never commits a
 /// buffer and never says why.
+#[tracing::instrument(skip_all)]
 fn output_size() -> std::io::Result<(u32, u32)> {
     let ws = rustix::termios::tcgetwinsize(std::io::stdin()).map_err(std::io::Error::from)?;
     let (cols, rows) = (u32::from(ws.ws_col).max(1), u32::from(ws.ws_row).max(1));
@@ -433,6 +436,7 @@ struct ModeGuard {
 
 impl ModeGuard {
     /// Take the terminal, and put it back on drop.
+    #[tracing::instrument(skip_all)]
     fn install() -> std::io::Result<Self> {
         let stdin = std::io::stdin();
         let original = rustix::termios::tcgetattr(&stdin).map_err(std::io::Error::from)?;
@@ -452,6 +456,7 @@ impl ModeGuard {
 impl Drop for ModeGuard {
     /// Give the terminal back as the shell left it: the main screen, no capture, a visible
     /// cursor, and the line discipline the kernel had before the first key was read.
+    #[tracing::instrument(skip_all)]
     fn drop(&mut self) {
         let _ = crossterm::execute!(
             std::io::stdout(),
@@ -471,6 +476,7 @@ impl Drop for ModeGuard {
 ///
 /// At the bottom of this file because it is small, and here rather than in a module
 /// because there is one of it.
+#[tracing::instrument(skip_all)]
 fn install_logger() -> std::path::PathBuf {
     // One fixed path, so it is the same file every run and can simply be read
     // afterwards. A path per process would mean knowing a pid before the log could
@@ -528,7 +534,24 @@ fn install_logger() -> std::path::PathBuf {
 /// The client is the right half to hold it: it is the process that runs the
 /// compositor, and a frame is a capture here, an encode here, and a round trip
 /// to the server — one timeline with all three on it is the whole point.
+/// Tell the profiler that one frame has been drawn, so its timeline is cut at the same
+/// boundary the screen's is.
+///
+/// Nothing is emitted unless a profiler is attached: `Client::running` is the same check
+/// the tracer's own spans make.
 #[cfg(feature = "tracy")]
+fn frame_mark() {
+    if let Some(client) = tracing_tracy::client::Client::running() {
+        client.frame_mark();
+    }
+}
+
+/// Without the profiler there is no frame indicator to emit.
+#[cfg(not(feature = "tracy"))]
+fn frame_mark() {}
+
+#[cfg(feature = "tracy")]
+#[tracing::instrument(skip_all)]
 fn install_tracing() -> std::io::Result<()> {
     use tracing::Level;
     use tracing_subscriber::filter::Targets;
@@ -546,7 +569,13 @@ fn install_tracing() -> std::io::Result<()> {
         .with_target("gui", Level::TRACE)
         .with_target("tui", Level::TRACE)
         .with_target("tuigui", Level::TRACE)
+        .with_target("tuigui_components", Level::TRACE)
         .with_target("wire", Level::TRACE)
+        .with_target("codecs", Level::TRACE)
+        .with_target("easytgp", Level::TRACE)
+        .with_target("cellcode", Level::TRACE)
+        .with_target("cell_map", Level::TRACE)
+        .with_target("shared_utils", Level::TRACE)
         .with_target("termputs", Level::TRACE);
 
     let layer = tracing_tracy::TracyLayer::default();
@@ -588,6 +617,9 @@ struct Capturer {
 }
 
 impl log::Log for Capturer {
+    // Nothing here is instrumented: `tracing` forwards to `log` (the workspace enables its
+    // `log` feature), so a span created inside the logger is logged by the logger —
+    // unbounded recursion that overflows the stack at startup.
     fn enabled(&self, _: &log::Metadata) -> bool {
         // Everything. This is one pane's log, and a filter that dropped levels would drop
         // the lines nobody thought to raise.

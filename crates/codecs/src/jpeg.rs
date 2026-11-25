@@ -31,6 +31,7 @@ impl Encoder {
     ///
     /// Fails when libjpeg-turbo cannot be reached, which a linked build does
     /// not do.
+    #[tracing::instrument(skip_all)]
     pub fn new() -> Result<Self, Error> {
         let mut inner = turbojpeg::Compressor::new().map_err(Error::boxed)?;
         inner.set_quality(QUALITY).map_err(Error::boxed)?;
@@ -85,12 +86,14 @@ impl Decoder {
     ///
     /// Fails when libjpeg-turbo cannot be reached, which a linked build does
     /// not do.
+    #[tracing::instrument(skip_all)]
     pub fn new() -> Result<Self, Error> {
         Ok(Self)
     }
 }
 
 impl Default for Decoder {
+    #[tracing::instrument(skip_all)]
     fn default() -> Self {
         Self::new().expect("a JPEG decoder")
     }

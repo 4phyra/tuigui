@@ -148,6 +148,7 @@ impl Encoder {
     /// [`Error::HardwareUnavailable`] when no candidate opens: no hardware
     /// AV1 encoder on this machine, which is the designed failure and names
     /// `--jpeg`.
+    #[tracing::instrument(skip_all)]
     pub fn new(width: u32, height: u32) -> Result<Self, Error> {
         ffmpeg_next::init().map_err(Error::boxed)?;
         let mut tried = String::new();
@@ -172,6 +173,7 @@ impl Encoder {
     }
 
     /// Open one candidate, with its device, pool and codec context.
+    #[tracing::instrument(skip_all)]
     fn open(backend: &EncoderBackend, width: u32, height: u32) -> Result<Self, io::Error> {
         let codec = ffmpeg_next::encoder::find_by_name(backend.name).ok_or_else(|| {
             io::Error::other(format!("{} is not built into this ffmpeg", backend.name))
@@ -272,10 +274,16 @@ impl crate::Encoder for Encoder {
             }
         }
         self.pts += 1;
-        self.inner
-            .send_frame(&picture)
-            .map_err(encode_error(width, height))?;
+        {
+            // The hand-over to the hardware codec, and the wait for what it has ready: the two
+            // calls an AV1 frame is actually spent in, so each gets its own zone.
+            let _send = tracing::info_span!("codec.send_frame").entered();
+            self.inner
+                .send_frame(&picture)
+                .map_err(encode_error(width, height))?;
+        }
         let mut out = Vec::new();
+        let _recv = tracing::info_span!("codec.receive_packet").entered();
         loop {
             let mut packet = ffmpeg_next::Packet::empty();
             match self.inner.receive_packet(&mut packet) {
@@ -315,6 +323,7 @@ impl Decoder {
     /// [`Error::HardwareUnavailable`] when no candidate opens: no hardware
     /// AV1 decoder on this machine, which is the designed failure and names
     /// `--jpeg`.
+    #[tracing::instrument(skip_all)]
     pub fn new() -> Result<Self, Error> {
         ffmpeg_next::init().map_err(Error::boxed)?;
         let mut tried = String::new();
@@ -339,6 +348,7 @@ impl Decoder {
     }
 
     /// Open one candidate, with its device and codec context.
+    #[tracing::instrument(skip_all)]
     fn open(backend: &DecoderBackend) -> Result<Self, io::Error> {
         let codec = ffmpeg_next::decoder::find_by_name(backend.name).ok_or_else(|| {
             io::Error::other(format!("{} is not built into this ffmpeg", backend.name))
@@ -363,6 +373,7 @@ impl Decoder {
     }
 
     /// The picture `surface` carries, as R,G,B.
+    #[tracing::instrument(skip_all)]
     fn pixels(surface: &frame::Frame, len: usize) -> Result<Frame, Error> {
         let width = unsafe { (*surface.as_ptr()).width as u32 };
         let height = unsafe { (*surface.as_ptr()).height as u32 };
@@ -405,6 +416,7 @@ impl crate::Decoder for Decoder {
     #[tracing::instrument(name = "codec.decode", skip_all)]
     fn decode(&mut self, stream: &[u8]) -> Result<Option<Frame>, Error> {
         if !stream.is_empty() {
+            let _send = tracing::info_span!("codec.send_packet").entered();
             let packet = ffmpeg_next::Packet::copy(stream);
             self.inner.send_packet(&packet).map_err(|e| Error::Decode {
                 len: stream.len(),
@@ -413,6 +425,7 @@ impl crate::Decoder for Decoder {
         }
         // SAFETY: a fresh frame, owned by this call.
         let mut surface = unsafe { frame::Frame::empty() };
+        let _recv = tracing::info_span!("codec.receive_frame").entered();
         match self.inner.receive_frame(&mut surface) {
             Ok(()) => {
                 let picture = Self::pixels(&surface, stream.len())?;
@@ -431,6 +444,7 @@ impl crate::Decoder for Decoder {
 }
 
 /// Whether `error` means "no more pictures right now" rather than a failure.
+#[tracing::instrument(skip_all)]
 fn quiet(error: ffmpeg_next::Error) -> bool {
     matches!(error, ffmpeg_next::Error::Eof)
         || matches!(
@@ -441,12 +455,14 @@ fn quiet(error: ffmpeg_next::Error) -> bool {
 
 /// The size the codec is opened at. AV1's 4:2:0 needs even dimensions, and a
 /// driver handed an odd one loses the whole GPU context instead of refusing it.
+#[tracing::instrument(skip_all)]
 fn coded(size: u32) -> u32 {
     size + size % 2
 }
 
 /// `bgra` at `width` x `height`, padded to the coded even size by repeating the
 /// last column and row, so an odd capture can be encoded as an even picture.
+#[tracing::instrument(skip_all)]
 fn pad_bgra(bgra: &[u8], width: u32, height: u32, coded_width: u32, coded_height: u32) -> Vec<u8> {
     let (w, h) = (width as usize, height as usize);
     let (cw, ch) = (coded_width as usize, coded_height as usize);
@@ -463,6 +479,7 @@ fn pad_bgra(bgra: &[u8], width: u32, height: u32, coded_width: u32, coded_height
 }
 
 /// An encode failure at a known size, as the error the caller sees.
+#[tracing::instrument(skip_all)]
 fn encode_error<E>(width: u32, height: u32) -> impl FnOnce(E) -> Error
 where
     E: std::error::Error + Send + Sync + 'static,

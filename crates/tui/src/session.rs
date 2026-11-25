@@ -38,6 +38,7 @@ pub(crate) use crate::video_stream::stacking;
 /// rather than allocated so both ends agree without a negotiation, and so it is
 /// stable across frames — a replacement under the same id is what makes a frame an
 /// update rather than a new image.
+#[tracing::instrument(skip_all)]
 pub fn image_id(surface: &SurfaceId) -> u32 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -96,8 +97,11 @@ impl<F: Format> Drop for Window<F> {
     /// screen: the last frame stays where it was for as long as the terminal keeps it. Saying so
     /// is the only thing that removes it, and this is the one place that always runs — a window
     /// closed, a session that ends, a link that dies.
+    #[tracing::instrument(skip_all)]
     fn drop(&mut self) {
-        if let VideoStream::Shown(image, _) = std::mem::replace(&mut self.picture, VideoStream::Nothing) {
+        if let VideoStream::Shown(image, _) =
+            std::mem::replace(&mut self.picture, VideoStream::Nothing)
+        {
             image.delete();
         }
     }
@@ -129,6 +133,7 @@ pub struct Session<F: Format> {
 }
 
 impl<F: Format> Session<F> {
+    #[tracing::instrument(skip_all)]
     pub fn new(
         connection: Connection,
         debug: std::sync::Arc<DebugOptions>,
@@ -149,10 +154,8 @@ impl<F: Format> Session<F> {
     /// a session back. A `FuturesUnordered` makes sure a chatty client cannot starve a quiet one,
     /// and `?` on the read is the end of the session either way — a link that failed has nothing
     /// left to read.
-    pub async fn run(
-        mut self,
-        anchors: Anchors,
-    ) -> Result<()> {
+    #[tracing::instrument(skip_all)]
+    pub async fn run(mut self, anchors: Anchors) -> Result<()> {
         loop {
             tokio::select! {
                 message = self.connection.recv() => {
@@ -192,6 +195,9 @@ impl<F: Format> Session<F> {
                 // went away or came back.
                 _ = tokio::time::sleep(RECONCILE) => self.reconcile(&anchors).await,
             }
+            // One frame per turn, marked once the turn's work is done: a message handled
+            // or a reconcile tick, with the wait that preceded it outside the interval.
+            crate::frame_mark();
         }
     }
 
@@ -204,6 +210,7 @@ impl<F: Format> Session<F> {
     /// drawing sends none, and waiting for one would leave the returning pane blank forever.
     ///
     /// Both questions are the same lookup, so they are answered in one pass.
+    #[tracing::instrument(skip_all)]
     async fn reconcile(&mut self, anchors: &Anchors) {
         let snapshot = anchors.load();
         for (surface, window) in &mut self.windows {
@@ -222,6 +229,7 @@ impl<F: Format> Session<F> {
     }
 
     /// One message, and what it means.
+    #[tracing::instrument(skip_all)]
     async fn handle_inner(
         &mut self,
         message: Message,
@@ -247,7 +255,8 @@ impl<F: Format> Session<F> {
                 {
                     Some(at) => {
                         if !self.debug.no_graphics {
-                            self.place_frame(surface, *at, position, bytes.as_deref()).await?;
+                            self.place_frame(surface, *at, position, bytes.as_deref())
+                                .await?;
                         }
                     }
                     // A window with no cells is not placed. It has scrolled away, or been covered
@@ -368,7 +377,7 @@ impl<F: Format> Session<F> {
             .transpose()?
             .flatten();
         let image_id = image_id(&surface);
-        match request {
+        let placed = match request {
             Some(request) => window.picture.update(image_id, at, position, request).await,
             // A frame with nothing to show: the remembered frame moves with it, and the picture
             // the terminal holds is what belongs in the new box.
@@ -376,7 +385,8 @@ impl<F: Format> Session<F> {
                 window.picture.set_frame_position(position);
                 window.picture.show(image_id, at).await
             }
-        }
+        };
+        placed
     }
 
     /// Decode one frame's worth of bytes into a request ready to transmit.
@@ -385,6 +395,7 @@ impl<F: Format> Session<F> {
     /// held back, or one it failed on. A failed codec is replaced from its own id, so the next
     /// frame starts from a clean state; the stored picture is left alone, because a window
     /// whose program stopped drawing keeps whatever it last showed.
+    #[tracing::instrument(skip_all)]
     fn decode(
         debug: &DebugOptions,
         controller: &Controller,
@@ -399,14 +410,11 @@ impl<F: Format> Session<F> {
             image::RgbImage::from_pixel(BLUE.0, BLUE.1, image::Rgb([0, 0, 255]))
         } else {
             match state.decoder.decode(data) {
-                Ok(Some(frame)) => {
-                    image::RgbImage::from_raw(frame.width, frame.height, frame.rgb).ok_or(
-                        ErrorInner::FrameSize {
-                            width: frame.width,
-                            height: frame.height,
-                        },
-                    )?
-                }
+                Ok(Some(frame)) => image::RgbImage::from_raw(frame.width, frame.height, frame.rgb)
+                    .ok_or(ErrorInner::FrameSize {
+                        width: frame.width,
+                        height: frame.height,
+                    })?,
                 // Headers, or a frame the codec held back: nothing to show yet,
                 // and nothing to ask for — the next frame the client sends is what
                 // the decoder held, and a static window sends again when it moves.
@@ -423,7 +431,10 @@ impl<F: Format> Session<F> {
         };
         match F::request(controller, pixels) {
             Ok(request) => Ok(Some(request)),
-            Err(source) => Err(crate::error::Error::at(ErrorInner::Stage { source, surface })),
+            Err(source) => Err(crate::error::Error::at(ErrorInner::Stage {
+                source,
+                surface,
+            })),
         }
     }
 }

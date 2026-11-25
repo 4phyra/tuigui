@@ -24,11 +24,13 @@ pub struct Frame {
 
 impl Frame {
     /// A frame with no bar: ring only.
+    #[tracing::instrument(skip_all)]
     pub fn bare() -> Self {
         Self::default()
     }
 
     /// A frame with the bar under it, which is what a placed window gets.
+    #[tracing::instrument(skip_all)]
     pub fn with_bar() -> Self {
         Self {
             bar: Some(Bar::default()),
@@ -37,6 +39,7 @@ impl Frame {
     }
 
     /// Take the window's name for the frame about to be drawn, for the bar to show.
+    #[tracing::instrument(skip_all)]
     pub fn set_title(&mut self, title: String) {
         if let Some(bar) = self.bar.as_mut() {
             bar.set_title(title);
@@ -48,6 +51,7 @@ impl Frame {
     /// The placement is passed in mutably rather than read back from the window, because a
     /// window's box on the pane is the compositor's fact: the program behind it knows where it
     /// drew, not where it was put.
+    #[tracing::instrument(skip_all)]
     pub fn handle_mouse(
         &mut self,
         window: &CompositableWindow,
@@ -71,6 +75,7 @@ impl Frame {
         Ok(Some(mouse))
     }
 
+    #[tracing::instrument(skip_all)]
     fn handle_resize(
         &mut self,
         _window: &CompositableWindow,
@@ -114,6 +119,7 @@ impl Frame {
 }
 
 impl Widget for &mut Frame {
+    #[tracing::instrument(skip_all)]
     fn render(self, area: Rect, buf: &mut Buffer) {
         // `area` is the window's own cells; the chrome is the ring around them.
         //
@@ -138,6 +144,7 @@ impl Widget for &mut Frame {
 /// The row under a window's cells that its bar occupies: within the ring's columns.
 ///
 /// Used by the draw and by the hit test, so the bar is pressed where it is seen.
+#[tracing::instrument(skip_all)]
 fn bar_area(area: Rect) -> Rect {
     let inside = area.inner(Margin::new(1, 0));
     Rect::new(inside.x, area.bottom(), inside.width, 1)

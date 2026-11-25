@@ -27,6 +27,7 @@ enum Scene {
     Scroll,
 }
 
+#[tracing::instrument(skip_all)]
 fn scene_color(scene: Scene) -> [u8; 3] {
     match scene {
         Scene::Start => [0x10, 0x20, 0x40],
@@ -45,6 +46,7 @@ struct Smoke {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         _: &mut Self,
         _: &wl_registry::WlRegistry,
@@ -60,6 +62,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Smoke {
 }
 
 impl Dispatch<wl_compositor::WlCompositor, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         _: &mut Self,
         _: &wl_compositor::WlCompositor,
@@ -72,6 +75,7 @@ impl Dispatch<wl_compositor::WlCompositor, ()> for Smoke {
 }
 
 impl Dispatch<wl_surface::WlSurface, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         _: &mut Self,
         _: &wl_surface::WlSurface,
@@ -84,6 +88,7 @@ impl Dispatch<wl_surface::WlSurface, ()> for Smoke {
 }
 
 impl Dispatch<wl_shm::WlShm, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         _: &mut Self,
         _: &wl_shm::WlShm,
@@ -96,6 +101,7 @@ impl Dispatch<wl_shm::WlShm, ()> for Smoke {
 }
 
 impl Dispatch<wl_shm_pool::WlShmPool, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         _: &mut Self,
         _: &wl_shm_pool::WlShmPool,
@@ -108,6 +114,7 @@ impl Dispatch<wl_shm_pool::WlShmPool, ()> for Smoke {
 }
 
 impl Dispatch<wl_buffer::WlBuffer, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         _: &mut Self,
         _: &wl_buffer::WlBuffer,
@@ -120,6 +127,7 @@ impl Dispatch<wl_buffer::WlBuffer, ()> for Smoke {
 }
 
 impl Dispatch<wl_seat::WlSeat, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         _: &mut Self,
         seat: &wl_seat::WlSeat,
@@ -135,6 +143,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for Smoke {
 }
 
 impl Dispatch<wl_keyboard::WlKeyboard, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         state: &mut Self,
         _: &wl_keyboard::WlKeyboard,
@@ -157,6 +166,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for Smoke {
 }
 
 impl Dispatch<wl_pointer::WlPointer, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         state: &mut Self,
         _: &wl_pointer::WlPointer,
@@ -185,6 +195,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Smoke {
 }
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         _: &mut Self,
         wm_base: &xdg_wm_base::XdgWmBase,
@@ -200,6 +211,7 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for Smoke {
 }
 
 impl Dispatch<xdg_surface::XdgSurface, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         state: &mut Self,
         _: &xdg_surface::XdgSurface,
@@ -216,6 +228,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for Smoke {
 }
 
 impl Dispatch<xdg_toplevel::XdgToplevel, ()> for Smoke {
+    #[tracing::instrument(skip_all)]
     fn event(
         _: &mut Self,
         _: &xdg_toplevel::XdgToplevel,
@@ -227,6 +240,7 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for Smoke {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn repaint(
     scene: Scene,
     shm: &wl_shm::WlShm,
@@ -269,6 +283,7 @@ fn repaint(
     surface.commit();
 }
 
+#[tracing::instrument(skip_all)]
 fn main() {
     let conn = Connection::connect_to_env().expect("connect");
     let (globals, mut event_queue) =

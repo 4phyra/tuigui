@@ -23,8 +23,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use compositor::CompositableWindow;
-use futures::stream::FuturesUnordered;
-use futures::stream::StreamExt as _;
 use wire::message::Message;
 use wire::transport::{Connection, Transport};
 
@@ -35,6 +33,11 @@ use crate::Error;
 ///
 /// Boxed because a window's servant starts the servants of the windows it opens: that shape is a
 /// future whose child futures are of its own type, which only a box can express.
+/// A window's task ended without an answer: its own panic, or its abort.
+fn join_error(e: tokio::task::JoinError) -> Error {
+    std::io::Error::other(format!("a window's task ended: {e}")).into()
+}
+
 type Proxy = futures::future::BoxFuture<'static, Result<(), Error>>;
 
 /// How long one turn of the window session dispatches for at most.
@@ -43,19 +46,12 @@ type Proxy = futures::future::BoxFuture<'static, Result<(), Error>>;
 /// key to the program and what lets it commit its next picture.
 const STEP: std::time::Duration = std::time::Duration::from_millis(4);
 
-/// How often a window's picture is taken when nothing else wakes its servant.
+/// How long an idle window waits before its picture is taken again.
 ///
-/// A program draws on its own clock — a page finishes loading, a cursor blinks, a video plays — and
-/// none of that reaches this side as an event. The tick is what makes a commit visible at all: it is
-/// the servant's own clock, not the pane's, because the pane redrawing is what a picture is *shown*
-/// by and this is what it is *taken* for.
-///
-/// Thirty frames a second, not sixty. Every tick costs the far side a transmit and a wait
-/// for the terminal to acknowledge the placement, and those are serialized on the link — so
-/// the tick is a rate the consumer has to keep up with, not a free poll. 33ms is past what a
-/// streamed desktop needs to read as continuous, and it leaves the server's queue room to
-/// stay short over a link whose round trip is tens of milliseconds.
-const FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+/// The frame clock. A program draws on its own schedule and none of it arrives as an event, so
+/// this tick is the only thing that wakes its servant: a turn with nothing to send costs exactly
+/// this wait, and a turn with a picture costs the wait plus the encode.
+const EMPTY: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Run the session's program to its end.
 ///
@@ -66,6 +62,7 @@ const FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 ///
 /// `transport` is the link the render path already bound and announced: it arrives once, and every
 /// window's servant keeps a clone of the connection, so each streams at its own pace.
+#[tracing::instrument(skip_all)]
 pub async fn run(
     root_initializer: tokio::sync::oneshot::Sender<(CompositableWindow, io::PipeReader)>,
     options: crate::windowing::Options,
@@ -114,8 +111,19 @@ pub async fn run(
         root_initializer.send((placed, stdout)).map_err(|_| {
             io::Error::other("the root window was not wanted: the render path is gone")
         })?;
-        // Every window of the session, including the root's own: this is the session's whole life.
-        servant.await
+        // Every window of the session, including the root's own: this is the session's whole
+        // life. Spawned, not awaited here: each window captures and encodes in its own task, so
+        // one window's encode cannot hold up another's frame or the session's own turns.
+        //
+        // Held in a set rather than a bare handle: this future is dropped when the session ends,
+        // and a dropped set aborts its task. A detached servant would keep the link open and keep
+        // streaming into a session that is over.
+        let mut windows = tokio::task::JoinSet::new();
+        windows.spawn(servant);
+        match windows.join_next().await {
+            Some(ended) => ended.map_err(join_error)?,
+            None => Ok(()),
+        }
     });
 
     loop {
@@ -157,6 +165,7 @@ pub async fn run(
 /// behind cells nobody could blank. The wait is safe here because the caller polls the link beside
 /// this future, which is what carries the answer.
 #[async_recursion::async_recursion]
+#[tracing::instrument(skip_all)]
 async fn serve_window(
     window: Box<dyn Compositable>,
     connection: Connection,
@@ -202,7 +211,7 @@ async fn serve_window(
 
     let servant: Proxy = Box::pin(async move {
         // The windows this one's program opened, each already being served.
-        let mut futures = FuturesUnordered::new();
+        let mut futures = tokio::task::JoinSet::new();
         // The box the pane placed this window in, in cells. What a frame reports, because that is
         // where the picture goes: the program's own committed size is a different number — a client
         // may draw at whatever size it chose — and placing by that is a picture that overflows the
@@ -236,7 +245,7 @@ async fn serve_window(
                             .await?;
                     // A failed send is the compositor having dropped this window's placement: the
                     // window is over, and so is the news of it.
-                    (children.send(placed).ok(), futures.push(servant));
+                    (children.send(placed).ok(), futures.spawn(servant));
                 }
                 // A menu inside this window: placed the same way, announced on its own channel.
                 popup = window.recv_new_popup() => {
@@ -244,7 +253,7 @@ async fn serve_window(
                     let (placed, servant) =
                         serve_window(popup, connection.clone(), rebroadcaster.resubscribe())
                             .await?;
-                    (popups.send(placed).ok(), futures.push(servant));
+                    (popups.send(placed).ok(), futures.spawn(servant));
                 }
                 // The compositor asked this window to close. A request: the program is told and
                 // decides, and the window it chose to keep is one this keeps serving. A receive
@@ -258,12 +267,15 @@ async fn serve_window(
                 // One of the windows this one opened is over. Nothing to place — the compositor
                 // learns it when the child's channel closes — so the news is only that a servant
                 // finished.
-                Some(ended) = futures.next() => ended?,
+                Some(ended) = futures.join_next() => ended.map_err(join_error)??,
                 // The program committed a picture nobody typed to ask for. A window draws on its own
                 // clock and not on this side's events, so a frame has to be taken whether or not
                 // anything arrived: without this arm a window is only ever captured in answer to
                 // input, and a program that draws by itself is never seen at all.
-                _ = tokio::time::sleep(FRAME) => {}
+                // The only arm that wakes an idle window: a program draws on its own clock and
+                // none of it arrives as an event, so without this tick a window that draws by
+                // itself is never captured at all. The turn after the tick is the frame.
+                _ = tokio::time::sleep(EMPTY) => {}
             }
 
             // A picture leaves here: once per turn, so the encode and the send happen in the same
@@ -291,6 +303,7 @@ async fn serve_window(
 ///
 /// Under `test-windowing` there is no terminal to ask, so a fixed 80x24 stands in: the scripted
 /// window never reads it anyway, but the frame path measures in cells and needs an answer.
+#[tracing::instrument(skip_all)]
 fn winsize() -> io::Result<rustix::termios::Winsize> {
     if cfg!(feature = "test-windowing") {
         return Ok(rustix::termios::Winsize {
@@ -308,6 +321,7 @@ fn winsize() -> io::Result<rustix::termios::Winsize> {
 /// That signature is not decoration. The far side finds where a picture goes by scanning the pane
 /// for these cells, so a window drawn without them is a window nothing can be placed on — the
 /// pictures arrive and are dropped for want of an anchor.
+#[tracing::instrument(skip_all)]
 fn paint_surface(
     surface: wire::message::SurfaceId,
 ) -> impl Fn(

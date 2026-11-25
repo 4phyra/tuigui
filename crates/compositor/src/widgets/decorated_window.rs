@@ -42,6 +42,7 @@ pub struct DecoratedWindow {
 /// A window is laid out in cells and its program draws in pixels, so this is the
 /// conversion between the two, and the terminal's own report is the only place it
 /// comes from. A grid of no cells would be a division by zero rather than a size.
+#[tracing::instrument(skip_all)]
 pub fn cell_size(winsize: rustix::termios::Winsize) -> (u32, u32) {
     (
         (u32::from(winsize.ws_xpixel) / u32::from(winsize.ws_col).max(1)).max(1),
@@ -53,6 +54,7 @@ pub fn cell_size(winsize: rustix::termios::Winsize) -> (u32, u32) {
 ///
 /// The other half of [`cells`], and the pair has to round-trip: a box converted to pixels,
 /// configured, and read back must give the same box.
+#[tracing::instrument(skip_all)]
 pub fn pixels(area: Rect, winsize: rustix::termios::Winsize) -> (u32, u32) {
     let (width, height) = cell_size(winsize);
     (
@@ -66,6 +68,7 @@ pub fn pixels(area: Rect, winsize: rustix::termios::Winsize) -> (u32, u32) {
 /// Rounded to the nearest cell rather than up or down, which is what makes it the inverse of
 /// [`pixels`]: a size the program was asked for in whole cells lands back on exactly that many,
 /// and only a program that drew something genuinely between two cells moves at all.
+#[tracing::instrument(skip_all)]
 pub fn cells(px: (u32, u32), winsize: rustix::termios::Winsize) -> (u16, u16) {
     let (width, height) = cell_size(winsize);
     (
@@ -75,6 +78,7 @@ pub fn cells(px: (u32, u32), winsize: rustix::termios::Winsize) -> (u16, u16) {
 }
 
 impl DecoratedWindow {
+    #[tracing::instrument(skip_all)]
     pub fn new(window: CompositableWindow, frame: Option<Frame>, state: WindowState) -> Self {
         Self {
             window,
@@ -93,6 +97,7 @@ impl DecoratedWindow {
     ///
     /// The root has no chrome, so its box is the pane and it is measured in pixels directly by the
     /// compositor; every other window loses a row to its bar and its ring.
+    #[tracing::instrument(skip_all)]
     pub fn maybe_set_size(&mut self, winsize: rustix::termios::Winsize) {
         // A popup is sized by its own program's positioner, so there is nothing to ask: the box it
         // is drawn in is the size it said it would be.
@@ -119,6 +124,7 @@ impl DecoratedWindow {
     /// `area` is handed in rather than read from the state, because a popup's state holds only
     /// where it sits *inside* its parent: the pane-wide box is the parent's corner plus that
     /// offset, and only the compositor, which walks the two together, can say what it is.
+    #[tracing::instrument(skip_all)]
     pub fn handle_mouse(
         &mut self,
         mouse: MouseEvent,
@@ -163,6 +169,7 @@ impl DecoratedWindow {
 }
 
 impl Widget for &mut DecoratedWindow {
+    #[tracing::instrument(skip_all)]
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         // The window's own cells, which is what the far side scans for: they carry its surface

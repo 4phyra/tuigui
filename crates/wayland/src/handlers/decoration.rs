@@ -20,6 +20,7 @@ impl XdgDecorationHandler for State {
     /// message rather than a separate round trip: `send_configure` emits the decoration
     /// mode when it has changed or was never sent, and the toplevel's own pending state
     /// is where the mode comes from.
+    #[tracing::instrument(skip_all)]
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
         tracing::info!("compositor: a toplevel asked for decorations; answering server-side");
         toplevel.with_pending_state(|state| {
@@ -33,6 +34,7 @@ impl XdgDecorationHandler for State {
     /// A client that asks for `ClientSide` cannot be made to stop drawing, but it can be
     /// told what this session wants, and most toolkits drop their own chrome on the next
     /// buffer when the answer disagrees with the request.
+    #[tracing::instrument(skip_all)]
     fn request_mode(&mut self, toplevel: ToplevelSurface, mode: Mode) {
         tracing::debug!("compositor: a toplevel requested {mode:?} decoration");
         toplevel.with_pending_state(|state| {
@@ -45,6 +47,7 @@ impl XdgDecorationHandler for State {
     ///
     /// Nothing is sent: the client said it no longer cares, so it is not waiting on an
     /// answer, and a configure nobody asked for is a resize it would have to handle.
+    #[tracing::instrument(skip_all)]
     fn unset_mode(&mut self, _toplevel: ToplevelSurface) {
         tracing::debug!("compositor: a toplevel withdrew its decoration preference");
     }

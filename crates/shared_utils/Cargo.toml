@@ -6,6 +6,7 @@ license.workspace = true
 description = "What both halves of a session need and neither should own"
 
 [dependencies]
+tracing = { workspace = true }
 rustix = { workspace = true }
 tokio = { workspace = true }
 # The handler every failure this program prints is drawn with, so both halves report the same way.

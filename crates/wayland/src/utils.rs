@@ -28,6 +28,7 @@ pub(crate) fn fire_frame_callbacks(surface: &WlSurface) {
 
 /// The connecting process's pid, straight from the socket (`SO_PEERCRED`).
 /// Linux-only by the crate gate.
+#[tracing::instrument(skip_all)]
 pub(crate) fn peer_pid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
     use std::os::unix::io::AsRawFd;
 
@@ -51,6 +52,7 @@ pub(crate) fn peer_pid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
 
 /// The parent of `pid`, as the kernel reports it. `None`: no parent known
 /// (init's child, or the process vanished between connect and lookup).
+#[tracing::instrument(skip_all)]
 pub(crate) fn proc_parent(pid: u32) -> Option<u32> {
     sysinfo::System::new_all()
         .process(sysinfo::Pid::from_u32(pid))
@@ -148,6 +150,7 @@ fn copy_bgra(src: &[u8], src_stride: usize, size: (usize, usize), dst: &mut [u8]
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn wl_bpp(f: smithay::reexports::wayland_server::protocol::wl_shm::Format) -> usize {
     use smithay::backend::allocator::format::get_bpp;
     use smithay::wayland::shm;

@@ -39,6 +39,7 @@ pub(crate) const TRANSMIT_TIMEOUT: std::time::Duration = std::time::Duration::fr
 /// The order comes from the gui, which is the side with a window manager: it sends a rank per
 /// frame, `0` being furthest away and larger being closer to the user. That rank is shifted into
 /// the band, so the order is the gui's and only the position is this side's business.
+#[tracing::instrument(skip_all)]
 pub(crate) fn stacking(z: u32) -> i32 {
     // The band is the whole lower half of the range, so a rank large enough to saturate is not one
     // the gui can produce: the furthest it could go is the front of the band, which is where
@@ -60,6 +61,7 @@ pub const PLACEMENT_ID: u32 = 98;
 /// One shape for both, because they are the same picture coming back to the same box: `at` is
 /// where the scan found the cells this time around, and everything else is the frame's own
 /// rank and box.
+#[tracing::instrument(skip_all)]
 fn placement_request(at: Position, frame: FramePosition) -> PlacementRequest {
     let FramePosition { z, cols, rows } = frame;
     PlacementRequest {
@@ -135,6 +137,7 @@ impl<F: Format> VideoStream<F> {
     /// image, and the image lives inside the variant, so it has to be taken out before it can
     /// be given away. Nothing to do for the other two — a hidden picture is already off the
     /// screen and one that never drew has nothing to take off.
+    #[tracing::instrument(skip_all)]
     pub fn hide(&mut self) {
         let taken = std::mem::replace(self, VideoStream::Nothing);
         *self = match taken {
@@ -144,6 +147,7 @@ impl<F: Format> VideoStream<F> {
     }
 
     /// Whether the picture is off the terminal right now.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn is_hidden(&self) -> bool {
         matches!(self, VideoStream::Hidden(_, _))
     }
@@ -152,6 +156,7 @@ impl<F: Format> VideoStream<F> {
     ///
     /// `Nothing` has nowhere to hang it and nothing to remember: the first frame that carries
     /// pixels sets the picture's frame itself, and one that does not has nothing to place.
+    #[tracing::instrument(skip_all)]
     pub(crate) fn set_frame_position(&mut self, frame: FramePosition) {
         match self {
             VideoStream::Shown(_, slot) | VideoStream::Hidden(_, slot) => *slot = frame,
@@ -173,6 +178,7 @@ impl<F: Format> VideoStream<F> {
     /// A transmit, never a placement. A placement names an image the terminal may have
     /// dropped, and it answers `ENOENT` when it has — a failure with no recovery in it,
     /// since a placement carries no pixels.
+    #[tracing::instrument(skip_all)]
     pub async fn show(&mut self, image_id: u32, at: Position) -> Result<()> {
         let placed = match std::mem::replace(self, VideoStream::Nothing) {
             VideoStream::Nothing => None,
@@ -199,6 +205,7 @@ impl<F: Format> VideoStream<F> {
     /// screen, and a frame that was not placed is a frame the user never sees. Timed: a
     /// terminal that never acknowledges never draws, and waiting past the point a working
     /// one would have replied is waiting for nothing.
+    #[tracing::instrument(skip_all)]
     async fn settle(&mut self, mut image: DynImage<F>, frame: FramePosition) -> Result<()> {
         // `sync` returns nothing; the image is what is stored, and it is still held here.
         image.sync().timeout(TRANSMIT_TIMEOUT).await??;
@@ -216,6 +223,7 @@ impl<F: Format> VideoStream<F> {
     /// Timed, because this is the one await in the program that a terminal can leave
     /// hanging: the acknowledgement is a reply a terminal may not send, and a session that
     /// stalls here shows an empty pane forever with no clue why.
+    #[tracing::instrument(skip_all)]
     pub async fn update(
         &mut self,
         image_id: u32,

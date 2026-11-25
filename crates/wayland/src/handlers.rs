@@ -125,11 +125,13 @@ forward!(XwaylandSurfaceV1: XWaylandSurfaceUserData => XWaylandShellState);
 // The trivial handler hooks: registration, not policy.
 impl BufferHandler for State
 {
+    #[tracing::instrument(skip_all)]
     fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
 }
 
 impl ShmHandler for State
 {
+    #[tracing::instrument(skip_all)]
     fn shm_state(&self) -> &ShmState {
         &self.globals.shm_state
     }
@@ -155,6 +157,7 @@ impl ServerDndGrabHandler for State
 }
 impl DataDeviceHandler for State
 {
+    #[tracing::instrument(skip_all)]
     fn data_device_state(&self) -> &DataDeviceState {
         &self.globals.data_device_state
     }

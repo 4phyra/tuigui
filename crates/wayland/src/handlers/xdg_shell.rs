@@ -14,6 +14,7 @@ use crate::window::{UnifiedSurface, Window};
 
 impl XdgShellHandler for State
 {
+    #[tracing::instrument(skip_all)]
     fn xdg_shell_state(&mut self) -> &mut smithay::wayland::shell::xdg::XdgShellState {
         &mut self.globals.xdg_shell_state
     }
@@ -91,6 +92,7 @@ impl XdgShellHandler for State
     /// the parent. Constraint adjustment (flipping a menu that would run off the edge) is not
     /// applied: that needs the parent's bounds, and a wrong guess puts the menu somewhere the
     /// client did not ask for. A menu that overhangs is at least where it was drawn.
+    #[tracing::instrument(skip_all)]
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
         let geometry = positioner.get_geometry();
 
@@ -182,6 +184,7 @@ impl XdgShellHandler for State
     /// it in, so a press inside a popup already reaches it. The request is not answered rather
     /// than ignored, because the seat is the only thing a grab could be taken from and this side
     /// never took one.
+    #[tracing::instrument(skip_all)]
     fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
 
     /// A popup went away: its client dismissed the menu, or its program closed it.
@@ -215,6 +218,7 @@ impl XdgShellHandler for State
         }
     }
 
+    #[tracing::instrument(skip_all)]
     fn reposition_request(
         &mut self,
         _surface: PopupSurface,
@@ -233,6 +237,7 @@ impl XdgShellHandler for State
 /// and is free to commit at whatever size it likes instead. What the configure carries is the
 /// **logical** size, so the program lays its interface out `logical_scale` times larger than the
 /// physical box.
+#[tracing::instrument(skip_all)]
 fn admit(
     surface: &ToplevelSurface,
     physical_size: (u32, u32),
@@ -259,6 +264,7 @@ fn admit(
 ///
 /// The first toplevel is the client's root window and fills the output; later
 /// ones are children, which are proposed the session's default window size.
+#[tracing::instrument(skip_all)]
 fn admit_into_root_client(state: &mut State, surface: ToplevelSurface)
 {
     let serial = state.next_serial();
@@ -308,6 +314,7 @@ fn admit_into_root_client(state: &mut State, surface: ToplevelSurface)
 }
 
 /// Apply a commit held for a window that has just been admitted.
+#[tracing::instrument(skip_all)]
 fn apply_pending(held: Option<(Vec<u8>, (u32, u32))>, tree: &Arc<Window>) {
     let Some((pixels, size)) = held else {
         return;
@@ -319,6 +326,7 @@ fn apply_pending(held: Option<(Vec<u8>, (u32, u32))>, tree: &Arc<Window>) {
 }
 
 /// Admit a toplevel into a sub-client's window tree.
+#[tracing::instrument(skip_all)]
 fn admit_into_sub(state: &mut State, surface: ToplevelSurface)
 {
     // A sub-client's windows never fill the output: one window does, and it

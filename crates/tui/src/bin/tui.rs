@@ -11,6 +11,7 @@ use tui::Tui;
 // the threads beyond what those waits can occupy would spend their lives parked. The same count
 // as `tuigui`, because a session started from either one should schedule its work the same way.
 #[tokio::main(worker_threads = 8)]
+#[tracing::instrument(skip_all)]
 async fn main() {
     // `parse`, not `try_parse_from`: clap needs `argv[0]` to name itself in a
     // usage message, and skipping it made `--help` come out as the program name.

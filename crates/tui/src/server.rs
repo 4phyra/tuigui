@@ -54,6 +54,7 @@ impl Server {
     ///
     /// The grid does not come from here: the scan that finds where a window is belongs to the
     /// proxy, which is the half holding the command's bytes.
+    #[tracing::instrument(skip_all)]
     pub fn new(
         debug: std::sync::Arc<DebugOptions>,
         controller: Arc<Controller>,
@@ -67,6 +68,7 @@ impl Server {
     }
 
     /// Dial whoever announces itself, and serve every client until the command's output ends.
+    #[tracing::instrument(skip_all)]
     pub async fn run<F: Format + Send + Sync>(
         self,
         mut announcements: tokio::sync::mpsc::Receiver<Box<dyn Transport>>,

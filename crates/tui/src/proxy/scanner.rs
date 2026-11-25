@@ -38,6 +38,7 @@ impl Scanner {
     /// The size is read here rather than passed, because it is the terminal's own answer: a scan
     /// over a made-up grid would walk cells the screen does not have and miss the ones it does. A
     /// terminal that will not report one is a failure, not a guess.
+    #[tracing::instrument(skip_all)]
     pub fn new() -> std::io::Result<Self> {
         let ws = shared_utils::resize::size()?;
         Ok(Self {
@@ -52,6 +53,7 @@ impl Scanner {
     }
 
     /// Feed one chunk of the command's output.
+    #[tracing::instrument(skip_all)]
     pub fn feed(&mut self, bytes: &[u8]) {
         self.terminal.process(bytes);
     }
@@ -61,6 +63,7 @@ impl Scanner {
     /// The scan walks the grid cell by cell, so its bounds have to be the terminal's: a pane that
     /// grew would otherwise have columns the scan cannot see, and a window that moved into them
     /// would never be placed.
+    #[tracing::instrument(skip_all)]
     pub fn resize(&mut self, rows: std::num::NonZeroU16, cols: std::num::NonZeroU16) {
         self.terminal.set_size(rows, cols);
     }
@@ -70,6 +73,7 @@ impl Scanner {
     /// A barcode is a contiguous run of braille: two or more in a row, which is what a program
     /// drawing a graph does not produce. The longest run wins, because a graph and a record on the
     /// same screen is a screen with a record on it.
+    #[tracing::instrument(skip_all)]
     pub fn scan_barcode(&self) -> Option<Box<dyn Transport>> {
         let screen = self.terminal.screen();
         let (rows, cols) = screen.size();
@@ -96,6 +100,7 @@ impl Scanner {
     /// not looked for again. `None` for a surface with no cell on screen: it has scrolled away, or
     /// been covered entirely, or has not drawn yet, and all three mean the same thing to a
     /// placement — there is nothing to place.
+    #[tracing::instrument(skip_all)]
     pub fn scan_positions(&self, surfaces: &[SurfaceId]) -> HashMap<SurfaceId, Position> {
         let screen = self.terminal.screen();
         let (rows, cols) = screen.size();
@@ -130,6 +135,7 @@ impl Scanner {
 /// transports already define. `Transport::from_magic` is the only place that understands it, so a
 /// run that does not parse into a channel is not an announcement — a program drawing braille by
 /// hand has no reason to spell an address in it.
+#[tracing::instrument(skip_all)]
 fn consider(best: &mut Option<Box<dyn Transport>>, run: &mut Vec<CodeCell>) {
     if run.len() >= MIN_BARCODE_CELLS {
         let announced = cellcode::decode(run.drain(..))
@@ -148,6 +154,7 @@ fn consider(best: &mut Option<Box<dyn Transport>>, run: &mut Vec<CodeCell>) {
 /// and the one whose name matches builds itself. That is why a transport's parse is a
 /// `from_magic` on the trait rather than a function here: a channel is added by
 /// implementing it and naming it, not by teaching the scan about it.
+#[tracing::instrument(skip_all)]
 fn announcement(text: &str) -> Option<Box<dyn Transport>> {
     let (name, address) = text.split_once(ANNOUNCE_SEPARATOR)?;
     let transport: Box<dyn Transport> = match name {
@@ -160,6 +167,7 @@ fn announcement(text: &str) -> Option<Box<dyn Transport>> {
 }
 
 /// The braille cell a terminal cell holds, if it holds one.
+#[tracing::instrument(skip_all)]
 fn code_cell(cell: &vt100::Cell) -> Option<CodeCell> {
     let mut chars = cell.contents().chars();
     let symbol = chars.next()?;
@@ -181,6 +189,7 @@ fn code_cell(cell: &vt100::Cell) -> Option<CodeCell> {
 ///
 /// True colour only: a palette index names whatever the terminal has in that slot, which is not a
 /// fact a surface carries.
+#[tracing::instrument(skip_all)]
 fn is_surface(cell: &vt100::Cell, surface: &SurfaceId) -> bool {
     let rgb = |colour: vt100::Color| match colour {
         vt100::Color::Rgb(r, g, b) => Some((r, g, b)),

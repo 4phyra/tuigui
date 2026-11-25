@@ -49,6 +49,7 @@ impl Session {
     /// The link leaves immediately, down `transport`: binding is this side's, because the
     /// announcement is what this side draws, but accepting on it is the run path's, and a transport
     /// has one owner. What stays here is the announcement, which is a record and not a link.
+    #[tracing::instrument(skip_all)]
     pub async fn new(
         channel: crate::Channel,
         program: String,
@@ -70,6 +71,7 @@ impl Session {
     }
 
     /// Whether the session has ended.
+    #[tracing::instrument(skip_all)]
     pub fn done(&self) -> bool {
         match &self.stage.0 {
             // Failed, or finished: either way there is nothing left to do.
@@ -83,6 +85,7 @@ impl Session {
     /// The window is already placed — the run path handed it over — and the output arrives as the
     /// reader on the program's own words: the two are what a screen needs, and neither exists
     /// before the program has drawn something.
+    #[tracing::instrument(skip_all)]
     pub fn from_any_to_windows(
         &mut self,
         root: CompositableWindow,
@@ -99,6 +102,7 @@ impl Session {
     /// Every half is offered it and the answers are unioned: a press the program claimed still moves
     /// the pointer, and one it refused is the dock's. A half that is not there — a stage that failed
     /// — takes nothing and asks for nothing.
+    #[tracing::instrument(skip_all)]
     pub fn handle_event(
         &mut self,
         event: &termina::Event,
@@ -120,6 +124,7 @@ impl Session {
     }
 
     /// Do the work a window change wants, and set the root's box to the pane.
+    #[tracing::instrument(skip_all)]
     pub async fn step(&mut self, winsize: rustix::termios::Winsize) {
         if let Ok(stage) = &mut self.stage.0 {
             stage.step(winsize).await;
@@ -131,6 +136,7 @@ impl Session {
     /// The dock's strip is the only thing that animates over many frames; everything else is drawn
     /// once and stands until something says otherwise. Asked after a frame rather than kept as a
     /// flag, because the answer belongs to whatever is moving.
+    #[tracing::instrument(skip_all)]
     pub fn is_animating(&self) -> bool {
         self.dock.is_animating()
     }
@@ -140,6 +146,7 @@ impl Session {
     /// Asked by the caller because the terminals are the caller's: the session knows which screen it
     /// wants, and the two — one three rows at the cursor, one the whole screen — are built and owned
     /// where the writer is.
+    #[tracing::instrument(skip_all)]
     pub fn is_alternate(&self) -> bool {
         self.stage.as_ref().is_ok_and(Stage::is_alternate)
     }

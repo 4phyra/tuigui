@@ -109,6 +109,7 @@ impl P2p {
     /// can be resolved from its key alone once the peer has published. Hole punching
     /// replaces the relay with a direct path as soon as one works; that is the library's
     /// business and not this file's.
+    #[tracing::instrument(skip_all)]
     pub async fn host() -> io::Result<Self> {
         let endpoint = Endpoint::builder(presets::N0)
             .alpns(vec![ALPN.to_vec()])
@@ -133,6 +134,7 @@ impl P2p {
     ///
     /// Bound once and kept. A second call is not a rebind, which is what lets both the
     /// handshake and a retry reach it without agreeing on who went first.
+    #[tracing::instrument(skip_all)]
     async fn endpoint(&self) -> io::Result<Endpoint> {
         let mut endpoint = self.endpoint.lock().await;
         if endpoint.is_none() {
@@ -153,6 +155,7 @@ impl P2p {
     /// Adopt a stream pair as this transport's link.
     ///
     /// Shared by dialing and accepting, which differ only in who opened the stream.
+    #[tracing::instrument(skip_all)]
     async fn adopt(&self, (send, recv): (iroh::endpoint::SendStream, iroh::endpoint::RecvStream)) {
         self.link.store(Some(Arc::new(Link {
             read: Mutex::new(framed_read(recv)),
@@ -164,6 +167,7 @@ impl P2p {
     ///
     /// The key, because that is what identifies the endpoint at the other end: an address
     /// is how to reach it, and two addresses can name one endpoint.
+    #[tracing::instrument(skip_all)]
     fn label(addr: &EndpointAddr) -> String {
         EndpointTicket::new(addr.clone()).to_string()
     }
@@ -171,6 +175,7 @@ impl P2p {
 
 #[async_trait::async_trait]
 impl Transport for P2p {
+    #[tracing::instrument(skip_all)]
     fn name(&self) -> &'static str {
         NAME
     }
@@ -179,6 +184,7 @@ impl Transport for P2p {
     ///
     /// Bound here because `to_magic` has to name an address a peer can dial, and an endpoint's key
     /// is minted at bind time: until there is one there is nothing to announce.
+    #[tracing::instrument(skip_all)]
     async fn new() -> io::Result<Self> {
         Self::host().await
     }
@@ -187,6 +193,7 @@ impl Transport for P2p {
     ///
     /// The peer's ticket when dialing, this endpoint's when hosting — known since
     /// construction, so no lock is needed to read it.
+    #[tracing::instrument(skip_all)]
     fn address(&self) -> String {
         EndpointTicket::new(self.announce.clone()).to_string()
     }
@@ -197,6 +204,7 @@ impl Transport for P2p {
     /// the endpoint is this side's own anyway: see [`P2p::endpoint`], which makes it when
     /// something that can await asks. Nothing is lost by the split, because a ticket is
     /// the whole of what the peer said.
+    #[tracing::instrument(skip_all)]
     fn from_magic(name: &str, address: &str) -> Option<Self> {
         if name != NAME {
             return None;

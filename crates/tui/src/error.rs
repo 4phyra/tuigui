@@ -36,12 +36,14 @@ pub struct Error {
 }
 
 impl std::fmt::Display for Error {
+    #[tracing::instrument(skip_all)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} ({})", self.inner, self.location)
     }
 }
 
 impl std::error::Error for Error {
+    #[tracing::instrument(skip_all)]
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         std::error::Error::source(&self.inner)
     }
@@ -53,6 +55,7 @@ impl Error {
     /// `#[track_caller]`, so the location is the caller's: a `?` records its own file and
     /// line, which is the fact an `io::Error` cannot carry and the one a reader needs.
     #[track_caller]
+    #[tracing::instrument(skip_all)]
     pub fn at(inner: impl Into<ErrorInner>) -> Self {
         Self {
             inner: inner.into(),
@@ -65,6 +68,7 @@ impl From<tokio::time::error::Elapsed> for Error {
     /// The only wait in this crate is the transmit's, so a timeout is that one: the
     /// variant carries the duration that passed, which the bare `Elapsed` does not.
     #[track_caller]
+    #[tracing::instrument(skip_all)]
     fn from(_: tokio::time::error::Elapsed) -> Self {
         Self::at(ErrorInner::TransmitTimeout(crate::video_stream::TRANSMIT_TIMEOUT))
     }
@@ -101,6 +105,7 @@ impl From<ErrorInner> for Error {
     /// line that did the converting rather than this impl's. Without it a value built by hand —
     /// `ErrorInner::Stage { .. }.into()` — would point at this function in every report.
     #[track_caller]
+    #[tracing::instrument(skip_all)]
     fn from(inner: ErrorInner) -> Self {
         Self::at(inner)
     }
@@ -191,6 +196,7 @@ pub(crate) struct ReportFailure;
 impl futures_retry::ErrorHandler<std::io::Error> for ReportFailure {
     type OutError = std::io::Error;
 
+    #[tracing::instrument(skip_all)]
     fn handle(
         &mut self,
         attempt: usize,
@@ -225,6 +231,7 @@ impl futures_retry::ErrorHandler<std::io::Error> for ReportFailure {
 /// Inside the crate the typed error and its source are intact, so a caller that wants to match
 /// on the cause has it; only this last hop to `io::Error` loses the chain.
 impl From<Error> for std::io::Error {
+    #[tracing::instrument(skip_all)]
     fn from(error: Error) -> Self {
         std::io::Error::other(error.to_string())
     }

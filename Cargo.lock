@@ -471,12 +471,16 @@ name = "cell_map"
 version = "0.1.0"
 dependencies = [
  "tokio",
+ "tracing",
  "vt100",
 ]
 
 [[package]]
 name = "cellcode"
 version = "0.1.0"
+dependencies = [
+ "tracing",
+]
 
 [[package]]
 name = "cesu8"
@@ -4603,6 +4607,7 @@ dependencies = [
  "rustix",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5536,6 +5541,7 @@ dependencies = [
  "rustix",
  "termina 0.4.0",
  "termlens",
+ "tracing",
 ]
 
 [[package]]

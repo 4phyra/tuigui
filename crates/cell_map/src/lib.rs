@@ -43,6 +43,7 @@ pub trait Map {
 }
 
 impl<F: FnMut(Cell) -> Cell> Map for F {
+    #[tracing::instrument(skip_all)]
     fn map(&mut self, cell: Cell) -> Cell {
         self(cell)
     }
@@ -66,6 +67,7 @@ pub struct CellMap {
 }
 
 impl CellMap {
+    #[tracing::instrument(skip_all)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -76,6 +78,7 @@ impl CellMap {
     /// effect at that exact point in the stream: a rewrite never has to interpret an SGR sequence
     /// itself. What the chunk ends inside waits in `self` for the next call, which is what makes a
     /// chunk boundary invisible to the screen.
+    #[tracing::instrument(skip_all)]
     pub async fn map(
         &mut self,
         terminal: &mut vt100::Parser,
@@ -100,6 +103,7 @@ impl CellMap {
     }
 
     /// One chunk: parse it into `terminal` and return what to write to the screen instead.
+    #[tracing::instrument(skip_all)]
     fn rewrite(
         &mut self,
         terminal: &mut vt100::Parser,
@@ -191,6 +195,7 @@ impl CellMap {
 /// Only the two colours are named. A leading `0` would reset the whole pen, and the stream may
 /// have a reverse, a bold or an underline in effect that a replacement must not quietly drop: the
 /// stream will not repeat it, because from its side nothing changed.
+#[tracing::instrument(skip_all)]
 fn push_sgr(out: &mut Vec<u8>, fg: Color, bg: Color) {
     use std::io::Write as _;
     let _ = write!(out, "\x1b[");
@@ -200,6 +205,7 @@ fn push_sgr(out: &mut Vec<u8>, fg: Color, bg: Color) {
     let _ = write!(out, "m");
 }
 
+#[tracing::instrument(skip_all)]
 fn push_colour(out: &mut Vec<u8>, first: &mut bool, basic: u8, extended: u8, colour: Color) {
     use std::io::Write as _;
     let separator = match std::mem::replace(first, false) {
@@ -232,6 +238,7 @@ fn push_colour(out: &mut Vec<u8>, first: &mut bool, basic: u8, extended: u8, col
 /// A sequence is only obeyed on its final byte, so a prefix is not a shorter sequence: the terminal
 /// would sit waiting for the rest, and the rewrite would map a final byte of the next chunk as if it
 /// were an ordinary character.
+#[tracing::instrument(skip_all)]
 fn complete(escape: &[u8]) -> bool {
     let Some(&introducer) = escape.get(1) else {
         // `ESC` alone: the introducer has not arrived yet.
@@ -252,6 +259,7 @@ fn complete(escape: &[u8]) -> bool {
 }
 
 /// The escape sequence starting at `bytes[0]`, and everything after it.
+#[tracing::instrument(skip_all)]
 fn split_escape(bytes: &[u8]) -> (&[u8], &[u8]) {
     let mut i = 1;
     match bytes.get(i) {
@@ -288,6 +296,7 @@ fn split_escape(bytes: &[u8]) -> (&[u8], &[u8]) {
 }
 
 /// How many bytes the UTF-8 character starting with `lead` occupies.
+#[tracing::instrument(skip_all)]
 fn utf8_len(lead: u8) -> usize {
     match lead {
         0x00..=0x7f => 1,

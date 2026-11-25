@@ -148,6 +148,7 @@ pub struct Tabs {
 }
 
 impl Tabs {
+    #[tracing::instrument(skip_all)]
     pub fn new(tabs: Vec<(String, Option<KeyCode>, Color)>, active: usize) -> Self {
         Self {
             tabs,
@@ -161,6 +162,7 @@ impl Tabs {
     }
 
     /// The index of the active tab.
+    #[tracing::instrument(skip_all)]
     pub fn active(&self) -> usize {
         self.active
     }
@@ -170,6 +172,7 @@ impl Tabs {
     /// The dock is the case: which screen is up is the stage's fact, not the strip's, so the strip
     /// is told rather than asked. A tab that is already there is not a move; a different one is,
     /// and the band walks there over the frames that follow.
+    #[tracing::instrument(skip_all)]
     pub fn set_active(&mut self, active: usize) {
         if active == self.active {
             return;
@@ -181,6 +184,7 @@ impl Tabs {
     }
 
     /// Whether the band is between two tabs, which is when a caller has to keep drawing.
+    #[tracing::instrument(skip_all)]
     pub fn is_moving(&self) -> bool {
         self.shown < FRAMES
     }
@@ -191,10 +195,12 @@ impl Tabs {
     /// that acts on it never acts twice. The band has already moved — what the caller decides is
     /// whether the move it asked for can be honoured, and [`set_active`](Self::set_active) is how
     /// it says the band belongs somewhere else after all.
+    #[tracing::instrument(skip_all)]
     pub fn chosen(&mut self) -> Option<usize> {
         self.chosen.take()
     }
 
+    #[tracing::instrument(skip_all)]
     pub fn handle_events(&mut self, area: Rect, events: &mut Vec<Event>) {
         // The columns run from the near gutter to the far one: a strip's first tab overshoots into
         // the gutter behind it.
@@ -257,6 +263,7 @@ impl Tabs {
     /// Drawing does not do this: a draw that advanced the move itself would move on every redraw,
     /// and a redraw happens for reasons that are not time — a key, a pointer motion, a pane that
     /// changed size — so the animation would skip frames whenever the mouse moved.
+    #[tracing::instrument(skip_all)]
     pub fn step(&mut self, delta: f32) {
         if self.shown >= FRAMES {
             return;
@@ -272,6 +279,7 @@ impl Tabs {
     }
 
     /// The columns the whole strip occupies, gutters and gaps included.
+    #[tracing::instrument(skip_all)]
     pub fn width(&self) -> u16 {
         self.tabs
             .iter()
@@ -289,6 +297,7 @@ impl Tabs {
     ///
     /// One answer for the draw, the hit test and the band, so a tab is pressed where it is drawn.
     /// A tab's box is its own cells: the gap after it belongs to the row, not to either neighbour.
+    #[tracing::instrument(skip_all)]
     fn offsets(&self) -> Vec<(u16, u16)> {
         let mut start = 0u16;
         self.tabs
@@ -305,6 +314,7 @@ impl Tabs {
     /// The band's two edges for the frame being drawn, in columns from the first tab's edge.
     ///
     /// `None` for a strip with nothing on it.
+    #[tracing::instrument(skip_all)]
     fn edges(&self) -> Option<(f32, f32)> {
         let offsets = self.offsets();
         let (from_start, from_end) = *offsets.get(self.from)?;
@@ -333,6 +343,7 @@ impl Tabs {
     }
 
     /// The colour the band is drawn in, crossing from the tab it left to the one it reached.
+    #[tracing::instrument(skip_all)]
     fn colour(&self) -> Color {
         let (Some((_, _, from)), Some((_, _, to))) =
             (self.tabs.get(self.from), self.tabs.get(self.active))
@@ -346,12 +357,14 @@ impl Tabs {
 
 /// The columns one tab occupies: its name padded on both sides. The gap between tabs is
 /// [`GAP`] and is added by whoever lays them out, not here.
+#[tracing::instrument(skip_all)]
 fn span(name: &str) -> u16 {
     let width = u16::try_from(Line::raw(name).width()).unwrap_or(u16::MAX);
     width.saturating_add(PADDING * 2)
 }
 
 /// The point `factor` of the way from `from` to `to`.
+#[tracing::instrument(skip_all)]
 fn mix(from: f32, to: f32, factor: f32) -> f32 {
     from + (to - from) * factor
 }
@@ -360,6 +373,7 @@ fn mix(from: f32, to: f32, factor: f32) -> f32 {
 ///
 /// Only truecolour can be crossed: a named or indexed colour has no place between it and
 /// another, so the change is made half way rather than invented.
+#[tracing::instrument(skip_all)]
 fn mix_colour(from: Color, to: Color, factor: f32) -> Color {
     let (Color::Rgb(fr, fg, fb), Color::Rgb(tr, tg, tb)) = (from, to) else {
         return if factor < 0.5 { from } else { to };
@@ -379,6 +393,7 @@ fn mix_colour(from: Color, to: Color, factor: f32) -> Color {
 ///
 /// `None` when the band covers none of it, `Some(true)` for its left-hand part and
 /// `Some(false)` for its right-hand part — which is which side has a block to draw it with.
+#[tracing::instrument(skip_all)]
 fn part((left, right): (f32, f32), column: i32) -> Option<(f32, bool)> {
     let start = f32::from(i16::try_from(column).unwrap_or(i16::MAX));
     let covered = (right.min(start + 1.0) - left.max(start)).clamp(0.0, 1.0);
@@ -386,6 +401,7 @@ fn part((left, right): (f32, f32), column: i32) -> Option<(f32, bool)> {
 }
 
 impl Widget for &Tabs {
+    #[tracing::instrument(skip_all)]
     fn render(self, area: Rect, buf: &mut Buffer) {
         // The tab space starts one gutter in, which is the room the band bounces into.
         let left = area.x.saturating_add(GUTTER);

@@ -28,6 +28,7 @@ use ui_events::pointer::{
 ///
 /// A terminal has one pointer and no way to name it, so it is the primary one: the
 /// id that means "the mouse" rather than "a touch contact".
+#[tracing::instrument(skip_all)]
 pub fn pointer_info() -> PointerInfo {
     PointerInfo {
         pointer_id: Some(PointerId::PRIMARY),
@@ -37,6 +38,7 @@ pub fn pointer_info() -> PointerInfo {
 }
 
 /// A terminal key, as a UI Events keyboard event.
+#[tracing::instrument(skip_all)]
 pub fn key(key: &termina::event::KeyEvent) -> KeyboardEvent {
     use termina::event::{KeyCode, KeyEventKind};
 
@@ -88,6 +90,7 @@ pub fn key(key: &termina::event::KeyEvent) -> KeyboardEvent {
 /// The button a motion carries is read from the event: UI Events puts the pressed
 /// buttons in the state rather than in the event, so a drag is a move whose state
 /// still says a button is down.
+#[tracing::instrument(skip_all)]
 pub fn pointer(mouse: &termina::event::MouseEvent, at: (f64, f64)) -> Option<PointerEvent> {
     use termina::event::MouseEventKind;
 
@@ -124,6 +127,7 @@ pub fn pointer(mouse: &termina::event::MouseEvent, at: (f64, f64)) -> Option<Poi
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn scroll(state: PointerState, delta: ScrollDelta) -> PointerEvent {
     PointerEvent::Scroll(PointerScrollEvent {
         pointer: pointer_info(),
@@ -137,6 +141,7 @@ fn scroll(state: PointerState, delta: ScrollDelta) -> PointerEvent {
 /// A terminal does not report a position, so this is the layout assumed in
 /// exchange for one: the unshifted symbol row, and letters by their lowercase form
 /// because a terminal reports `A` for one key with shift held.
+#[tracing::instrument(skip_all)]
 fn char_code(c: char) -> Code {
     match c.to_ascii_lowercase() {
         'a' => Code::KeyA,
@@ -191,6 +196,7 @@ fn char_code(c: char) -> Code {
 }
 
 /// A terminal's modifier mask, as UI Events names it.
+#[tracing::instrument(skip_all)]
 fn modifiers(modifiers: termina::event::Modifiers) -> KeyModifiers {
     let mut out = KeyModifiers::empty();
     if modifiers.contains(termina::event::Modifiers::SHIFT) {
@@ -212,6 +218,7 @@ fn modifiers(modifiers: termina::event::Modifiers) -> KeyModifiers {
 }
 
 /// A terminal button, as UI Events names it.
+#[tracing::instrument(skip_all)]
 pub fn button_of(button: termina::event::MouseButton) -> Option<PointerButton> {
     use termina::event::MouseButton;
     Some(match button {

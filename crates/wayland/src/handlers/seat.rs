@@ -14,11 +14,14 @@ impl SeatHandler for State
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
 
+    #[tracing::instrument(skip_all)]
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.globals.seat_state
     }
 
+    #[tracing::instrument(skip_all)]
     fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
+    #[tracing::instrument(skip_all)]
     fn cursor_image(
         &mut self,
         _seat: &Seat<Self>,

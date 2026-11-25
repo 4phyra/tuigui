@@ -4,3 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Carry an ascii string in terminal cells: symbol, foreground and background"
+
+[dependencies]
+tracing = { workspace = true }

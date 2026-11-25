@@ -44,6 +44,7 @@ pub type Anchors = Arc<ArcSwap<HashMap<SurfaceId, Option<Position>>>>;
 ///
 /// An announcement is sent as it is found. The dial is the far end's time to answer, and waiting
 /// for it here would freeze the pane for as long as reaching the peer took.
+#[tracing::instrument(skip_all)]
 pub async fn run(
     mut slave_stdout: impl futures_util::Stream<Item = std::io::Result<Vec<u8>>> + Unpin,
     anchors: Anchors,

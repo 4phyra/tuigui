@@ -9,6 +9,7 @@ use ratatui::layout::{Position, Rect};
 use termina::event::{Event, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 
 /// The pointer's last event, if this frame has one.
+#[tracing::instrument(skip_all)]
 fn pointer(events: &[Event]) -> Option<MouseEvent> {
     events.iter().rev().find_map(|event| match event {
         Event::Mouse(mouse) => Some(*mouse),
@@ -20,6 +21,7 @@ fn pointer(events: &[Event]) -> Option<MouseEvent> {
 ///
 /// `None` is not "the pointer left": a frame with no mouse event is a frame in which the pointer
 /// did not move, so a widget must keep what it last heard rather than treat the silence as an exit.
+#[tracing::instrument(skip_all)]
 pub fn pointer_at(events: &[Event]) -> Option<Position> {
     pointer(events).map(|mouse| Position::new(mouse.column, mouse.row))
 }
@@ -28,6 +30,7 @@ pub fn pointer_at(events: &[Event]) -> Option<Position> {
 ///
 /// Taking it is what stops the press reaching a widget further down: the widget that was
 /// pressed is the one that acted.
+#[tracing::instrument(skip_all)]
 pub fn take_press(events: &mut Vec<Event>, area: Rect) -> Option<Position> {
     let at = events.iter().position(|event| match event {
         Event::Mouse(mouse) => {
@@ -47,6 +50,7 @@ pub fn take_press(events: &mut Vec<Event>, area: Rect) -> Option<Position> {
 /// Not limited to an area: a press that is dragged off a widget still ends when the button is
 /// let go, and a widget that only heard about releases inside its own box would stay held down
 /// forever.
+#[tracing::instrument(skip_all)]
 pub fn take_release(events: &mut Vec<Event>) -> Option<Position> {
     let at = events.iter().position(|event| match event {
         Event::Mouse(mouse) => matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)),
@@ -59,6 +63,7 @@ pub fn take_release(events: &mut Vec<Event>) -> Option<Position> {
 }
 
 /// Take the first keypress `want` accepts, leaving the others for whoever looks next.
+#[tracing::instrument(skip_all)]
 pub fn take_key(events: &mut Vec<Event>, want: impl Fn(&KeyEvent) -> bool) -> Option<KeyEvent> {
     let at = events.iter().position(|event| match event {
         Event::Key(key) => want(key),

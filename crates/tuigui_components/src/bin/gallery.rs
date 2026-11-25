@@ -53,6 +53,7 @@ const LINE_HEIGHT: u16 = 1;
 /// A `poll` of stdin rather than a sleep: the wait is for input *or* a deadline, and a sleep
 /// would take the deadline every time even when a click was waiting. `None` blocks until
 /// there is input, which is what a strip at rest wants — it needs no frames at all.
+#[tracing::instrument(skip_all)]
 fn wait(timeout: Option<std::time::Duration>) -> std::io::Result<bool> {
     use rustix::event::{PollFd, PollFlags};
 
@@ -72,6 +73,7 @@ fn wait(timeout: Option<std::time::Duration>) -> std::io::Result<bool> {
     Ok(ready > 0)
 }
 
+#[tracing::instrument(skip_all)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _tty = Raw::install()?;
     let mut terminal = ratatui::try_init()?;
@@ -179,6 +181,7 @@ struct Gallery {
 }
 
 impl Gallery {
+    #[tracing::instrument(skip_all)]
     fn new() -> Self {
         // One press slot per button, shared with that button's closure: a closure cannot borrow
         // the gallery the buttons are fields of, so what it did is recorded in a cell it owns and
@@ -210,6 +213,7 @@ impl Gallery {
         }
     }
 
+    #[tracing::instrument(skip_all)]
     fn draw(&mut self, area: Rect, buf: &mut Buffer, events: &mut Vec<Event>) {
         // The column is as tall as its elements plus the gaps between them, and it starts
         // where centring it leaves it: the list is laid out before anything is drawn, so a
@@ -257,16 +261,19 @@ impl Gallery {
     }
 
     /// Whether the strip is animating, which is what makes the loop keep drawing.
+    #[tracing::instrument(skip_all)]
     fn is_moving(&self) -> bool {
         self.tabs.is_moving()
     }
 
     /// Advance the strip by the time that passed, on the frame clock.
+    #[tracing::instrument(skip_all)]
     fn step(&mut self, delta: f32) {
         self.tabs.step(delta);
     }
 
     /// Take what each button's closure recorded during the frame.
+    #[tracing::instrument(skip_all)]
     fn settle(&mut self) {
         for (index, pressed) in self.pressed.iter().enumerate() {
             if pressed.replace(false) {
@@ -288,6 +295,7 @@ impl Gallery {
 }
 
 /// The column a row of `width` starts at, to be centred in `area`.
+#[tracing::instrument(skip_all)]
 fn centred(area: Rect, width: u16) -> u16 {
     area.x + area.width.saturating_sub(width) / 2
 }
@@ -297,6 +305,7 @@ fn centred(area: Rect, width: u16) -> u16 {
 /// One read per call at most: more would be a loop that waits for input to stop arriving, and
 /// a key held down never does. Answers whether anything arrived at all, since a frame with no
 /// input has nothing new to act on.
+#[tracing::instrument(skip_all)]
 fn read_once(
     parser: &mut Parser,
     bytes: &mut [u8; 256],
@@ -316,6 +325,7 @@ fn read_once(
 }
 
 /// Whether the event asks the gallery to stop.
+#[tracing::instrument(skip_all)]
 fn is_quit(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('q') | KeyCode::Escape)
 }
@@ -329,6 +339,7 @@ struct Raw {
 }
 
 impl Raw {
+    #[tracing::instrument(skip_all)]
     fn install() -> std::io::Result<Self> {
         let stdin = std::io::stdin();
         let original = rustix::termios::tcgetattr(&stdin).map_err(std::io::Error::from)?;
@@ -345,6 +356,7 @@ impl Raw {
 }
 
 impl Drop for Raw {
+    #[tracing::instrument(skip_all)]
     fn drop(&mut self) {
         let _ = rustix::termios::tcsetattr(
             std::io::stdin(),

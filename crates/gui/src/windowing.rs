@@ -44,6 +44,7 @@ pub trait WindowingServer {
     ///
     /// A session whose program is not its own to start — a dummy's, or one attached to a session
     /// already running — starts nothing and gives back nothing.
+    #[tracing::instrument(skip_all)]
     fn spawn(&mut self, _path: &std::path::Path) -> std::io::Result<Option<std::io::PipeReader>> {
         Ok(None)
     }
@@ -52,6 +53,7 @@ pub trait WindowingServer {
     ///
     /// Taking it is what makes the pipe one reader's: whoever takes it drains the program's words,
     /// and the session keeps no copy of what a program said.
+    #[tracing::instrument(skip_all)]
     fn take_stdout(&mut self) -> Option<std::io::PipeReader> {
         None
     }
@@ -59,9 +61,11 @@ pub trait WindowingServer {
     /// One turn of the session: accept what arrived, dispatch what the program did, and flush back
     /// down the sockets. A dummy session moves forward by being drawn instead, so its turn is
     /// nothing.
+    #[tracing::instrument(skip_all)]
     fn advance(&mut self, _timeout: std::time::Duration) {}
 
     /// Whether the session's program is still running: the fact that ends a session.
+    #[tracing::instrument(skip_all)]
     fn is_running(&self) -> bool {
         true
     }
@@ -122,6 +126,7 @@ pub trait Compositable: Send + Sync {
     ///
     /// Derived from [`Compositable::size_px`] through the same conversion the ask uses, so a
     /// program that followed a configure exactly answers with the box it was given.
+    #[tracing::instrument(skip_all)]
     fn size_cells(&self, winsize: rustix::termios::Winsize) -> std::io::Result<(u16, u16)> {
         Ok(compositor::widgets::cells(self.size_px()?, winsize))
     }
@@ -141,6 +146,7 @@ pub trait Compositable: Send + Sync {
     ///
     /// `Ok(None)` means the window was not placed by its own client, which is every window the
     /// compositor puts somewhere: a toplevel asks to be placed rather than saying where.
+    #[tracing::instrument(skip_all)]
     fn offset_px(&self) -> std::io::Result<Option<(i32, i32)>> {
         Ok(None)
     }

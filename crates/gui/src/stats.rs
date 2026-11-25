@@ -40,16 +40,19 @@ pub(crate) static STATS: RwLock<Stats> = RwLock::new(Stats {
 });
 
 /// Count `bytes` as uploaded. Called after the send succeeded.
+#[tracing::instrument(skip_all)]
 pub(crate) fn record(bytes: u64) {
     STATS.write().unwrap_or_else(|e| e.into_inner()).bytes += bytes;
 }
 
 /// Bytes per second over the last window, recomputed at most once per `WINDOW`.
+#[tracing::instrument(skip_all)]
 pub(crate) fn bytes_per_sec() -> u64 {
     STATS.write().unwrap_or_else(|e| e.into_inner()).per_sec_at(Instant::now()) as u64
 }
 
 impl Stats {
+    #[tracing::instrument(skip_all)]
     fn per_sec_at(&mut self, now: Instant) -> f64 {
         let Some(start) = self.start else {
             self.start = Some(now);

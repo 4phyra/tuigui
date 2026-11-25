@@ -6,6 +6,7 @@ license.workspace = true
 description = "The widgets a pane is built from: a button, a tab strip, and the input they share"
 
 [dependencies]
+tracing = { workspace = true }
 # The widgets themselves: each one draws into a buffer handed to it, and nothing here reaches
 # for a terminal of its own.
 ratatui = { workspace = true }
