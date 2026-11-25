@@ -31,7 +31,7 @@ facts*, so one on each side is not duplication. Flatten-plus-detach duplicates
 computed twice. Hand-up has one tracker, and detach is a filter over the list it
 already has.
 
-A second reason, for the H.264 path: a flattened frame re-encodes the whole scene on
+A second reason, for the AV1 path: a flattened frame re-encodes the whole scene on
 every window move, and a move larger than the motion-search range leaves residual
 artifacts in both the moved region and the region it revealed, visible until the
 next intra-refresh. Separate streams make a move a re-placement with zero bits and
@@ -110,5 +110,5 @@ the predicate applied to one surface.
 - Does `gui` poll the registry, or receive surface-appeared events?
 - Where placement lives in cell space vs pixel space, and the one function that
   converts for both the draw and the hit-test path.
-- Decoder topology on the H.264 path: one decoder per window in `tui`, or `gui`
+- Decoder topology on the AV1 path: one decoder per window in `tui`, or `gui`
   composites decoded frames and sends one stream.

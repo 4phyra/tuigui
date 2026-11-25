@@ -155,7 +155,7 @@ and has no DCT in it.
 - `gui`: argument handling, binding and announcing, answering the greeting, and
   the terminal surface it draws on
 - the frame path: `gui` captures a program run in the compositor,
-  H.264-encodes frames on the hardware codec (`--jpeg` for JPEG), and `tui`
+  AV1-encodes frames on the hardware codec (`--jpeg` for JPEG), and `tui`
   decodes and places one TGP image per window; the client's signature cells
   anchor it
 - `compositor`: an in-process headless Wayland session, multi-window,

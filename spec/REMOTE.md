@@ -41,7 +41,7 @@ it.
  │ server                                     │   │ gui <app>                │
  │                                            │   │  ├─ headless compositor  │
  │  ┌─────────┐  keys/mouse   ┌────────────┐  │   │  ├─ damage capture       │
- │  │ herdr   │ ────────────▶ │            │  │   │  └─ encode (hw, h264/av1) │
+ │  │ herdr   │ ────────────▶ │            │  │   │  └─ encode (hw, av1)     │
  │  │ (panes) │ ◀──────────── │  outer     │  │   └───────────┬──────────────┘
  │  └─────────┘  herdr output │  pty mux   │  │               │
  │       ▲                    │            │  │      peer tunnel (QUIC)
@@ -114,7 +114,7 @@ frame switch is strictly cheaper and atomic, so it is the default.
 
 1. **Compositor** (remote): headless head, one client surface, damage-driven
    capture. This is the `spec/DESIGN.md` pipeline; nothing here changes it.
-2. **Encode** (remote): hardware-accelerated H.264 (the built codec is
+2. **Encode** (remote): hardware-accelerated AV1 (the built codec is
    `crates/codecs/src/hw.rs`; JPEG exists as the other option) so the remote's CPU stays free for the app. Encode is per-frame and
    rate-limited by the tunnel's send budget, not by the app's redraw rate.
 3. **Tunnel** (both): peer QUIC, separate streams for frames and control.

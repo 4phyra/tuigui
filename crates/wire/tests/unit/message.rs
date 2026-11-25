@@ -56,7 +56,7 @@ fn messages_round_trip() {
                 fg: (9, 8, 7),
                 bg: (6, 5, 4),
             },
-            codec: CodecId::H264,
+            codec: CodecId::Av1,
         },
         Message::CloseWindow {
             surface: SurfaceId {

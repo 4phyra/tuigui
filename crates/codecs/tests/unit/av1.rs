@@ -1,8 +1,8 @@
 use super::*;
 use crate::Decoder as _;
 
-/// Whether this machine has a hardware H.264 pair, printing why not when it
-/// has none. There is no software H.264 to fall back to, by design.
+/// Whether this machine has a hardware AV1 pair, printing why not when it
+/// has none. There is no software AV1 to fall back to, by design.
 fn hw_backend() -> bool {
     match (Encoder::new(128, 128), Decoder::new()) {
         (Ok(_), Ok(_)) => true,

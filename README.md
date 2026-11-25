@@ -94,3 +94,7 @@ Built on excellent crates:
 ## License
 
 EUPL-1.2. See [LICENSE](LICENSE).
+
+The AV1 codec is royalty-free under the Alliance for Open Media Patent License
+1.0; its text ships in
+[docs/licenses/AV1-PATENT-LICENSE](docs/licenses/AV1-PATENT-LICENSE).

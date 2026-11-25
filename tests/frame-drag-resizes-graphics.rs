@@ -57,7 +57,7 @@ fn dragging_a_nested_windows_corner_widens_its_picture() -> termlens::Result<()>
         .env("XDG_RUNTIME_DIR", &runtime)
         .timeout(Duration::from_secs(20))
         // The session's plumbing, not the codec: JPEG keeps this test on every
-        // machine, hardware H.264 or not.
+        // machine, hardware AV1 or not.
         .arg("--jpeg")
         .arg(&runnable)
         .spawn(env!("CARGO_BIN_EXE_tuigui"))?;

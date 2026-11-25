@@ -12,13 +12,13 @@
 //! cannot follow it is rebuilt from a fresh keyframe rather than from its
 //! own history.
 //!
-//! H.264 here is hardware-only: it runs on the silicon vendor's codec through
-//! the OS and driver (VAAPI, NVENC/CUVID, V4L2 M2M, VideoToolbox), and there is
-//! no software H.264 compiled in, linked in, or called — tests included. A
-//! machine with no hardware H.264 path fails loudly and names `--jpeg`;
+//! AV1 here is hardware-only: it runs on the silicon vendor's codec through
+//! the OS and driver (VAAPI, NVENC/CUVID, VideoToolbox), and there is no
+//! software AV1 compiled in, linked in, or called — tests included. A
+//! machine with no hardware AV1 path fails loudly and names `--jpeg`;
 //! JPEG is the hardware-free codec, and the escape hatch.
 
-pub mod h264;
+pub mod av1;
 pub mod jpeg;
 mod hw;
 
@@ -30,8 +30,8 @@ mod hw;
 /// speaks a codec of its own is one new variant away from being understood.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum CodecId {
-    /// H.264, as Annex-B.
-    H264,
+    /// AV1, as an OBU stream.
+    Av1,
     /// JPEG, one still frame per message.
     Jpeg,
 }
@@ -89,7 +89,7 @@ impl CodecId {
     /// report back as an [`wire::message::Message::Error`] rather than a guess.
     pub fn to_decoder(self) -> Result<Box<dyn Decoder>, Error> {
         match self {
-            Self::H264 => Ok(Box::new(h264::Decoder::new()?)),
+            Self::Av1 => Ok(Box::new(av1::Decoder::new()?)),
             Self::Jpeg => Ok(Box::new(jpeg::Decoder::new()?)),
         }
     }
@@ -97,15 +97,15 @@ impl CodecId {
     /// Build the encoder for the codec the client streams with, which it keeps for
     /// the session: one encoder, because its state is the stream.
     ///
-    /// `size` is what the session draws at, which H.264 needs up front: its
-    /// parameter sets describe a picture of one size.
+    /// `size` is what the session draws at, which AV1 needs up front: its
+    /// sequence header describes a picture of one size.
     ///
     /// # Errors
     ///
     /// Fails for a codec this build does not carry, or one that refuses the size.
     pub fn to_encoder(self, size: (u32, u32)) -> Result<Box<dyn Encoder>, Error> {
         match self {
-            Self::H264 => Ok(Box::new(h264::Encoder::new(size.0, size.1)?)),
+            Self::Av1 => Ok(Box::new(av1::Encoder::new(size.0, size.1)?)),
             Self::Jpeg => Ok(Box::new(jpeg::Encoder::new()?)),
         }
     }
@@ -187,13 +187,13 @@ pub enum Error {
     #[error("the {0:?} codec is not implemented")]
     Unsupported(CodecId),
 
-    /// No hardware H.264 path for one half of the pair.
+    /// No hardware AV1 path for one half of the pair.
     ///
     /// This is the designed failure on a machine without a hardware codec,
     /// not a bug: the error says which direction failed, what was tried, why
     /// the last candidate refused, and the escape hatch.
     #[error(
-        "no hardware H.264 {direction} available (tried {tried}): {reason}; \
+        "no hardware AV1 {direction} available (tried {tried}): {reason}; \
          pass --jpeg to stream JPEG instead"
     )]
     HardwareUnavailable {

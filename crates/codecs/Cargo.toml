@@ -6,9 +6,9 @@ license.workspace = true
 description = "The codec pair a session streams with, behind traits a codec can be swapped behind"
 
 [dependencies]
-# Hardware H.264 only, through the system's FFmpeg (linked statically from the
+# Hardware AV1 only, through the system's FFmpeg (linked statically from the
 # dev shell / tuiguiBin build): the driver underneath — VAAPI, NVENC/CUVID,
-# V4L2 M2M, VideoToolbox — is what does the codec work, and there is no
+# VideoToolbox — is what does the codec work, and there is no
 # software fallback anywhere, tests included. `static` links FFmpeg's archives
 # into our binary, so libav* is not a run-time dependency; `format` is enabled
 # because ffmpeg-next's codec half does not build without it (its packet type
@@ -17,7 +17,7 @@ description = "The codec pair a session streams with, behind traits a codec can 
 ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "static"] }
 # The JPEG pair: libjpeg-turbo, SIMD, linked via pkg-config against the dev
 # shell's library. Chosen because it was the codec the project streamed with
-# before H.264, and because a JPEG frame is a complete picture, which makes it
+# before AV1, and because a JPEG frame is a complete picture, which makes it
 # the codec of least commitment for a pane that does not need temporal
 # compression.
 turbojpeg = { version = "1.5", default-features = false, features = ["pkg-config", "require-simd"] }

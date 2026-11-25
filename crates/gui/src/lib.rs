@@ -116,19 +116,19 @@ pub enum Channel {
 
 /// The codec a session streams with: the one choice a session is used with.
 ///
-/// H.264 is the default: it is temporally compressed, so a still pane costs
+/// AV1 is the default: it is temporally compressed, so a still pane costs
 /// little and a moving one costs less than a JPEG per frame, and the work is
 /// done by the machine's hardware codec. `--jpeg` opts out, for a machine
-/// without hardware H.264 or a pane that wants each frame to stand alone. The
-/// two flags are mutually exclusive, and neither given means H.264.
+/// without hardware AV1 or a pane that wants each frame to stand alone. The
+/// two flags are mutually exclusive, and neither given means AV1.
 #[derive(Debug, Clone, Copy, Default, clap::Args)]
 pub struct StreamingOptions {
     /// Stream JPEG: one complete picture per frame, without hardware.
-    #[arg(long, conflicts_with = "h264")]
+    #[arg(long, conflicts_with = "av1")]
     pub jpeg: bool,
-    /// Stream H.264: hardware-accelerated and temporally compressed (Default).
+    /// Stream AV1: hardware-accelerated and temporally compressed (Default).
     #[arg(long, conflicts_with = "jpeg")]
-    pub h264: bool,
+    pub av1: bool,
 }
 
 impl StreamingOptions {
@@ -136,7 +136,7 @@ impl StreamingOptions {
     pub fn codec(&self) -> CodecId {
         match self.jpeg {
             true => CodecId::Jpeg,
-            false => CodecId::H264,
+            false => CodecId::Av1,
         }
     }
 }

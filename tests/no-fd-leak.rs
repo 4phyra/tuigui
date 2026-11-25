@@ -106,7 +106,7 @@ fn fds_do_not_grow_while_the_peer_never_accepts() -> termlens::Result<()> {
         .timeout(Duration::from_secs(15))
         .arg("--dbg-no-accept")
         // The session's plumbing, not the codec: JPEG keeps this test on every
-        // machine, hardware H.264 or not.
+        // machine, hardware AV1 or not.
         .arg("--jpeg")
         .arg(&runnable)
         .spawn(env!("CARGO_BIN_EXE_tuigui"))?;

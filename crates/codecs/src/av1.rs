@@ -1,16 +1,15 @@
-//! H.264, as one encoder and one decoder, on hardware only.
+//! AV1, as one encoder and one decoder, on hardware only.
 //!
-//! No software H.264 is compiled in, linked in, or called: the picture work is
-//! done by the silicon vendor's codec through the OS and driver, which is the
-//! same posture browsers take. Encoders and decoders are opened by name —
-//! `h264_vaapi`, `h264_nvenc`, `h264_v4l2m2m`, `h264_videotoolbox` — so the
-//! software H.264 that FFmpeg also carries can never be selected by accident.
+//! No software AV1 encode or decode happens in a session: the picture work is
+//! done by the silicon vendor's codec through the OS and driver. Encoders and
+//! decoders are opened by name — `av1_vaapi`, `av1_nvenc`, `av1_cuvid`,
+//! `av1_videotoolbox` — and the native `av1` decoder is used only as VAAPI's
+//! decode host, where `get_format` refuses anything but hardware surfaces.
 //! A machine with no hardware path fails loudly, naming `--jpeg`.
 //!
-//! Hardware is more than a GPU: an iGPU (VAAPI), a dGPU (NVENC / CUVID), an
-//! SoC media engine (V4L2 M2M) or Apple's media engine (VideoToolbox) all
-//! count. The probe opens candidate codecs rather than looking for a GPU, so a
-//! machine without `/dev/dri` can still pass through V4L2.
+//! Hardware is more than a GPU: an iGPU (VAAPI), a dGPU (NVENC / CUVID) or
+//! Apple's media engine (VideoToolbox) all count. The probe opens candidate
+//! codecs rather than looking for a GPU.
 //!
 //! The color conversions around the codec are `yuvutils-rs`: the capture
 //! speaks B,G,R,A, the hardware speaks NV12, and that translation is not this
@@ -33,11 +32,11 @@ use crate::{Error, Frame};
 ///
 // TODO: make these configurable — a session that wants a different framerate,
 // bitrate or keyframe cadence has to be able to ask.
-pub const FRAMERATE: f32 = 30.0;
+pub const FRAMERATE: f32 = 90.0;
 pub const GOP: u32 = 30;
-// Target about 500 KiB/s of stream, per review feedback: 2 Mb/s left obvious
-// quality loss on text.
-const BPS: u32 = 500 * 1024 * 8;
+// Target about 1 MiB/s of stream: 4 Mb/s, because AV1 hw encode at 2 Mb/s left
+// visible quality loss on text.
+const BPS: u32 = 1000 * 1024 * 8;
 
 /// How many hardware surfaces the encoder's pool holds at once. The encoder
 /// keeps a few references while it works, so the pool outnumbers the pictures
@@ -49,40 +48,31 @@ struct EncoderBackend {
     /// The name FFmpeg knows the encoder by.
     name: &'static str,
     /// The device that does the encoding and the pixel format of its surfaces.
-    /// `None` when the codec drives its own device (V4L2 M2M).
     hardware: Option<(AVHWDeviceType, AVPixelFormat)>,
 }
 
 #[cfg(target_os = "linux")]
 const ENCODERS: &[EncoderBackend] = &[
     EncoderBackend {
-        name: "h264_vaapi",
+        name: "av1_vaapi",
         hardware: Some((
             AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
             AVPixelFormat::AV_PIX_FMT_VAAPI,
         )),
     },
     EncoderBackend {
-        name: "h264_nvenc",
+        name: "av1_nvenc",
         hardware: Some((
             AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
             AVPixelFormat::AV_PIX_FMT_CUDA,
         )),
     },
-    EncoderBackend {
-        name: "h264_v4l2m2m",
-        hardware: None,
-    },
 ];
 
+// Current FFmpeg ships no `av1_videotoolbox` encoder (see ffmpeg.nix), so macOS
+// has no AV1 encoder to open and a macOS session streams JPEG.
 #[cfg(target_os = "macos")]
-const ENCODERS: &[EncoderBackend] = &[EncoderBackend {
-    name: "h264_videotoolbox",
-    hardware: Some((
-        AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
-        AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX,
-    )),
-}];
+const ENCODERS: &[EncoderBackend] = &[];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 const ENCODERS: &[EncoderBackend] = &[];
@@ -92,10 +82,9 @@ struct DecoderBackend {
     /// The name FFmpeg knows the decoder by.
     name: &'static str,
     /// The device that does the decoding and the pixel format of its surfaces.
-    /// `None` when the decoder drives its own device (V4L2 M2M).
     hardware: Option<(AVHWDeviceType, AVPixelFormat)>,
     /// Whether the format has to be forced through `get_format`. VAAPI has no
-    /// decoder of its own in FFmpeg: the native `h264` decoder does the work
+    /// decoder of its own in FFmpeg: the native `av1` decoder does the work
     /// through a VAAPI device, and `get_format` is where it is made to refuse
     /// anything but the hardware surfaces. The standalone decoders choose
     /// their own output format.
@@ -104,12 +93,12 @@ struct DecoderBackend {
 
 #[cfg(target_os = "linux")]
 const DECODERS: &[DecoderBackend] = &[
-    // No FFmpeg build ships a decoder named `h264_vaapi`; VAAPI decode is the
-    // native `h264` decoder driven through a VAAPI device. `demand` is what
+    // No FFmpeg build ships a decoder named `av1_vaapi`; VAAPI decode is the
+    // native `av1` decoder driven through a VAAPI device. `demand` is what
     // keeps it hardware-only: a format list without VAAPI fails the decode
     // rather than silently decoding in software.
     DecoderBackend {
-        name: "h264",
+        name: "av1",
         hardware: Some((
             AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
             AVPixelFormat::AV_PIX_FMT_VAAPI,
@@ -117,23 +106,18 @@ const DECODERS: &[DecoderBackend] = &[
         demand: true,
     },
     DecoderBackend {
-        name: "h264_cuvid",
+        name: "av1_cuvid",
         hardware: Some((
             AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
             AVPixelFormat::AV_PIX_FMT_CUDA,
         )),
         demand: false,
     },
-    DecoderBackend {
-        name: "h264_v4l2m2m",
-        hardware: None,
-        demand: false,
-    },
 ];
 
 #[cfg(target_os = "macos")]
 const DECODERS: &[DecoderBackend] = &[DecoderBackend {
-    name: "h264_videotoolbox",
+    name: "av1_videotoolbox",
     hardware: Some((
         AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
         AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX,
@@ -144,11 +128,11 @@ const DECODERS: &[DecoderBackend] = &[DecoderBackend {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 const DECODERS: &[DecoderBackend] = &[];
 
-/// Encode B,G,R,A pixels into an Annex-B H.264 stream on the hardware.
+/// Encode B,G,R,A pixels into an AV1 OBU stream on the hardware.
 pub struct Encoder {
     inner: ffmpeg_next::encoder::Video,
     /// The surface pool, and with it the device. `None` when the encoder takes
-    /// system-memory NV12 (V4L2 M2M).
+    /// system-memory NV12; no current backend does.
     frames: Option<hw::Frames>,
     width: u32,
     height: u32,
@@ -162,12 +146,12 @@ impl Encoder {
     /// # Errors
     ///
     /// [`Error::HardwareUnavailable`] when no candidate opens: no hardware
-    /// H.264 encoder on this machine, which is the designed failure and names
+    /// AV1 encoder on this machine, which is the designed failure and names
     /// `--jpeg`.
     pub fn new(width: u32, height: u32) -> Result<Self, Error> {
         ffmpeg_next::init().map_err(Error::boxed)?;
         let mut tried = String::new();
-        let mut reason = String::from("this build carries no hardware H.264 encoders");
+        let mut reason = String::from("this build carries no hardware AV1 encoders");
         for backend in ENCODERS {
             match Self::open(backend, width, height) {
                 Ok(encoder) => return Ok(encoder),
@@ -199,8 +183,8 @@ impl Encoder {
                     &device,
                     format,
                     AVPixelFormat::AV_PIX_FMT_NV12,
-                    width,
-                    height,
+                    coded(width),
+                    coded(height),
                     POOL,
                 )?;
                 (Some(frames), Pixel::from(format))
@@ -211,8 +195,8 @@ impl Encoder {
             .encoder()
             .video()
             .map_err(io::Error::other)?;
-        video.set_width(width);
-        video.set_height(height);
+        video.set_width(coded(width));
+        video.set_height(coded(height));
         video.set_format(format);
         video.set_time_base(Rational::new(1, FRAMERATE as i32));
         video.set_frame_rate(Some(Rational::new(FRAMERATE as i32, 1)));
@@ -262,9 +246,17 @@ impl crate::Encoder for Encoder {
             // let the decoder on the far side follow the change.
             *self = Self::new(width, height)?;
         }
-        let (y, uv) = bgra_to_nv12(bgra, width, height)?;
-        let mut cpu = hw::nv12(width, height).map_err(encode_error(width, height))?;
-        hw::fill_nv12(&mut cpu, &y, &uv, width, height);
+        let (coded_width, coded_height) = (coded(width), coded(height));
+        let padded;
+        let source = if (coded_width, coded_height) == (width, height) {
+            bgra
+        } else {
+            padded = pad_bgra(bgra, width, height, coded_width, coded_height);
+            &padded[..]
+        };
+        let (y, uv) = bgra_to_nv12(source, coded_width, coded_height)?;
+        let mut cpu = hw::nv12(coded_width, coded_height).map_err(encode_error(width, height))?;
+        hw::fill_nv12(&mut cpu, &y, &uv, coded_width, coded_height);
         let mut picture = match &self.frames {
             Some(frames) => hw::upload(frames, &cpu).map_err(encode_error(width, height))?,
             None => cpu,
@@ -300,7 +292,7 @@ impl crate::Encoder for Encoder {
     }
 }
 
-/// Decode an Annex-B H.264 stream back into pixels, on the hardware.
+/// Decode an AV1 OBU stream back into pixels, on the hardware.
 ///
 /// A decoder that has decoded at least one picture never answers with nothing:
 /// a stretch of stream that carries no new picture (headers, or a frame the
@@ -321,12 +313,12 @@ impl Decoder {
     /// # Errors
     ///
     /// [`Error::HardwareUnavailable`] when no candidate opens: no hardware
-    /// H.264 decoder on this machine, which is the designed failure and names
+    /// AV1 decoder on this machine, which is the designed failure and names
     /// `--jpeg`.
     pub fn new() -> Result<Self, Error> {
         ffmpeg_next::init().map_err(Error::boxed)?;
         let mut tried = String::new();
-        let mut reason = String::from("this build carries no hardware H.264 decoders");
+        let mut reason = String::from("this build carries no hardware AV1 decoders");
         for backend in DECODERS {
             match Self::open(backend) {
                 Ok(decoder) => return Ok(decoder),
@@ -447,6 +439,29 @@ fn quiet(error: ffmpeg_next::Error) -> bool {
         )
 }
 
+/// The size the codec is opened at. AV1's 4:2:0 needs even dimensions, and a
+/// driver handed an odd one loses the whole GPU context instead of refusing it.
+fn coded(size: u32) -> u32 {
+    size + size % 2
+}
+
+/// `bgra` at `width` x `height`, padded to the coded even size by repeating the
+/// last column and row, so an odd capture can be encoded as an even picture.
+fn pad_bgra(bgra: &[u8], width: u32, height: u32, coded_width: u32, coded_height: u32) -> Vec<u8> {
+    let (w, h) = (width as usize, height as usize);
+    let (cw, ch) = (coded_width as usize, coded_height as usize);
+    let mut out = vec![0u8; cw * ch * 4];
+    for y in 0..ch {
+        let source = &bgra[y.min(h - 1) * w * 4..][..w * 4];
+        let row = &mut out[y * cw * 4..][..cw * 4];
+        row[..w * 4].copy_from_slice(source);
+        for x in w..cw {
+            row[x * 4..][..4].copy_from_slice(&source[(w - 1) * 4..][..4]);
+        }
+    }
+    out
+}
+
 /// An encode failure at a known size, as the error the caller sees.
 fn encode_error<E>(width: u32, height: u32) -> impl FnOnce(E) -> Error
 where
@@ -497,5 +512,5 @@ fn bgra_to_nv12(bgra: &[u8], width: u32, height: u32) -> Result<(Vec<u8>, Vec<u8
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/h264.rs"]
+#[path = "../tests/unit/av1.rs"]
 mod tests;

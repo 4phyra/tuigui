@@ -29,10 +29,6 @@ A full rebuild of `ring` / `rustls` / the TLS stack costs minutes. Avoid it.
   pkg-config unit. `turbojpeg-sys` reads it, so any change there dirties the
   whole subtree. Never set or override it by hand — do not prefix commands with
   `PKG_CONFIG_PATH=...`. Use `nix develop .` and let the shell own it.
-- **Changing `CARGO_TARGET_DIR`.** Two target dirs alternating invalidates each
-  other's fingerprints. The ambient value is `/cache/cargo_global_target`
-  (which does not exist); always pass `CARGO_TARGET_DIR=./target` explicitly and
-  use that one only.
 - **Two cargo processes sharing one target dir.** Never run cargo concurrently
   with the user's cargo (including background `cargo check`s). Check with
   `pgrep -la cargo` first, and kill your own background builds when done.
@@ -108,8 +104,6 @@ A full rebuild of `ring` / `rustls` / the TLS stack costs minutes. Avoid it.
   reads as deflecting the bug onto the design. Investigate the specific failure.
 - **Do not block on a long-running command.** If something takes more than a few
   seconds, run it in the background and keep working. Do not sit in `wait`.
-- Test after changes (`CARGO_TARGET_DIR=./target cargo test --workspace
-  --all-targets`).
 - **Screen snapshots always use `with_styles()`.** A plain `Screen` renders
   only `size:`/`cursor:` and the glyphs; every colour is dropped, so a snapshot
   of a screen whose verdict is a colour shows nothing that decides it. Write

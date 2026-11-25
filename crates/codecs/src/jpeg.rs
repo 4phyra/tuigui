@@ -2,7 +2,7 @@
 //!
 //! The codec is libjpeg-turbo via the `turbojpeg` crate: SIMD, linked through
 //! pkg-config against the dev shell's library, the same pair the project
-//! streamed with before the H.264 path existed.
+//! streamed with before the AV1 path existed.
 //!
 //! A JPEG has no stream history: every frame is a complete picture on its own,
 //! so nothing is kept between frames and a keyframe request means nothing.

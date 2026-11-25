@@ -118,7 +118,7 @@ already copied, and input is queued onto the window and dispatched on the next
 
 `crates/gui/src/windowing/wayland.rs` is that integration: it starts the
 session, spawns the program, captures frames on the window's cadence, encodes
-each as H.264 (the hardware codec; JPEG with `--jpeg`) and hands it to the
+each as AV1 (the hardware codec; JPEG with `--jpeg`) and hands it to the
 link, and routes this client's keyboard and pointer into the window.
 
 Input reaches the program. Keys and pointer events are decoded from the

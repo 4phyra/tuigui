@@ -43,13 +43,13 @@ fn the_last_frame_is_the_answer_to_a_quiet_stream() {
     );
 }
 
-/// The announced codec builds the decoder; JPEG always, and H.264 whenever the
+/// The announced codec builds the decoder; JPEG always, and AV1 whenever the
 /// hardware path exists — its absence there is a loud, by-design failure, and
-/// the H.264 suite is what reports that.
+/// the AV1 suite is what reports that.
 #[test]
 fn the_announced_codec_picks_the_implementations() {
     assert!(CodecId::Jpeg.to_decoder().is_ok());
-    if codecs::h264::Decoder::new().is_ok() {
-        assert!(CodecId::H264.to_decoder().is_ok());
+    if codecs::av1::Decoder::new().is_ok() {
+        assert!(CodecId::Av1.to_decoder().is_ok());
     }
 }

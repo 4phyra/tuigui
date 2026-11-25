@@ -112,7 +112,7 @@
               # compiled from source: no cmake or nasm needed.
               libjpeg_turbo
               # The FFmpeg linked into the client and server: static libraries,
-              # built without the software H.264 encoder.
+              # built without any AVC software codec.
               (import ./ffmpeg.nix pkgs)
               # ...and the CLI on PATH, because `ffmpeg-sidecar` spawns it to
               # decode the `--video` clip; that is a separate process's codec,
@@ -371,9 +371,9 @@
               # dma-buf, which the compositor's shm-only capture cannot read, so
               # they capture black; the shm clients and `foot` do not.
               pkgs.weston
-              # The FFmpeg the codec links: static libraries without the software
-              # H.264 encoder. Also gives the dev shell the headers and .pc files
-              # that `ffmpeg-next` builds against.
+              # The FFmpeg the codec links: static libraries without any
+              # software AVC codec. Also gives the dev shell the headers and .pc
+              # files that `ffmpeg-next` builds against.
               (import ./ffmpeg.nix pkgs)
               # The CLI for the `--video` path: `ffmpeg-sidecar` spawns it, so it
               # is a separate process's decoder. Its `.bin` output keeps the

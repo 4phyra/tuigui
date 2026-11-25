@@ -5,19 +5,19 @@
 //! A test that feeds the decoder bytes another codec produced would pass by
 //! accident; these feed it what this crate's own encoder emits.
 //!
-//! There is no software H.264 here, on purpose: a machine with no hardware
+//! There is no software AV1 here, on purpose: a machine with no hardware
 //! path — CI, for one — skips every test with the reason on stderr instead of
 //! silently exercising a fallback that the shipped binary does not carry.
 
 use codecs::{CodecId, Decoder, Encoder};
 
-/// Whether this machine has a hardware H.264 pair, printing why not when it
+/// Whether this machine has a hardware AV1 pair, printing why not when it
 /// has none. The smallest frame the hardware accepts is chosen so a backend
 /// that is present cannot be missed for being handed too small a picture.
 fn hw_backend() -> bool {
     match (
-        codecs::h264::Encoder::new(128, 128),
-        codecs::h264::Decoder::new(),
+        codecs::av1::Encoder::new(128, 128),
+        codecs::av1::Decoder::new(),
     ) {
         (Ok(_), Ok(_)) => true,
         (Err(e), _) | (_, Err(e)) => {
@@ -29,21 +29,17 @@ fn hw_backend() -> bool {
 
 /// One solid B,G,R,A frame, encoded through the real codec.
 fn encoded(width: u32, height: u32, (b, g, r): (u8, u8, u8)) -> Vec<u8> {
-    let mut encoder = codecs::h264::Encoder::new(width, height).expect("an encoder");
+    let mut encoder = codecs::av1::Encoder::new(width, height).expect("an encoder");
     let bgra = vec![b, g, r, 255].repeat((width * height) as usize);
     let stream = encoder.encode(&bgra, width, height, false).expect("encode");
     assert!(!stream.is_empty(), "the first frame carries its picture");
-    assert!(
-        stream.starts_with(&[0, 0, 0, 1]) || stream.starts_with(&[0, 0, 1]),
-        "the wire carries Annex-B: the stream starts with a start code"
-    );
     stream
 }
 
 /// The whole pair on a real stream: a picture in, the same picture out, close
 /// enough that nothing on a terminal grid can tell the difference.
 ///
-/// H.264 is lossy and 4:2:0, so exact bytes are not the assertion; a solid
+/// AV1 is lossy and 4:2:0, so exact bytes are not the assertion; a solid
 /// red frame that comes back mostly red is.
 #[test]
 fn encode_then_decode_round_trip() {
@@ -51,7 +47,7 @@ fn encode_then_decode_round_trip() {
         return;
     }
     let stream = encoded(128, 128, (0, 0, 255));
-    let mut decoder = codecs::h264::Decoder::new().expect("a decoder");
+    let mut decoder = codecs::av1::Decoder::new().expect("a decoder");
     let frame = decoder
         .decode(&stream)
         .expect("decodes")
@@ -74,7 +70,7 @@ fn the_last_frame_is_the_answer_to_a_quiet_stream() {
         return;
     }
     let stream = encoded(128, 128, (0, 0, 255));
-    let mut decoder = codecs::h264::Decoder::new().expect("a decoder");
+    let mut decoder = codecs::av1::Decoder::new().expect("a decoder");
     let first = decoder
         .decode(&stream)
         .expect("decodes")
@@ -95,21 +91,21 @@ fn the_first_frame_is_available_before_anything_else_arrives() {
         return;
     }
     let stream = encoded(128, 128, (0, 0, 255));
-    let mut decoder = codecs::h264::Decoder::new().expect("a decoder");
+    let mut decoder = codecs::av1::Decoder::new().expect("a decoder");
     assert!(
         decoder.decode(&stream).expect("decodes").is_some(),
         "the first picture decodes from the first stretch of stream"
     );
 }
 
-/// The announced codec builds the decoder; JPEG always, H.264 when the
-/// hardware is there. An H.264 decoder on a machine without hardware is the
+/// The announced codec builds the decoder; JPEG always, AV1 when the
+/// hardware is there. An AV1 decoder on a machine without hardware is the
 /// loud failure this crate exists to give.
 #[test]
 fn the_announced_codec_picks_the_implementations() {
     assert!(CodecId::Jpeg.to_decoder().is_ok());
     if hw_backend() {
-        assert!(CodecId::H264.to_decoder().is_ok());
+        assert!(CodecId::Av1.to_decoder().is_ok());
     }
 }
 
@@ -123,7 +119,7 @@ fn an_odd_capture_size_still_makes_a_picture() {
         return;
     }
     let stream = encoded(233, 129, (0, 0, 255));
-    let mut decoder = codecs::h264::Decoder::new().expect("a decoder");
+    let mut decoder = codecs::av1::Decoder::new().expect("a decoder");
     let frame = decoder
         .decode(&stream)
         .expect("decodes")

@@ -51,7 +51,7 @@ subclient's sibling windows are modeled as `Window.children` of its
 root window, not as fake XDG-style nesting. Because the whole tree is
 verifiable, a SubClient cannot be mistaken for the root and vice versa.
 | Capture          | shm buffer on commit    | `CGWindowListCreateImage` or ScreenCaptureKit, per window; works while occluded/offscreen |
-| Damage           | commit damage rects     | none — diff frames ourselves (as the h264 path already does) |
+| Damage           | commit damage rects     | none — diff frames ourselves (as the AV1 path already does) |
 | Inputs           | seat, we own it         | `CGEventPostToPid` (mouse/keyboard at the pid) — needs the Accessibility permission |
 | Resize/configure | we are the compositor   | no public Quartz API; AX API (`AXUIElementSetAttributeValue`, `kAXSizeAttribute`) or AppleScript — same Accessibility permission |
 | Headless         | no display needed at all| virtual/dummy display (the macOS xvfb): app believes it is visible, keeps drawing, nothing shows |

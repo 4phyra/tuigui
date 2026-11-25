@@ -75,9 +75,9 @@ impl TuiGui {
         args.push(self.scale.to_string());
         // The codec is a choice the client process is told about, because the
         // announcement on the wire is its to make. Neither flag means the
-        // client's own default, which is H.264.
-        if self.streaming.h264 {
-            args.push("--h264".into());
+        // client's own default, which is AV1.
+        if self.streaming.av1 {
+            args.push("--av1".into());
         }
         if self.streaming.jpeg {
             args.push("--jpeg".into());
