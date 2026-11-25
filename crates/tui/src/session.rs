@@ -254,6 +254,12 @@ impl<F: Format> Session<F> {
                     .ok_or(io::Error::other(format!("no anchor for {surface:?}")))?
                 {
                     Some(at) => {
+                        // A fixed cost per frame, standing in for a TUI slower than the
+                        // producer: what the kernel and `FramedRead` hold is then a backlog
+                        // that a consumer keeping up never makes visible.
+                        if let Some(ms) = self.debug.frame_lag_ms {
+                            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                        }
                         if !self.debug.no_graphics {
                             self.place_frame(surface, *at, position, bytes.as_deref())
                                 .await?;
