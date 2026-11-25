@@ -46,13 +46,6 @@ type Proxy = futures::future::BoxFuture<'static, Result<(), Error>>;
 /// key to the program and what lets it commit its next picture.
 const STEP: std::time::Duration = std::time::Duration::from_millis(4);
 
-/// How long an idle window waits before its picture is taken again.
-///
-/// The frame clock. A program draws on its own schedule and none of it arrives as an event, so
-/// this tick is the only thing that wakes its servant: a turn with nothing to send costs exactly
-/// this wait, and a turn with a picture costs the wait plus the encode.
-const EMPTY: std::time::Duration = std::time::Duration::from_millis(1);
-
 /// Run the session's program to its end.
 ///
 /// `root_initializer` carries the placement for the window the program drew, and the program's
@@ -217,6 +210,9 @@ async fn serve_window(
         // may draw at whatever size it chose — and placing by that is a picture that overflows the
         // box it was given.
         let mut box_cells = window.size_cells(winsize()?)?;
+        // What this window's pictures are encoded with, built on the first one that has pixels:
+        // an encoder is made for a size, and the size is only known once the window has drawn.
+        let mut encoder: Option<Box<dyn codecs::Encoder>> = None;
         let served = loop {
             tokio::select! {
                 // The compositor asked for a size. The program decides whether it follows: its
@@ -224,7 +220,17 @@ async fn serve_window(
                 size = recv_set_size.recv_async() => {
                     let Ok(size) = size else { break Ok(()) };
                     box_cells = compositor::widgets::cells(size, winsize()?);
-                    window.set_size(size)?
+                    window.set_size(size)?;
+                    // The box the picture goes in is the frame's other half: a window dragged or
+                    // resized has moved without drawing, and this is what tells the pane so.
+                    send_frame(
+                        &connection,
+                        window.surface(),
+                        rank.load(Ordering::Relaxed),
+                        box_cells,
+                        None,
+                    )
+                    .await?;
                 }
                 // The compositor sent input: a key with its modifiers, or a press at a pixel.
                 event = recv_input.recv_async() => {
@@ -268,22 +274,22 @@ async fn serve_window(
                 // learns it when the child's channel closes — so the news is only that a servant
                 // finished.
                 Some(ended) = futures.join_next() => ended.map_err(join_error)??,
-                // The program committed a picture nobody typed to ask for. A window draws on its own
-                // clock and not on this side's events, so a frame has to be taken whether or not
-                // anything arrived: without this arm a window is only ever captured in answer to
-                // input, and a program that draws by itself is never seen at all.
-                // The only arm that wakes an idle window: a program draws on its own clock and
-                // none of it arrives as an event, so without this tick a window that draws by
-                // itself is never captured at all. The turn after the tick is the frame.
-                _ = tokio::time::sleep(EMPTY) => {}
+                // The program committed a picture. `capture` answers when there is one to
+                // encode, so this arm is the frame clock: no tick asks and is told "nothing".
+                captured = window.capture() => {
+                    let Some(pixels) = captured? else { continue };
+                    let size = window.size_px()?;
+                    let bytes = encode(window.codec(), &mut encoder, &pixels, size)?;
+                    send_frame(
+                        &connection,
+                        window.surface(),
+                        rank.load(Ordering::Relaxed),
+                        box_cells,
+                        bytes,
+                    )
+                    .await?;
+                }
             }
-
-            // A picture leaves here: once per turn, so the encode and the send happen in the same
-            // breath as the event that made them worth taking. The rank is read at that moment, so
-            // a raise costs no message of its own.
-            window
-                .frame(&connection, rank.load(Ordering::Relaxed), box_cells)
-                .await?;
         };
 
         // The window is over, so the far side is told to forget it: its last picture would
@@ -297,6 +303,56 @@ async fn serve_window(
     });
 
     Ok((placed, servant))
+}
+
+/// Encode one picture for the link.
+///
+/// `None` is a codec holding the frame back: not a failure, and not pixels either — the picture
+/// the pane already holds stays in the box.
+#[tracing::instrument(skip(encoder, pixels))]
+fn encode(
+    codec: codecs::CodecId,
+    encoder: &mut Option<Box<dyn codecs::Encoder>>,
+    pixels: &[u8],
+    size: (u32, u32),
+) -> Result<Option<Vec<u8>>, Error> {
+    let encoder = match encoder {
+        Some(encoder) => encoder,
+        None => encoder.insert(codec.to_encoder(size)?),
+    };
+    let encoded = encoder.encode(pixels, size.0, size.1, false)?;
+    Ok((!encoded.is_empty()).then_some(encoded))
+}
+
+/// Put one window frame on the wire, and cut the profiler's timeline where it went.
+///
+/// `bytes` is the encoded picture, or `None` for a frame that only moves the picture — a window
+/// resized, dragged, or raised without its program drawing anything. The rank is read by the
+/// caller at the moment of sending, so a raise costs no message of its own.
+#[tracing::instrument(skip(connection, bytes))]
+async fn send_frame(
+    connection: &Connection,
+    surface: wire::message::SurfaceId,
+    rank: u32,
+    cells: (u16, u16),
+    bytes: Option<Vec<u8>>,
+) -> io::Result<()> {
+    let payload = bytes.as_ref().map_or(0, |bytes| bytes.len() as u64);
+    let message = Message::Frame {
+        surface,
+        position: wire::message::FramePosition {
+            z: rank,
+            cols: u32::from(cells.0),
+            rows: u32::from(cells.1),
+        },
+        bytes,
+    };
+    connection.send(&message).await?;
+    // A frame mark is a picture that actually went on the wire: an encode the codec held back
+    // leaves a gap here, which is exactly what a missing send looks like on the timeline.
+    crate::frame_mark();
+    crate::stats::record(payload);
+    Ok(())
 }
 
 /// The terminal's own report of itself, which is what a picture's size is measured in.

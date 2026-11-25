@@ -157,6 +157,7 @@ const LINK_BURST: u64 = 4 * 1024;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_over_a_slow_link_loses_nothing() {
     testing::reset();
+    crate::stats::reset();
 
     let (client_end, server_end) = Throttled::pair(LINK_RATE, LINK_BURST);
     let (transport_tx, transport_rx) = tokio::sync::oneshot::channel();
@@ -233,5 +234,5 @@ async fn a_session_over_a_slow_link_loses_nothing() {
         testing::frames_sent(),
         "every frame the client handed to the link arrived"
     );
-    assert_eq!(bytes, testing::bytes_sent(), "every byte the client sent arrived");
+    assert_eq!(bytes, crate::stats::uploaded(), "every byte the client sent arrived");
 }

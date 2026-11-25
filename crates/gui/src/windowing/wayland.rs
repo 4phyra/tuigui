@@ -17,7 +17,7 @@
 //! picture is compressed with; and the encoder is the pictures already sent, which
 //! is why it is per window — a window is a stream.
 
-use std::sync::{Mutex, Weak};
+use std::sync::Weak;
 
 use compositor::Error;
 use ratatui::buffer::Buffer;
@@ -25,8 +25,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use wayland::WaylandServer as Native;
 use tokio::sync::broadcast;
-use wire::message::{FramePosition, Message, SurfaceId};
-use wire::transport::Connection;
+use wire::message::SurfaceId;
 
 use super::{Compositable, WindowingServer};
 
@@ -80,21 +79,6 @@ pub struct WaylandWindow {
     codec: codecs::CodecId,
     /// The client's diagnostic switches; a child inherits the ones its parent was minted with.
     debug: crate::DebugOptions,
-    /// The encoder those frames go through, and the pictures it has already sent.
-    ///
-    /// Built on the first frame, because an encoder is made for a size and the size
-    /// is only known once the window has drawn.
-    ///
-    /// `Mutex` rather than `&mut`: a frame is taken through `&self`, because the
-    /// window is behind an `Arc` that the pane holds for drawing.
-    encoder: Mutex<Option<Box<dyn codecs::Encoder>>>,
-    /// The rank and cell box the far side was last told about.
-    ///
-    /// A frame carries pixels, a rank, and a box, and each of those can be the reason it is
-    /// worth sending. With no new pixels and neither of the other two changed, there is
-    /// nothing in it — and sending it anyway makes the frame rate the rate the caller's
-    /// loop turns over, which is pointer motion's when a mouse moves.
-    sent: Mutex<Option<(u32, (u16, u16))>>,
 }
 
 impl WaylandWindow {
@@ -130,8 +114,6 @@ impl WaylandWindow {
             surface,
             codec,
             debug,
-            encoder: Mutex::new(None),
-            sent: Mutex::new(None),
         })
     }
 }
@@ -247,90 +229,18 @@ impl Compositable for WaylandWindow {
         }
         Ok(())
     }
-
-    /// Take the picture the window drew, encode it, and send it down the link.
+    /// Take the picture the window drew.
     ///
-    /// The announcement went out when the window was minted, so the far side already knows the
-    /// surface the frame names. What is built here is the encoder, on the first frame that has
-    /// pixels: an encoder is made for a size, and the size is only known once the window has
-    /// drawn.
+    /// The pixels, exactly as the program committed them: encoding is the sender's business, and
+    /// a window that encoded for itself would be a window that knows about the link.
     ///
-    /// A message goes out every frame, whether or not there are new pixels. The box and the
-    /// rank are what place the picture, and they change while the picture does not — a window
-    /// being dragged moves without its program drawing anything — so a frame that only repeats
-    /// the picture still has to travel. `None` bytes is exactly that: place what you already have
-    /// in this box.
-    ///
-    /// A message goes out when there is something in it: new pixels, a new rank, or a new box.
-    /// With none of the three, it is the frame clock firing and nothing else — sending it makes
-    /// the wire the rate the caller's loop turns over, which is why pointer motion used to
-    /// stutter the picture.
-    #[tracing::instrument(name = "window.frame", skip_all)]
-    async fn frame(
-        &self,
-        connection: &Connection,
-        rank: u32,
-        cells: (u16, u16),
-    ) -> std::io::Result<()> {
-        // The picture, if the program drew one. Nothing to take is the ordinary case for a
-        // window nobody has touched since the last frame.
+    /// It waits for the client's next commit when nothing has been drawn since the last take,
+    /// which is what makes this the frame clock: the caller's `select!` wakes when a picture
+    /// exists, not on a tick. `None` is a window the session has let go.
+    #[tracing::instrument(name = "window.capture", skip_all)]
+    async fn capture(&self) -> std::io::Result<Option<Vec<u8>>> {
         let window = self.inner.upgrade().ok_or(Error::Gone)?;
-        let captured = window.capture();
-        let bytes = match captured {
-            Some((pixels, size)) => {
-                let mut held = self.encoder.lock().unwrap_or_else(|e| e.into_inner());
-                let encoder = match held.as_mut() {
-                    Some(encoder) => encoder,
-                    None => held.insert(
-                        self.codec
-                            .to_encoder(size)
-                            .map_err(|e| Error::Frame(e.to_string()))?,
-                    ),
-                };
-                let encoded = encoder
-                    .encode(&pixels, size.0, size.1, false)
-                    .map_err(|e| Error::Frame(e.to_string()))?;
-                // A codec holding a frame back has nothing for the wire: not a failure, and
-                // not pixels either — the picture already on the far side stays in the box.
-                (!encoded.is_empty()).then_some(encoded)
-            }
-            None => None,
-        };
-
-        // Dropped before the await: the guard is not `Send`, and holding it across the wait would
-        // also hold it for the whole round trip.
-        let nothing = {
-            let mut sent = self.sent.lock().unwrap_or_else(|e| e.into_inner());
-            if bytes.is_none() && *sent == Some((rank, cells)) {
-                true
-            } else {
-                *sent = Some((rank, cells));
-                false
-            }
-        };
-        if nothing {
-            return Ok(());
-        }
-
-        // The payload's size is taken before the message is handed over, because the message
-        // takes ownership of the bytes: what goes on the wire is what counts as upload.
-        let payload = bytes.as_ref().map_or(0, |bytes| bytes.len() as u64);
-        let message = Message::Frame {
-            surface: self.surface,
-            position: FramePosition {
-                z: rank,
-                cols: u32::from(cells.0),
-                rows: u32::from(cells.1),
-            },
-            bytes,
-        };
-        connection.send(&message).await?;
-        // A frame mark is a picture that actually went on the wire: a capture the codec held
-        // back, or one whose box and rank did not change, leaves a gap here, which is exactly
-        // what a missing send looks like on the timeline.
-        crate::frame_mark();
-        crate::stats::record(payload);
-        Ok(())
+        Ok(window.capture().await.map(|(pixels, _size)| pixels))
     }
 
     /// How big this window is, in pixels: what its program last committed, or the size it was

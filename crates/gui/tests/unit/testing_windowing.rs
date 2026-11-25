@@ -15,23 +15,15 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use codecs::CodecId;
-use wire::message::{FramePosition, Message, SurfaceId};
-use wire::transport::Connection;
+use wire::message::SurfaceId;
 
 use crate::windowing::{Compositable, WindowingServer};
 
 static FRAMES_SENT: AtomicU64 = AtomicU64::new(0);
-static BYTES_SENT: AtomicU64 = AtomicU64::new(0);
 static STOP: AtomicBool = AtomicBool::new(false);
-
-/// How many frames the window handed to the connection.
+/// How many frames the window handed over.
 pub fn frames_sent() -> u64 {
     FRAMES_SENT.load(Ordering::SeqCst)
-}
-
-/// The payload bytes those frames carried.
-pub fn bytes_sent() -> u64 {
-    BYTES_SENT.load(Ordering::SeqCst)
 }
 
 /// The window reports no longer running, which is what ends the session.
@@ -42,7 +34,6 @@ pub fn stop() {
 /// Zero everything for a fresh run.
 pub fn reset() {
     FRAMES_SENT.store(0, Ordering::SeqCst);
-    BYTES_SENT.store(0, Ordering::SeqCst);
     STOP.store(false, Ordering::SeqCst);
 }
 
@@ -116,14 +107,10 @@ impl Compositable for TestWindow {
         Ok(())
     }
 
-    /// Draw and send a frame every time the client asks. The pixels change every call, so
+    /// Draw a picture every time the client asks for one. The pixels change every call, so
     /// every frame is new work for the codec, like a program that redraws continuously.
-    async fn frame(
-        &self,
-        connection: &Connection,
-        rank: u32,
-        cells: (u16, u16),
-    ) -> std::io::Result<()> {
+    async fn capture(&self) -> std::io::Result<Option<Vec<u8>>> {
+        tokio::time::sleep(std::time::Duration::from_millis(16)).await;
         let n = self.frame_no.fetch_add(1, Ordering::Relaxed);
         const WIDTH: u32 = 96;
         const HEIGHT: u32 = 64;
@@ -135,27 +122,8 @@ impl Compositable for TestWindow {
             pixel[2] = ((v >> 16) & 0xff) as u8;
             pixel[3] = 0xff;
         }
-        let bytes = self
-            .codec
-            .to_encoder((WIDTH, HEIGHT))
-            .and_then(|mut encoder| encoder.encode(&pixels, WIDTH, HEIGHT, false))
-            .map_err(std::io::Error::other)?;
-
-        let frame = Message::Frame {
-            surface: self.surface,
-            position: FramePosition {
-                z: rank,
-                cols: u32::from(cells.0),
-                rows: u32::from(cells.1),
-            },
-            bytes: Some(bytes),
-        };
         FRAMES_SENT.fetch_add(1, Ordering::Relaxed);
-        BYTES_SENT.fetch_add(match &frame {
-            Message::Frame { bytes: Some(b), .. } => b.len() as u64,
-            _ => 0,
-        }, Ordering::Relaxed);
-        connection.send(&frame).await
+        Ok(Some(pixels))
     }
 
     fn surface(&self) -> SurfaceId {

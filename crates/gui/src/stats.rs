@@ -45,6 +45,20 @@ pub(crate) fn record(bytes: u64) {
     STATS.write().unwrap_or_else(|e| e.into_inner()).bytes += bytes;
 }
 
+/// Every byte the send path has put on the wire since the process started, for the test that
+/// measures one session.
+#[cfg(all(test, feature = "test-windowing"))]
+#[tracing::instrument(skip_all)]
+pub(crate) fn uploaded() -> u64 {
+    STATS.read().unwrap_or_else(|e| e.into_inner()).bytes
+}
+
+/// Zero the counter, for a test that measures one session rather than a process.
+#[cfg(all(test, feature = "test-windowing"))]
+pub(crate) fn reset() {
+    STATS.write().unwrap_or_else(|e| e.into_inner()).bytes = 0;
+}
+
 /// Bytes per second over the last window, recomputed at most once per `WINDOW`.
 #[tracing::instrument(skip_all)]
 pub(crate) fn bytes_per_sec() -> u64 {

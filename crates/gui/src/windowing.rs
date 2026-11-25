@@ -91,23 +91,13 @@ pub trait Compositable: Send + Sync {
     /// Queue one pointer event for delivery to this window.
     fn pointer_input(&self, event: termina::event::MouseEvent) -> std::io::Result<()>;
 
-    /// Take whatever this window drew since the last call, and send it down the link.
+    /// Take the window's next picture, encoded and ready for the link.
     ///
-    /// `rank` is where the window sits in the stack, bottom first, because nothing on the screen
-    /// says which window is in front of another: that is the compositor's answer, and it travels
-    /// with the frame it applies to.
-    ///
-    /// `cells` is the box the pane gave it, in cells: a picture is placed by the far side on a grid
-    /// of cells, and how many is not the window's to know.
-    ///
-    /// `connection` is where the picture goes, handed in rather than held: the link arrives late and
-    /// from outside, so a window that stored one would have to be told twice.
-    async fn frame(
-        &self,
-        connection: &wire::transport::Connection,
-        rank: u32,
-        cells: (u16, u16),
-    ) -> std::io::Result<()>;
+    /// Async, and it answers when there is something to send: with nothing drawn it waits for
+    /// the client's next commit instead of answering "nothing yet", which is what makes the
+    /// caller's frame clock the client's own. `None` is a picture the codec held back — not a
+    /// failure, and not pixels either.
+    async fn capture(&self) -> std::io::Result<Option<Vec<u8>>>;
 
     /// The signature this window's cells carry, and the name it is placed under.
     ///

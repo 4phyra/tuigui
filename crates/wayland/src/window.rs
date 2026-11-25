@@ -243,25 +243,43 @@ impl Window {
     ///
     /// Taking is the read: the offer is emptied, so a second call with no commit in between
     /// answers `None` instead of sending the same picture again.
+    ///
+    /// Async, and it is the picture that ends it: with nothing committed this waits for the
+    /// client's next frame rather than answering "nothing" — which is what makes the caller's
+    /// frame clock the client's own, instead of a tick that asks and is told "nothing" again.
     #[tracing::instrument(name = "wayland.capture", skip_all)]
-    pub fn capture(&self) -> Option<(Vec<u8>, (u32, u32))> {
-        // Taken, not read: the offer is emptied by the read, so the next call answers `None`
-        // unless something committed in between. That is what "anything new" means here, and a
-        // receiver would not answer it — `subscribe` starts at the current value and considers
-        // it already seen.
-        let frame = self.frame.send_replace(None);
+    pub async fn capture(&self) -> Option<(Vec<u8>, (u32, u32))> {
+        // Subscribed before the take, so a commit that lands between the two is a change this
+        // receiver sees rather than one nobody was listening for.
+        let mut committed = self.frame.subscribe();
+        // Taken, not read: the offer is emptied by the read, so a second call with no commit in
+        // between answers `None`. `send_replace` moves the pixels out, which is why this is not
+        // `borrow` — a frame is copied once, into the far side's encoder, not twice.
+        let frame = match self.frame.send_replace(None) {
+            Some(frame) => frame,
+            None => {
+                // The take above is itself a change; cleared so the wait below is the client's
+                // commit and not this reader's own write.
+                committed.mark_unchanged();
+                // Nothing drawn yet: the wait is the client's next commit, which is a change to
+                // this same watch. A window the session let go answers `None` rather than waiting
+                // for a commit that cannot come.
+                committed.changed().await.ok()?;
+                self.frame.send_replace(None)?
+            }
+        };
         // Both answers to "you may draw again", given here rather than at commit. The pixels
         // are already copied out, so releasing the buffer cannot disturb them: the client
         // renders the next frame into it, and that frame is read when this is called again.
         // One commit in flight, so a client cannot get further ahead than one frame.
-        if let Some(buffer) = frame.as_ref().and_then(|frame| frame.buffer.as_ref()) {
+        if let Some(buffer) = frame.buffer.as_ref() {
             buffer.release();
         }
-        // Asked whether or not a picture was waiting: the client draws its *next* frame on this
-        // callback, so a callback that only fired when a frame was ready would be a client that
-        // stopped drawing after its first one.
+        // The client draws its *next* frame on this callback, so it is fired for every picture
+        // taken — a callback that only fired when a frame was ready would leave a client drawing
+        // nothing after its first one.
         crate::utils::fire_frame_callbacks(self.surface.wl_surface());
-        frame.map(|frame| (frame.pixels, frame.size))
+        Some((frame.pixels, frame.size))
     }
 
     /// Ask this window to draw at `size` **physical** pixels instead of its current one.
