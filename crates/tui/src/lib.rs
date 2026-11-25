@@ -121,6 +121,14 @@ pub struct DebugOptions {
     /// wrong with the flag on is not wrong because of anything this side placed over it.
     #[arg(long = "dbg-no-graphics", hide = true)]
     pub no_graphics: bool,
+    /// Spend a fixed lag on every frame handled.
+    ///
+    /// The producer and the consumer run at their own speeds, and a consumer that keeps
+    /// up hides what a slower one does with a backlog: frames waiting in the kernel and
+    /// in `FramedRead` are drawn after the producer has stopped. A fixed lag per frame
+    /// makes this side the slow one on purpose, so the queue is observable.
+    #[arg(long = "dbg-frame-lag-ms", hide = true)]
+    pub frame_lag_ms: Option<u64>,
 }
 
 impl Tui {
