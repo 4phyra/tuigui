@@ -36,9 +36,6 @@ pub use wayland::Options;
 pub struct WaylandServer {
     /// The session.
     inner: Native,
-    /// The codec every window of this session streams with: a property of the
-    /// stream, and every window of one session shares it.
-    codec: codecs::CodecId,
     /// The client's diagnostic switches, carried to every signature this session mints.
     debug: crate::DebugOptions,
     /// The program's own output, held until someone takes it.
@@ -75,8 +72,6 @@ pub struct WaylandWindow {
     /// Minted with the window and kept: the id names the image on the far side, so
     /// a new one per frame would be a new image per frame.
     surface: SurfaceId,
-    /// What this picture is encoded with: the session's, for every window of it.
-    codec: codecs::CodecId,
     /// The client's diagnostic switches; a child inherits the ones its parent was minted with.
     debug: crate::DebugOptions,
 }
@@ -92,11 +87,7 @@ impl WaylandWindow {
     /// `None` for a window the session has already let go, which is not a failure: the caller
     /// asked about a handle it was given and the answer is that there is nothing behind it.
     #[tracing::instrument(skip_all)]
-    fn new(
-        inner: Weak<wayland::Window>,
-        codec: codecs::CodecId,
-        debug: crate::DebugOptions,
-    ) -> Option<Self> {
+    fn new(inner: Weak<wayland::Window>, debug: crate::DebugOptions) -> Option<Self> {
         let window = inner.upgrade()?;
         // Subscribed here, not at the first read: a subscription starts at the moment it is made,
         // so a child admitted while this wrapper is being built would otherwise be one nobody ever
@@ -112,7 +103,6 @@ impl WaylandWindow {
             new_children: tokio::sync::Mutex::new(new_children),
             new_popups: tokio::sync::Mutex::new(new_popups),
             surface,
-            codec,
             debug,
         })
     }
@@ -134,15 +124,10 @@ impl WaylandServer {
     /// channel by [`Self::take_root`]: only a turn notices a client has committed, so the news can
     /// only come from the session, and the wait can only live where it is awaited.
     #[tracing::instrument(skip_all)]
-    pub fn new(
-        options: wayland::Options,
-        codec: codecs::CodecId,
-        debug: crate::DebugOptions,
-    ) -> std::io::Result<Self> {
+    pub fn new(options: wayland::Options, debug: crate::DebugOptions) -> std::io::Result<Self> {
         let inner = Native::new(options).map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(Self {
             inner,
-            codec,
             debug,
             stdout: None,
         })
@@ -161,13 +146,12 @@ impl WaylandServer {
             .inner
             .take_root_receiver()
             .ok_or_else(|| std::io::Error::other("the root window is handed over once"))?;
-        let codec = self.codec;
         let debug = self.debug;
         Ok(async move {
             let root = root
                 .await
                 .map_err(|_| std::io::Error::other("the session ended before it drew a window"))?;
-            WaylandWindow::new(root, codec, debug)
+            WaylandWindow::new(root, debug)
                 .map(|window| Box::new(window) as Box<dyn Compositable>)
                 .ok_or_else(|| std::io::Error::other("the root window is already gone"))
         })
@@ -282,19 +266,13 @@ impl Compositable for WaylandWindow {
         self.surface
     }
 
-    /// The codec this window's frames are in, which the far side needs to decode them.
-    #[tracing::instrument(skip_all)]
-    fn codec(&self) -> codecs::CodecId {
-        self.codec
-    }
-
     /// The next window this one's program opens, or `None` once that program is over.
     #[tracing::instrument(name = "window.children", skip_all)]
     async fn recv_new_child(&self) -> Option<Box<dyn Compositable>> {
         // A channel that closed is the session letting go of the window it belongs to, which is
         // its program being over: there is nothing more to open, and nothing wrong to report.
         let window = self.new_children.lock().await.recv().await.ok()?;
-        WaylandWindow::new(window, self.codec, self.debug)
+        WaylandWindow::new(window, self.debug)
             .map(|window| Box::new(window) as Box<dyn Compositable>)
     }
 
@@ -302,7 +280,7 @@ impl Compositable for WaylandWindow {
     #[tracing::instrument(name = "window.popups", skip_all)]
     async fn recv_new_popup(&self) -> Option<Box<dyn Compositable>> {
         let window = self.new_popups.lock().await.recv().await.ok()?;
-        WaylandWindow::new(window, self.codec, self.debug)
+        WaylandWindow::new(window, self.debug)
             .map(|window| Box::new(window) as Box<dyn Compositable>)
     }
 

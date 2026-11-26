@@ -106,9 +106,6 @@ pub trait Compositable: Send + Sync {
     /// refused rather than drawn.
     fn surface(&self) -> wire::message::SurfaceId;
 
-    /// The codec this window's frames are in, which the far side needs to decode them.
-    fn codec(&self) -> codecs::CodecId;
-
     /// How big this window is, in pixels: what its program last committed.
     fn size_px(&self) -> std::io::Result<(u32, u32)>;
 

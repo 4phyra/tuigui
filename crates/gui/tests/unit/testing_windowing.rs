@@ -14,7 +14,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use codecs::CodecId;
 use wire::message::SurfaceId;
 
 use crate::windowing::{Compositable, WindowingServer};
@@ -39,7 +38,6 @@ pub fn reset() {
 
 /// The scripted session: no program is spawned, the window always exists.
 pub struct TestingWindowing {
-    codec: CodecId,
     stdout: Option<std::io::PipeReader>,
     /// Kept so the reader never sees the pipe close while the session runs; the session is
     /// ended by [`stop`], not by the program's output ending.
@@ -50,12 +48,10 @@ pub struct TestingWindowing {
 impl TestingWindowing {
     pub fn new(
         _options: crate::windowing::Options,
-        codec: CodecId,
         _debug: crate::DebugOptions,
     ) -> std::io::Result<Self> {
         let (reader, writer) = std::io::pipe()?;
         Ok(Self {
-            codec,
             stdout: Some(reader),
             _stdout: Some(writer),
             surface: SurfaceId::random(),
@@ -66,9 +62,8 @@ impl TestingWindowing {
     pub fn take_root(
         &mut self,
     ) -> std::io::Result<impl std::future::Future<Output = std::io::Result<Box<dyn Compositable>>>> {
-        let codec = self.codec;
         let surface = self.surface;
-        Ok(async move { Ok(Box::new(TestWindow { surface, codec, frame_no: AtomicU64::new(0) }) as Box<dyn Compositable>) })
+        Ok(async move { Ok(Box::new(TestWindow { surface, frame_no: AtomicU64::new(0) }) as Box<dyn Compositable>) })
     }
 }
 
@@ -93,7 +88,6 @@ impl WindowingServer for TestingWindowing {
 /// The window the session places and draws.
 struct TestWindow {
     surface: SurfaceId,
-    codec: CodecId,
     frame_no: AtomicU64,
 }
 
@@ -128,10 +122,6 @@ impl Compositable for TestWindow {
 
     fn surface(&self) -> SurfaceId {
         self.surface
-    }
-
-    fn codec(&self) -> CodecId {
-        self.codec
     }
 
     fn size_px(&self) -> std::io::Result<(u32, u32)> {

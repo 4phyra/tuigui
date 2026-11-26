@@ -64,7 +64,7 @@ pub async fn run(
     program: std::path::PathBuf,
     transport: tokio::sync::oneshot::Receiver<Box<dyn Transport>>,
 ) -> Result<(), Error> {
-    let mut windowing = PlatformWindowing::new(options, codec, debug)?;
+    let mut windowing = PlatformWindowing::new(options, debug)?;
     windowing.spawn(&program)?;
     // The program's own words, for the screen that prints them. Taken once: a pipe has one reader.
     let stdout = windowing
@@ -100,7 +100,7 @@ pub async fn run(
     // very turn that answers it impossible.
     let mut serve = std::pin::pin!(async move {
         let (placed, servant) =
-            serve_window(recv_root.await?, serve_connection, rebroadcaster_recvr).await?;
+            serve_window(recv_root.await?, codec, serve_connection, rebroadcaster_recvr).await?;
         root_initializer.send((placed, stdout)).map_err(|_| {
             io::Error::other("the root window was not wanted: the render path is gone")
         })?;
@@ -161,6 +161,7 @@ pub async fn run(
 #[tracing::instrument(skip_all)]
 async fn serve_window(
     window: Box<dyn Compositable>,
+    codec: codecs::CodecId,
     connection: Connection,
     mut rebroadcaster: tokio::sync::broadcast::Receiver<wire::message::Message>,
 ) -> io::Result<(CompositableWindow, Proxy)> {
@@ -192,7 +193,7 @@ async fn serve_window(
     connection
         .send(&wire::message::Message::OpenWindow {
             surface: window.surface(),
-            codec: window.codec(),
+            codec,
         })
         .await?;
     // And the answer is waited for before a cell is drawn. The far side blanks the cells carrying
@@ -275,7 +276,7 @@ async fn serve_window(
                 child = window.recv_new_child() => {
                     let Some(child) = child else { break Ok(()) };
                     let (placed, servant) =
-                        serve_window(child, connection.clone(), rebroadcaster.resubscribe())
+                        serve_window(child, codec, connection.clone(), rebroadcaster.resubscribe())
                             .await?;
                     // A failed send is the compositor having dropped this window's placement: the
                     // window is over, and so is the news of it.
@@ -285,7 +286,7 @@ async fn serve_window(
                 popup = window.recv_new_popup() => {
                     let Some(popup) = popup else { break Ok(()) };
                     let (placed, servant) =
-                        serve_window(popup, connection.clone(), rebroadcaster.resubscribe())
+                        serve_window(popup, codec, connection.clone(), rebroadcaster.resubscribe())
                             .await?;
                     (popups.send(placed).ok(), futures.spawn(servant));
                 }
@@ -316,7 +317,7 @@ async fn serve_window(
                 } => {
                     let started = tokio::time::Instant::now();
                     let Some(pixels) = captured? else { continue };
-                    let bytes = encode(&*window, &mut encoder, &pixels)?;
+                    let bytes = encode(&*window, codec, &mut encoder, &pixels)?;
                     let picture = bytes.is_some();
                     send_frame(
                         &connection,
@@ -351,14 +352,15 @@ async fn serve_window(
 /// Encode one picture for the link.
 ///
 /// `None` is a codec holding the frame back: not a failure, and not pixels either — the picture
-/// the pane already holds stays in the box.
+/// the pane already holds stays in the box. The codec is the session's, passed in: every window of
+/// one session streams with the same one.
 #[tracing::instrument(skip(window, encoder, pixels))]
 fn encode(
     window: &dyn Compositable,
+    codec: codecs::CodecId,
     encoder: &mut Option<Box<dyn codecs::Encoder>>,
     pixels: &[u8],
 ) -> Result<Option<Vec<u8>>, Error> {
-    let codec = window.codec();
     let size = window.size_px()?;
     let encoder = match encoder {
         Some(encoder) => encoder,
