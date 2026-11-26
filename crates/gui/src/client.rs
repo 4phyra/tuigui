@@ -172,11 +172,20 @@ async fn serve_window(
     connection: Connection,
     mut rebroadcaster: tokio::sync::broadcast::Receiver<wire::message::Message>,
 ) -> io::Result<(CompositableWindow, Proxy)> {
-    let (set_size, recv_set_size) = flume::unbounded();
-    let (input, recv_input) = flume::unbounded();
-    let (children, new_children) = flume::unbounded();
-    let (popups, new_popups) = flume::unbounded();
-    let (close, recv_close) = flume::unbounded();
+    // The channels this window's placement is wired to: one per thing the compositor asks of it.
+    let (
+        (set_size, recv_set_size),
+        (input, recv_input),
+        (children, new_children),
+        (popups, new_popups),
+        (close, recv_close),
+    ) = (
+        flume::unbounded(),
+        flume::unbounded(),
+        flume::unbounded(),
+        flume::unbounded(),
+        flume::unbounded(),
+    );
     let rank = Arc::new(AtomicU32::new(0));
     // The signature this window's cells carry: the id names the image on the far side and is what
     // the pane scans for, so it is minted once here and travels with every frame.
