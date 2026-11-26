@@ -64,7 +64,7 @@ pub async fn run(
     program: std::path::PathBuf,
     transport: tokio::sync::oneshot::Receiver<Box<dyn Transport>>,
 ) -> Result<(), Error> {
-    let mut windowing = PlatformWindowing::new(options, debug)?;
+    let mut windowing = PlatformWindowing::new(options)?;
     windowing.spawn(&program)?;
     // The program's own words, for the screen that prints them. Taken once: a pipe has one reader.
     let stdout = windowing
@@ -99,8 +99,14 @@ pub async fn run(
     // session, so the turn beside it can find the root: a wait holding the session would make the
     // very turn that answers it impossible.
     let mut serve = std::pin::pin!(async move {
-        let (placed, servant) =
-            serve_window(recv_root.await?, codec, serve_connection, rebroadcaster_recvr).await?;
+        let (placed, servant) = serve_window(
+            recv_root.await?,
+            codec,
+            debug,
+            serve_connection,
+            rebroadcaster_recvr,
+        )
+        .await?;
         root_initializer.send((placed, stdout)).map_err(|_| {
             io::Error::other("the root window was not wanted: the render path is gone")
         })?;
@@ -162,6 +168,7 @@ pub async fn run(
 async fn serve_window(
     window: Box<dyn Compositable>,
     codec: codecs::CodecId,
+    debug: crate::DebugOptions,
     connection: Connection,
     mut rebroadcaster: tokio::sync::broadcast::Receiver<wire::message::Message>,
 ) -> io::Result<(CompositableWindow, Proxy)> {
@@ -171,7 +178,15 @@ async fn serve_window(
     let (popups, new_popups) = flume::unbounded();
     let (close, recv_close) = flume::unbounded();
     let rank = Arc::new(AtomicU32::new(0));
-    let anchor = window.surface();
+    // The signature this window's cells carry: the id names the image on the far side and is what
+    // the pane scans for, so it is minted once here and travels with every frame.
+    let anchor = {
+        let mut anchor = wire::message::SurfaceId::random();
+        if debug.anchor_greenscreen {
+            anchor.bg = (0, 255, 0);
+        }
+        anchor
+    };
 
     let placed = CompositableWindow {
         set_size,
@@ -192,7 +207,7 @@ async fn serve_window(
     // than drawn. Said here because this is the first moment the link exists.
     connection
         .send(&wire::message::Message::OpenWindow {
-            surface: window.surface(),
+            surface: anchor,
             codec,
         })
         .await?;
@@ -254,7 +269,7 @@ async fn serve_window(
                     // resized has moved without drawing, and this is what tells the pane so.
                     send_frame(
                         &connection,
-                        window.surface(),
+                        anchor,
                         rank.load(Ordering::Relaxed),
                         box_cells,
                         None,
@@ -276,7 +291,7 @@ async fn serve_window(
                 child = window.recv_new_child() => {
                     let Some(child) = child else { break Ok(()) };
                     let (placed, servant) =
-                        serve_window(child, codec, connection.clone(), rebroadcaster.resubscribe())
+                        serve_window(child, codec, debug.clone(), connection.clone(), rebroadcaster.resubscribe())
                             .await?;
                     // A failed send is the compositor having dropped this window's placement: the
                     // window is over, and so is the news of it.
@@ -286,7 +301,7 @@ async fn serve_window(
                 popup = window.recv_new_popup() => {
                     let Some(popup) = popup else { break Ok(()) };
                     let (placed, servant) =
-                        serve_window(popup, codec, connection.clone(), rebroadcaster.resubscribe())
+                        serve_window(popup, codec, debug.clone(), connection.clone(), rebroadcaster.resubscribe())
                             .await?;
                     (popups.send(placed).ok(), futures.spawn(servant));
                 }
@@ -321,7 +336,7 @@ async fn serve_window(
                     let picture = bytes.is_some();
                     send_frame(
                         &connection,
-                        window.surface(),
+                        anchor,
                         rank.load(Ordering::Relaxed),
                         box_cells,
                         bytes,
@@ -339,9 +354,7 @@ async fn serve_window(
         // The window is over, so the far side is told to forget it: its last picture would
         // otherwise stay where it was for the rest of the session.
         connection
-            .send(&wire::message::Message::CloseWindow {
-                surface: window.surface(),
-            })
+            .send(&wire::message::Message::CloseWindow { surface: anchor })
             .await?;
         served
     });

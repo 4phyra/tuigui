@@ -99,13 +99,6 @@ pub trait Compositable: Send + Sync {
     /// failure, and not pixels either.
     async fn capture(&self) -> std::io::Result<Option<Vec<u8>>>;
 
-    /// The signature this window's cells carry, and the name it is placed under.
-    ///
-    /// The far side has to be told it exists before any picture arrives: the cells carrying this
-    /// surface are the anchor a picture is placed on, and a frame for a surface with no anchor is
-    /// refused rather than drawn.
-    fn surface(&self) -> wire::message::SurfaceId;
-
     /// How big this window is, in pixels: what its program last committed.
     fn size_px(&self) -> std::io::Result<(u32, u32)>;
 

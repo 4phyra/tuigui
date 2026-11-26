@@ -20,12 +20,8 @@
 use std::sync::Weak;
 
 use compositor::Error;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
-use wayland::WaylandServer as Native;
 use tokio::sync::broadcast;
-use wire::message::SurfaceId;
+use wayland::WaylandServer as Native;
 
 use super::{Compositable, WindowingServer};
 
@@ -36,8 +32,6 @@ pub use wayland::Options;
 pub struct WaylandServer {
     /// The session.
     inner: Native,
-    /// The client's diagnostic switches, carried to every signature this session mints.
-    debug: crate::DebugOptions,
     /// The program's own output, held until someone takes it.
     ///
     /// Not drained here: what a program prints belongs to whoever shows it, and this side only
@@ -66,14 +60,6 @@ pub struct WaylandWindow {
     /// the same `select!` — an `&mut` wait would conflict with the arms that type into it.
     new_children: tokio::sync::Mutex<broadcast::Receiver<Weak<wayland::Window>>>,
     new_popups: tokio::sync::Mutex<broadcast::Receiver<Weak<wayland::Window>>>,
-    /// The cells this window's picture goes into, which is what the far side scans
-    /// the pane for.
-    ///
-    /// Minted with the window and kept: the id names the image on the far side, so
-    /// a new one per frame would be a new image per frame.
-    surface: SurfaceId,
-    /// The client's diagnostic switches; a child inherits the ones its parent was minted with.
-    debug: crate::DebugOptions,
 }
 
 impl WaylandWindow {
@@ -87,23 +73,17 @@ impl WaylandWindow {
     /// `None` for a window the session has already let go, which is not a failure: the caller
     /// asked about a handle it was given and the answer is that there is nothing behind it.
     #[tracing::instrument(skip_all)]
-    fn new(inner: Weak<wayland::Window>, debug: crate::DebugOptions) -> Option<Self> {
+    fn new(inner: Weak<wayland::Window>) -> Option<Self> {
         let window = inner.upgrade()?;
         // Subscribed here, not at the first read: a subscription starts at the moment it is made,
         // so a child admitted while this wrapper is being built would otherwise be one nobody ever
         // hears about.
         let new_children = window.subscribe_new_children();
         let new_popups = window.subscribe_new_popups();
-        let mut surface = SurfaceId::random();
-        if debug.anchor_greenscreen {
-            surface.bg = (0, 255, 0);
-        }
         Some(Self {
             inner,
             new_children: tokio::sync::Mutex::new(new_children),
             new_popups: tokio::sync::Mutex::new(new_popups),
-            surface,
-            debug,
         })
     }
 }
@@ -124,11 +104,10 @@ impl WaylandServer {
     /// channel by [`Self::take_root`]: only a turn notices a client has committed, so the news can
     /// only come from the session, and the wait can only live where it is awaited.
     #[tracing::instrument(skip_all)]
-    pub fn new(options: wayland::Options, debug: crate::DebugOptions) -> std::io::Result<Self> {
+    pub fn new(options: wayland::Options) -> std::io::Result<Self> {
         let inner = Native::new(options).map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(Self {
             inner,
-            debug,
             stdout: None,
         })
     }
@@ -146,12 +125,11 @@ impl WaylandServer {
             .inner
             .take_root_receiver()
             .ok_or_else(|| std::io::Error::other("the root window is handed over once"))?;
-        let debug = self.debug;
         Ok(async move {
             let root = root
                 .await
                 .map_err(|_| std::io::Error::other("the session ended before it drew a window"))?;
-            WaylandWindow::new(root, debug)
+            WaylandWindow::new(root)
                 .map(|window| Box::new(window) as Box<dyn Compositable>)
                 .ok_or_else(|| std::io::Error::other("the root window is already gone"))
         })
@@ -260,19 +238,13 @@ impl Compositable for WaylandWindow {
             .is_some_and(|window| window.is_popup())
     }
 
-    /// The signature this window's cells carry, which names it on both sides.
-    #[tracing::instrument(skip_all)]
-    fn surface(&self) -> SurfaceId {
-        self.surface
-    }
-
     /// The next window this one's program opens, or `None` once that program is over.
     #[tracing::instrument(name = "window.children", skip_all)]
     async fn recv_new_child(&self) -> Option<Box<dyn Compositable>> {
         // A channel that closed is the session letting go of the window it belongs to, which is
         // its program being over: there is nothing more to open, and nothing wrong to report.
         let window = self.new_children.lock().await.recv().await.ok()?;
-        WaylandWindow::new(window, self.debug)
+        WaylandWindow::new(window)
             .map(|window| Box::new(window) as Box<dyn Compositable>)
     }
 
@@ -280,7 +252,7 @@ impl Compositable for WaylandWindow {
     #[tracing::instrument(name = "window.popups", skip_all)]
     async fn recv_new_popup(&self) -> Option<Box<dyn Compositable>> {
         let window = self.new_popups.lock().await.recv().await.ok()?;
-        WaylandWindow::new(window, self.debug)
+        WaylandWindow::new(window)
             .map(|window| Box::new(window) as Box<dyn Compositable>)
     }
 
@@ -321,24 +293,3 @@ impl Compositable for WaylandWindow {
     }
 }
 
-/// A window, the way the pane draws it: every cell filled with the window's own surface id,
-/// which is the anchor the other side scans for.
-impl ratatui::widgets::StatefulWidgetRef for WaylandWindow {
-    type State = compositor::widgets::WindowState;
-
-    #[tracing::instrument(skip_all)]
-    fn render_ref(&self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
-        let id = self.surface;
-        let style = Style::new()
-            .fg(Color::Rgb(id.fg.0, id.fg.1, id.fg.2))
-            .bg(Color::Rgb(id.bg.0, id.bg.1, id.bg.2));
-        buf.set_style(area, style);
-        for row in area.y..area.bottom() {
-            for column in area.x..area.right() {
-                if let Some(cell) = buf.cell_mut((column, row)) {
-                    cell.set_char(id.symbol);
-                }
-            }
-        }
-    }
-}
