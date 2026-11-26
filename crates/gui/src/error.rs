@@ -82,6 +82,14 @@ pub enum InternalError {
     /// nothing to do with it.
     #[error("the program's stage failed: {0}")]
     Stage(String),
+
+    /// The session's own news stopped: the broadcast channel it hands messages down closed on
+    /// the window that was reading it.
+    ///
+    /// Its own variant because it is not an [`std::io::Error`] and nothing failed on a stream:
+    /// the session ended while a window was still waiting to hear from it.
+    #[error("the session's news ended: {0}")]
+    News(#[from] tokio::sync::broadcast::error::RecvError),
 }
 
 #[cfg(test)]
@@ -153,6 +161,7 @@ macro_rules! from_internal {
 from_internal! {
     std::io::Error => Io,
     codecs::Error => Codec,
+    tokio::sync::broadcast::error::RecvError => News,
 }
 
 impl From<InternalError> for Error {

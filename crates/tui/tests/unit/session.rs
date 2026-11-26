@@ -162,6 +162,7 @@ async fn every_frame_reuses_one_id_and_places_itself_again() {
                 surface: SURFACE,
                 codec: CodecId::Jpeg,
             },
+            std::time::Instant::now(),
             &where_it_is(),
         )
         .await
@@ -178,6 +179,7 @@ async fn every_frame_reuses_one_id_and_places_itself_again() {
                 },
                 bytes: Some(codec_frame(8, 8)),
             },
+            std::time::Instant::now(),
             &where_it_is(),
         )
         .await
@@ -230,6 +232,7 @@ async fn every_frame_reuses_one_id_and_places_itself_again() {
                 },
                 bytes: Some(codec_frame(8, 8)),
             },
+            std::time::Instant::now(),
             &where_it_is(),
         )
         .await
@@ -295,6 +298,7 @@ async fn a_frame_with_no_new_pixels_sends_its_picture_again() {
                 surface: SURFACE,
                 codec: CodecId::Jpeg,
             },
+            std::time::Instant::now(),
             &where_it_is(),
         )
         .await
@@ -310,6 +314,7 @@ async fn a_frame_with_no_new_pixels_sends_its_picture_again() {
                 },
                 bytes: Some(codec_frame(8, 8)),
             },
+            std::time::Instant::now(),
             &where_it_is(),
         )
         .await
@@ -327,6 +332,7 @@ async fn a_frame_with_no_new_pixels_sends_its_picture_again() {
                 },
                 bytes: None,
             },
+            std::time::Instant::now(),
             &where_it_is(),
         )
         .await
@@ -390,6 +396,7 @@ async fn a_frame_keeps_its_picture_and_a_closed_window_removes_it() {
                 surface: SURFACE,
                 codec: CodecId::Jpeg,
             },
+            std::time::Instant::now(),
             &where_it_is(),
         )
         .await
@@ -407,6 +414,7 @@ async fn a_frame_keeps_its_picture_and_a_closed_window_removes_it() {
                     },
                     bytes: Some(codec_frame(8, 8)),
                 },
+                std::time::Instant::now(),
                 &where_it_is(),
             )
             .await
@@ -423,6 +431,7 @@ async fn a_frame_keeps_its_picture_and_a_closed_window_removes_it() {
     session
         .handle_inner(
             Message::CloseWindow { surface: SURFACE },
+            std::time::Instant::now(),
             &where_it_is(),
         )
         .await

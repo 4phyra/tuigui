@@ -358,7 +358,6 @@ impl Gui {
                 // to the program's windows and then to the dock. One read per turn, because a read
                 // can carry half a sequence and the parser is what says when it has a whole one.
                 bytes = stdin.next() => {
-                    log::info!("run: input arrived: {}", bytes.is_some());
                     parser.parse(
                         &bytes
                             .ok_or(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))??,

@@ -9,6 +9,7 @@
 //!   server ──▶ Ping(label)   the link is up: here is who you are talking to
 //!   client ──▶ Pong          I got it, and this session is one I am part of
 //!   server ──▶ Frame         one frame of whatever the peer asked to see
+//!   server ──▶ Pace(micros)  how long this pane's last pictures took to place
 //!   either ──▶ Error         something failed; the peer decides what to do
 //! ```
 //!
@@ -140,6 +141,24 @@ pub enum Message {
     WindowCreated {
         /// The signature the server now knows to blank.
         surface: SurfaceId,
+    },
+    /// How long this pane's pictures take to place, so the client can space the next one.
+    ///
+    /// Measured on the side that places, which is the only side that knows: its own clock,
+    /// not an estimate of the link's. A faster pane reports a shorter time and the client
+    /// speeds up; a slower one reports a longer time and the client waits, so it can never
+    /// be more than one frame ahead of the pane. The client's only use for it is spacing the
+    /// next frame — nothing here is a fact about the picture, and nothing keeps a history of
+    /// it.
+    Pace {
+        /// The cells of the window this pace is about: two windows are two streams, and
+        /// their pictures need not take the same time to place.
+        surface: SurfaceId,
+        /// How long the last pictures on this surface took to place, averaged.
+        ///
+        /// Microseconds, not a `Duration`: on the wire this is one integer, and a `Duration`
+        /// would raise the alignment of the whole archive for a number whose unit is known.
+        micros: u32,
     },
 }
 

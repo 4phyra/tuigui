@@ -65,6 +65,14 @@ fn messages_round_trip() {
                 bg: (2, 2, 2),
             },
         },
+        Message::Pace {
+            surface: SurfaceId {
+                symbol: '▙',
+                fg: (3, 2, 1),
+                bg: (6, 5, 4),
+            },
+            micros: 16_700,
+        },
         Message::Error("the peer refused the frame".into()),
         Message::Error(String::new()),
     ] {

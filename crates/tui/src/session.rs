@@ -19,6 +19,7 @@ use std::sync::Arc;
 use codecs::CodecId;
 use easytgp::{Controller, Format, ImageRequest};
 use futures_retry::FutureRetry;
+use tokio::sync::mpsc;
 use wire::message::{FramePosition, Message, SurfaceId};
 use wire::transport::Connection;
 
@@ -57,7 +58,6 @@ pub fn image_id(surface: &SurfaceId) -> u32 {
 /// no frames. The scan already knows the cells are gone; this is the clock that notices. 16ms is
 /// one video frame's worth of latency, which is as fast as a human switch needs.
 const RECONCILE: std::time::Duration = std::time::Duration::from_millis(16);
-
 /// The frame that is painted when [`DebugOptions::blue_pixel`] is set.
 ///
 /// Small and solid, because its whole purpose is to be unmistakable: anything else
@@ -88,6 +88,29 @@ pub struct Window<F: Format> {
     /// made when the window is opened. A stream that goes bad means the decoder is *replaced*
     /// from [`Window::codec`], not that there is none.
     pub decoder: Box<dyn codecs::Decoder>,
+    /// How fast this pane places this window's pictures, averaged.
+    ///
+    /// An EMA (alpha 1/8) of `place_frame`'s own await, seeded by the first measurement, and
+    /// reported to the client as [`Message::Pace`] so it can space the next picture by it. It
+    /// belongs to the window because it is that window's stream: a big picture costs more to
+    /// place than a small one. `None` until one has been placed.
+    pub pace: Option<std::time::Duration>,
+}
+
+impl<F: Format> Window<F> {
+    /// Fold one placement's cost into the pace, and answer what it is now.
+    ///
+    /// Alpha 1/8: a step in service time is followed in about eight pictures, which is quicker
+    /// than a user notices and slow enough not to chase frame-to-frame noise.
+    #[tracing::instrument(skip_all)]
+    fn observe_pace(&mut self, took: std::time::Duration) -> std::time::Duration {
+        let pace = match self.pace {
+            None => took,
+            Some(pace) => pace.mul_f64(7.0 / 8.0) + took.mul_f64(1.0 / 8.0),
+        };
+        self.pace = Some(pace);
+        pace
+    }
 }
 
 impl<F: Format> Drop for Window<F> {
@@ -156,11 +179,14 @@ impl<F: Format> Session<F> {
     /// left to read.
     #[tracing::instrument(skip_all)]
     pub async fn run(mut self, anchors: Anchors) -> Result<()> {
+        // Read by a task of its own, so each message is stamped when the socket handed it over
+        // rather than when this session got around to it.
+        let mut link = timestamped_connection(self.connection.clone());
         loop {
             tokio::select! {
-                message = self.connection.recv() => {
-                    let Some(message) = message? else { return Ok(()) };
-                    if let Err(e) = self.handle_inner(message, &anchors).await {
+                arrival = link.recv() => {
+                    let Some((arrived, message)) = arrival else { return Ok(()) };
+                    if let Err(e) = self.handle_inner(message, arrived, &anchors).await {
                         log::error!("{e}");
                         // Reported rather than returned: the link is the only channel a client listens on,
                         // and a failure it is not told about is a pane that stops changing for no stated
@@ -233,6 +259,7 @@ impl<F: Format> Session<F> {
     async fn handle_inner(
         &mut self,
         message: Message,
+        arrived: std::time::Instant,
         anchors: &Arc<arc_swap::ArcSwap<HashMap<SurfaceId, Option<Position>>>>,
     ) -> Result<()> {
         match message {
@@ -254,15 +281,28 @@ impl<F: Format> Session<F> {
                     .ok_or(io::Error::other(format!("no anchor for {surface:?}")))?
                 {
                     Some(at) => {
-                        // A fixed cost per frame, standing in for a TUI slower than the
-                        // producer: what the kernel and `FramedRead` hold is then a backlog
-                        // that a consumer keeping up never makes visible.
+                        // Timed from the moment the socket handed this frame over, so the lag
+                        // below — this pane's own cost, standing in for a TUI slower than the
+                        // producer — and the wait in the reader's queue are both inside the
+                        // number: what the client is told is how long a picture took to reach
+                        // the screen, not how long one call took.
                         if let Some(ms) = self.debug.frame_lag_ms {
                             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
                         }
-                        if !self.debug.no_graphics {
-                            self.place_frame(surface, *at, position, bytes.as_deref())
-                                .await?;
+                        self.place_frame(surface, *at, position, bytes.as_deref())
+                            .await?;
+                        // Only a frame that placed a picture has a time to report: a move places
+                        // nothing to encode.
+                        if bytes.is_some() {
+                            if let Some(window) = self.windows.get_mut(&surface) {
+                                let pace = window.observe_pace(arrived.elapsed());
+                                // Clamped to what the field can carry: a pace longer than there
+                                // are microseconds of it is not a number to report.
+                                let micros = pace.as_micros().min(u32::MAX.into()) as u32;
+                                self.connection
+                                    .send(&Message::Pace { surface, micros })
+                                    .await?;
+                            }
                         }
                     }
                     // A window with no cells is not placed. It has scrolled away, or been covered
@@ -297,6 +337,7 @@ impl<F: Format> Session<F> {
                         codec,
                         picture: VideoStream::Nothing,
                         decoder: codec.to_decoder()?,
+                        pace: None,
                     },
                 );
                 // Announced before anything is drawn: the cells carrying this surface are what the
@@ -346,7 +387,9 @@ impl<F: Format> Session<F> {
             // Not handled yet. Nothing here is a failure — the client sends these in the normal
             // course of a session — so they are reported rather than obeyed or turned into an error
             // the client would see as the end.
-            other @ (Message::CompositorRequest(_) | Message::WindowCreated { .. }) => {
+            other @ (Message::CompositorRequest(_)
+            | Message::WindowCreated { .. }
+            | Message::Pace { .. }) => {
                 tracing::warn!("tui: {other:?} is not handled yet");
             }
         }
@@ -443,6 +486,54 @@ impl<F: Format> Session<F> {
             })),
         }
     }
+}
+
+/// The link, read by a task of its own, with every message stamped by the moment the socket
+/// handed it over.
+///
+/// An arrival has to be stamped when it arrives, and a session spends its turns placing and
+/// encoding: reading between those turns would stamp the session's own busy time as the arrival,
+/// and a pane that cannot tell its work from the link's cannot report either.
+///
+/// The link ending is the channel closing, and a failure is the same end with its reason said
+/// here: what the session has to say about the link is either a message or nothing.
+type TimestampedConnection = mpsc::Receiver<(std::time::Instant, Message)>;
+
+/// Read the link in a task of its own.
+///
+/// Parked there, the read is woken by the socket and stamps what it was given. Bounded, so a
+/// client that runs ahead is held in the socket's own queue rather than in this process's
+/// memory. The task ends when the receiver is dropped — the session's own end — because a send
+/// to nobody is the answer that it is over.
+fn timestamped_connection(connection: Connection) -> TimestampedConnection {
+    // Enough for a couple of windows to be two or three pictures ahead, and no more: past that
+    // the socket is the better place for a queue, because it is bounded without us.
+    const HELD: usize = 8;
+
+    let (sender, messages) = mpsc::channel(HELD);
+    tokio::spawn(async move {
+        loop {
+            let message = match connection.recv().await {
+                Ok(Some(message)) => message,
+                // The link ended, and the channel closing is how the session hears it.
+                Ok(None) => break,
+                // Named here rather than carried: the session's end is the same either way, and
+                // an end nobody named is a pane that stops changing for no stated reason.
+                Err(e) => {
+                    tracing::error!("the link failed: {e}");
+                    break;
+                }
+            };
+            if sender
+                .send((std::time::Instant::now(), message))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    messages
 }
 
 #[cfg(test)]

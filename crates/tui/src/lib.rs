@@ -114,13 +114,6 @@ pub struct DebugOptions {
     /// visible over their pictures, and whatever is still wrong is then not the rewrite's doing.
     #[arg(long = "dbg-no-strip-anchors", hide = true)]
     pub no_strip_anchors: bool,
-    /// Send no graphics at all: no transmit, no placement.
-    ///
-    /// Everything else one can switch removes a layer and leaves the picture; this removes the
-    /// picture. What the terminal then shows is only what the stream drew, so a cell that is
-    /// wrong with the flag on is not wrong because of anything this side placed over it.
-    #[arg(long = "dbg-no-graphics", hide = true)]
-    pub no_graphics: bool,
     /// Spend a fixed lag on every frame handled.
     ///
     /// The producer and the consumer run at their own speeds, and a consumer that keeps

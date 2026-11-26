@@ -178,18 +178,24 @@ impl<'a> StatefulWidget for &'a mut Dock {
         // The light, always: on the dock's own top border, because what it says — this pane is
         // waiting, paired, or streaming — is true in every state. Only the word beside it and the
         // colour it breathes in change, so the mark itself never appears or disappears. While
-        // the session streams, the mark also carries the rate the pane is putting on the wire,
-        // windowed to the last second.
+        // the session streams, the mark also carries the rates the pane is putting frames out at,
+        // windowed to the last second: how many, and how many bytes with them.
         let (said, colour, suffix) = match &self.state {
             DockState::Pairing { .. } => ("pairing", (0xFF, 0x69, 0xB4), None),
-            DockState::Streaming => (
-                "streaming",
-                (0xFF, 0x7F, 0x50),
-                Some(format!(
-                    "· {}/s ↑",
-                    humansize::format_size(crate::stats::bytes_per_sec(), humansize::BINARY)
-                )),
-            ),
+            DockState::Streaming => {
+                // One sample for the rate and the bytes. The rate is the pane's own count — the
+                // pictures it says it placed, which is what a user can see — rather than what the
+                // client handed to the link.
+                let (placed, bytes) = crate::stats::per_sec();
+                (
+                    "streaming",
+                    (0xFF, 0x7F, 0x50),
+                    Some(format!(
+                        "· {placed} fps · {}/s ↑",
+                        humansize::format_size(bytes, humansize::BINARY)
+                    )),
+                )
+            }
         };
         light(area, buf, said, colour, suffix.as_deref());
     }

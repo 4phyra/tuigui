@@ -213,8 +213,36 @@ async fn serve_window(
         // What this window's pictures are encoded with, built on the first one that has pixels:
         // an encoder is made for a size, and the size is only known once the window has drawn.
         let mut encoder: Option<Box<dyn codecs::Encoder>> = None;
+        // How long the pane's last pictures took to be placed, as it last said. `None` until the
+        // first word arrives, and a client with no clock sends unpaced — what it did before
+        // there was one.
+        let mut pace: Option<std::time::Duration> = None;
+        // When the next picture may be taken. In the past until the pane says otherwise, which
+        // is what unpaced means. A guard on the capture rather than a sleep: a sleep would hold
+        // the pointer and the program still while it ran.
+        let mut next = tokio::time::Instant::now();
         let served = loop {
             tokio::select! {
+                // The pane's own clock, reported after it placed a picture. Every window of the
+                // session reads the same channel; a pace another window names is not this one's.
+                message = rebroadcaster.recv() => {
+                    // A lag is messages the session shed while this window was busy sending:
+                    // the next `Pace` is a fresh answer, so there is nothing to recover. Any
+                    // other failure is the session's own news being gone, which `?` reports.
+                    let message = match message {
+                        Ok(message) => message,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(e) => return Err(e.into()),
+                    };
+                    if let Message::Pace { surface, micros } = message {
+                        if surface == anchor {
+                            pace = Some(std::time::Duration::from_micros(micros.into()));
+                            // One report per picture the pane placed, which is the count the
+                            // dock compares with the frames sent.
+                            crate::stats::record_placed();
+                        }
+                    }
+                },
                 // The compositor asked for a size. The program decides whether it follows: its
                 // next commit is the answer, and a window that refused still draws at its own.
                 size = recv_set_size.recv_async() => {
@@ -274,12 +302,22 @@ async fn serve_window(
                 // learns it when the child's channel closes — so the news is only that a servant
                 // finished.
                 Some(ended) = futures.join_next() => ended.map_err(join_error)??,
-                // The program committed a picture. `capture` answers when there is one to
-                // encode, so this arm is the frame clock: no tick asks and is told "nothing".
-                captured = window.capture() => {
+                // The program committed a picture, and the pane's clock has come round. The
+                // period is measured from this capture rather than from the send, so the encode
+                // and the send are spent inside it: a picture that arrived early is the one that
+                // waited, and one that took longer than the pace goes as soon as it is ready.
+                // The wait is inside this arm's future rather than a guard on the branch: a
+                // disabled branch is never polled, so nothing would wake the loop when the
+                // cooldown ended. Here the timer is the wake, and the capture is what the loop
+                // waits on once it has been spent — so a pointer still moves during it.
+                captured = async {
+                    tokio::time::sleep_until(next).await;
+                    window.capture().await
+                } => {
+                    let started = tokio::time::Instant::now();
                     let Some(pixels) = captured? else { continue };
-                    let size = window.size_px()?;
-                    let bytes = encode(window.codec(), &mut encoder, &pixels, size)?;
+                    let bytes = encode(&*window, &mut encoder, &pixels)?;
+                    let picture = bytes.is_some();
                     send_frame(
                         &connection,
                         window.surface(),
@@ -288,6 +326,11 @@ async fn serve_window(
                         bytes,
                     )
                     .await?;
+                    if picture {
+                        if let Some(pace) = pace {
+                            next = started + pace;
+                        }
+                    }
                 }
             }
         };
@@ -309,13 +352,14 @@ async fn serve_window(
 ///
 /// `None` is a codec holding the frame back: not a failure, and not pixels either — the picture
 /// the pane already holds stays in the box.
-#[tracing::instrument(skip(encoder, pixels))]
+#[tracing::instrument(skip(window, encoder, pixels))]
 fn encode(
-    codec: codecs::CodecId,
+    window: &dyn Compositable,
     encoder: &mut Option<Box<dyn codecs::Encoder>>,
     pixels: &[u8],
-    size: (u32, u32),
 ) -> Result<Option<Vec<u8>>, Error> {
+    let codec = window.codec();
+    let size = window.size_px()?;
     let encoder = match encoder {
         Some(encoder) => encoder,
         None => encoder.insert(codec.to_encoder(size)?),

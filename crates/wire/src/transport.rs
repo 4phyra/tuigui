@@ -108,6 +108,11 @@ impl Encoder<Message> for MessageCodec {
             .to_bytes()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("a message would not serialize: {e}")))?;
         dst.reserve(4 + body.len());
+        // TODO: make this bulletproof against the body's alignment. Four bytes of length puts the
+        // archive at 4 mod 8 in a buffer whose own alignment is the allocator's, so a message
+        // whose archive wants 8 — anything carrying a `Duration` — is read back at some peers and
+        // not at others, and only at runtime. Either pad the prefix to the archive's alignment
+        // and guarantee it in the buffer, or have the decoder hand rkyv an aligned copy.
         dst.put_u32(body.len() as u32);
         dst.put_slice(&body);
         Ok(())
