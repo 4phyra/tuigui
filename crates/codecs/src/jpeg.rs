@@ -31,7 +31,7 @@ impl Encoder {
     ///
     /// Fails when libjpeg-turbo cannot be reached, which a linked build does
     /// not do.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new() -> Result<Self, Error> {
         let mut inner = turbojpeg::Compressor::new().map_err(Error::boxed)?;
         inner.set_quality(QUALITY).map_err(Error::boxed)?;
@@ -40,7 +40,7 @@ impl Encoder {
 }
 
 impl crate::Encoder for Encoder {
-    #[tracing::instrument(name = "codec.encode", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "codec.encode", skip_all))]
     fn encode(
         &mut self,
         bgra: &[u8],
@@ -86,21 +86,21 @@ impl Decoder {
     ///
     /// Fails when libjpeg-turbo cannot be reached, which a linked build does
     /// not do.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new() -> Result<Self, Error> {
         Ok(Self)
     }
 }
 
 impl Default for Decoder {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn default() -> Self {
         Self::new().expect("a JPEG decoder")
     }
 }
 
 impl crate::Decoder for Decoder {
-    #[tracing::instrument(name = "codec.decode", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "codec.decode", skip_all))]
     fn decode(&mut self, stream: &[u8]) -> Result<Option<Frame>, Error> {
         let image = decompress(stream, PixelFormat::RGB).map_err(|e| Error::Decode {
             len: stream.len(),

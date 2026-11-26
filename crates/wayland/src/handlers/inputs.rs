@@ -41,7 +41,7 @@ impl State {
     /// Called by `step`, so inputs land at a well-defined point in the protocol
     /// stream. The walk is the client tree's own: the root dispatches its window
     /// tree, then every helper it started.
-    #[tracing::instrument(name = "wayland.dispatch_inputs", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.dispatch_inputs", skip_all))]
     pub(crate) fn dispatch_inputs(&mut self) {
         // Cloned out of the field so the borrow of `self` ends before the walk needs it
         // mutably: the record is behind an `Arc`, so this is a share of one count.
@@ -58,7 +58,7 @@ impl State {
     /// control, press `c`, release `c`, release control. The modifiers hold for
     /// the group, which is why they are pressed once around it rather than per
     /// event.
-    #[tracing::instrument(name = "wayland.dispatch_key", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.dispatch_key", skip_all))]
     pub(crate) fn dispatch_key_input(
         &mut self,
         focus: &WlSurface,
@@ -100,7 +100,7 @@ impl State {
     /// Only the focused surface releases, because the pressed keys are the seat's and the
     /// seat has one recipient: every other window in the walk has an empty queue, and
     /// would let go of the key the focused one just pressed.
-    #[tracing::instrument(name = "wayland.release_unrenewed", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.release_unrenewed", skip_all))]
     pub(crate) fn release_unrenewed(&mut self, focus: &WlSurface, queue: &[KeyboardEvent]) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
@@ -124,7 +124,7 @@ impl State {
     }
 
     /// Deliver one pointer event to `focus`.
-    #[tracing::instrument(name = "wayland.dispatch_mouse", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.dispatch_mouse", skip_all))]
     pub(crate) fn dispatch_mouse_input(
         &mut self,
         focus: &WlSurface,
@@ -157,7 +157,7 @@ impl State {
     }
 
     /// Put one keycode on the seat.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn press_keycode(
         &mut self,
         focus: &WlSurface,
@@ -191,7 +191,7 @@ impl State {
         Ok(())
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn move_pointer(&mut self, focus: &WlSurface, x: f64, y: f64) -> Result<(), CompError> {
         let (w, h) = self.server_size;
         let x = x.clamp(0.0, w.max(2) as f64 - 1.0);
@@ -225,7 +225,7 @@ impl State {
     /// single press-and-release request can never describe one -- the button is
     /// up again before the motion arrives, so the client sees a click and then
     /// a plain pointer move.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn press_button(
         &mut self,
         focus: &WlSurface,
@@ -276,7 +276,7 @@ impl State {
         Ok(())
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn scroll_pointer(&mut self, _focus: &WlSurface, delta: ScrollDelta) -> Result<(), CompError> {
         let pointer = self.seat.get_pointer().ok_or(CompError::NotReady)?;
         // A wheel reports lines, a touchpad reports pixels, and the seat takes
@@ -320,7 +320,7 @@ impl State {
     /// The scale that turns output pixels into the surface-local position the
     /// client expects: its own content scale times the output's advertised
     /// scale.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn input_scale(&self, focus: &WlSurface) -> Result<f64, CompError> {
         let client = focus
             .client()
@@ -343,7 +343,7 @@ impl State {
 /// `None` is a real answer: the table has 151 entries whose evdev column is zero,
 /// meaning this platform has no code for that key. Sending a stand-in would type
 /// the wrong thing.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn key_evdev(code: Code) -> Option<u32> {
     use std::str::FromStr as _;
     let mapping = keycode::KeyMappingCode::from_str(&code.to_string()).ok()?;
@@ -352,7 +352,7 @@ fn key_evdev(code: Code) -> Option<u32> {
 }
 
 /// The evdev button code for a pointer button.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn button_evdev(button: PointerButton) -> Option<u32> {
     Some(match button {
         PointerButton::Primary => 0x110,   // BTN_LEFT
@@ -369,7 +369,7 @@ fn button_evdev(button: PointerButton) -> Option<u32> {
 /// A modifier is a key position like any other, so it comes from the same table
 /// rather than from a constant: `ShiftLeft` is the same lookup as `KeyA`, and a
 /// platform whose number differs gets the right one for free.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn modifier_evdev(modifiers: Modifiers) -> Vec<u32> {
     [
         (Modifiers::SHIFT, Code::ShiftLeft),

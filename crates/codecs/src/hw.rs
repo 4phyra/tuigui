@@ -13,7 +13,7 @@ use ffmpeg_next::ffi;
 use ffmpeg_next::frame;
 
 /// A failure from the FFmpeg C API, with what was being attempted.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn failure(what: &str, code: i32) -> io::Error {
     io::Error::other(format!("{what}: {}", ffmpeg_next::Error::from(code)))
 }
@@ -34,7 +34,7 @@ impl Device {
     /// nodes are the real candidates on a headless box. Each is tried by
     /// opening it, so a node that exists but cannot decode still fails the
     /// probe; the node list is a list of guesses, never a decision.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn open(kind: ffi::AVHWDeviceType) -> Result<Self, io::Error> {
         let mut last = match Self::create(kind, None) {
             Ok(device) => return Ok(device),
@@ -52,7 +52,7 @@ impl Device {
     }
 
     /// Create one device, by name or with the driver's own default.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn create(kind: ffi::AVHWDeviceType, device: Option<&str>) -> Result<Self, io::Error> {
         let device = match device {
             Some(device) => Some(
@@ -80,14 +80,14 @@ impl Device {
     }
 
     /// The reference to hand to a codec context.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn reference(&self) -> *mut ffi::AVBufferRef {
         self.0
     }
 }
 
 /// The DRM render nodes this machine exposes, in name order.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn render_nodes() -> Vec<String> {
     let mut nodes: Vec<String> = std::fs::read_dir("/dev/dri")
         .map(|entries| {
@@ -103,7 +103,7 @@ fn render_nodes() -> Vec<String> {
 }
 
 impl Drop for Device {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn drop(&mut self) {
         unsafe { ffi::av_buffer_unref(&mut self.0) }
     }
@@ -122,7 +122,7 @@ impl Frames {
     ///
     /// `pool` is how many surfaces may be alive at once; an encoder keeps a
     /// few references while it works, so the pool is generous.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(
         device: &Device,
         format: ffi::AVPixelFormat,
@@ -153,14 +153,14 @@ impl Frames {
     }
 
     /// The reference to attach to an encoder's context.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn reference(&self) -> *mut ffi::AVBufferRef {
         self.0
     }
 }
 
 impl Drop for Frames {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn drop(&mut self) {
         unsafe { ffi::av_buffer_unref(&mut self.0) }
     }
@@ -171,7 +171,7 @@ impl Drop for Frames {
 unsafe impl Send for Frames {}
 
 /// Upload the system-memory frame `cpu` into a fresh surface of `frames`.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn upload(frames: &Frames, cpu: &frame::Frame) -> Result<frame::Frame, io::Error> {
     let mut surface = unsafe { frame::Frame::empty() };
     unsafe {
@@ -188,7 +188,7 @@ pub fn upload(frames: &Frames, cpu: &frame::Frame) -> Result<frame::Frame, io::E
 }
 
 /// Copy the hardware surface `surface` back to system memory as NV12.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn download(
     surface: &frame::Frame,
     width: u32,
@@ -209,7 +209,7 @@ pub fn download(
 }
 
 /// A fresh system-memory NV12 picture of `width` x `height`.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn nv12(width: u32, height: u32) -> Result<frame::Frame, io::Error> {
     let mut picture = unsafe { frame::Frame::empty() };
     unsafe {
@@ -231,7 +231,7 @@ pub fn nv12(width: u32, height: u32) -> Result<frame::Frame, io::Error> {
 /// `uv` is the interleaved chroma plane at `2 * ceil(width / 2)` bytes per
 /// row, `ceil(height / 2)` rows: the tight NV12 layout, which is what
 /// `yuvutils-rs` hands out and takes back.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn fill_nv12(picture: &mut frame::Frame, y: &[u8], uv: &[u8], width: u32, height: u32) {
     unsafe {
         let raw = picture.as_mut_ptr();
@@ -262,7 +262,7 @@ pub fn fill_nv12(picture: &mut frame::Frame, y: &[u8], uv: &[u8], width: u32, he
 /// conversion library requires chroma rows exactly `2 * ceil(width / 2)`
 /// bytes wide, and a codec's `linesize` is padded to its own alignment.
 /// Returns the planes and the chroma row width.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn nv12_planes(picture: &frame::Frame) -> Result<(Vec<u8>, Vec<u8>, u32), io::Error> {
     unsafe {
         let raw = picture.as_ptr();
@@ -299,7 +299,7 @@ pub fn nv12_planes(picture: &frame::Frame) -> Result<(Vec<u8>, Vec<u8>, u32), io
 }
 
 /// Whether `frame` lives on a hardware surface rather than in system memory.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn is_hardware(frame: &frame::Frame) -> bool {
     unsafe { !(*frame.as_ptr()).hw_frames_ctx.is_null() }
 }
@@ -314,7 +314,7 @@ pub fn is_hardware(frame: &frame::Frame) -> bool {
 /// # Safety
 ///
 /// `context` must be a live, unopened encoder context.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub unsafe fn emit_each_frame(context: *mut ffi::AVCodecContext) -> Result<(), io::Error> {
     unsafe {
         let name = c"async_depth";
@@ -335,7 +335,7 @@ pub unsafe fn emit_each_frame(context: *mut ffi::AVCodecContext) -> Result<(), i
 /// # Safety
 ///
 /// `context` must be a live, unopened codec context.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub unsafe fn set_frames(context: *mut ffi::AVCodecContext, frames: &Frames) {
     unsafe {
         (*context).hw_frames_ctx = ffi::av_buffer_ref(frames.reference());
@@ -347,7 +347,7 @@ pub unsafe fn set_frames(context: *mut ffi::AVCodecContext, frames: &Frames) {
 /// # Safety
 ///
 /// `context` must be a live, unopened codec context.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub unsafe fn set_device(context: *mut ffi::AVCodecContext, device: &Device) {
     unsafe {
         (*context).hw_device_ctx = ffi::av_buffer_ref(device.reference());
@@ -363,7 +363,7 @@ pub unsafe fn set_device(context: *mut ffi::AVCodecContext, device: &Device) {
 /// # Safety
 ///
 /// `context` must be a live, unopened codec context.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub unsafe fn demand(context: *mut ffi::AVCodecContext, format: ffi::AVPixelFormat) {
     unsafe {
         (*context).opaque = format as usize as *mut c_void;
@@ -377,7 +377,7 @@ pub unsafe fn demand(context: *mut ffi::AVCodecContext, format: ffi::AVPixelForm
 ///
 /// Called by libavcodec with a live context whose `opaque` is the demanded
 /// format, and a `AV_PIX_FMT_NONE`-terminated list of formats.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 unsafe extern "C" fn get_format(
     context: *mut ffi::AVCodecContext,
     formats: *const ffi::AVPixelFormat,

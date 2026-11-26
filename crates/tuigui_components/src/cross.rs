@@ -49,19 +49,19 @@ pub struct Cross {
 }
 
 impl Cross {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Whether the cross is being held down right now.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn is_held(&self) -> bool {
         self.held
     }
 
     /// Whether it was pressed since the caller last asked. Answered once.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn was_pressed(&mut self) -> bool {
         std::mem::take(&mut self.pressed)
     }
@@ -70,13 +70,13 @@ impl Cross {
     ///
     /// A click is a press and the release that ends it in the same box: a press dragged off and
     /// let go elsewhere is a press the user changed their mind about. Answered once.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn was_released(&mut self) -> bool {
         std::mem::take(&mut self.released)
     }
 
     /// Take this frame's input for a cross drawn in `area`.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn handle_events(&mut self, area: Rect, events: &mut Vec<Event>) {
         // A frame with no pointer event leaves the last answer alone: the pointer did not move, it
         // did not leave.
@@ -99,7 +99,7 @@ impl Cross {
 }
 
 impl Widget for &Cross {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Held is the strongest state and wins over hover: a red block with the cross cut out of
         // it in black. The cells either side of the glyph are the same block, so the target reads

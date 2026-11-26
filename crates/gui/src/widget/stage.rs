@@ -87,7 +87,7 @@ impl Page {
     ///
     /// `Init` is the logs screen: it is the terminal's own, and it is where the client has been
     /// printing all along.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn tab(&self) -> usize {
         match self {
             Page::Stream { .. } => 1,
@@ -117,7 +117,7 @@ pub struct StageResult(pub Result<Stage, String>);
 impl<'a> StatefulWidget for &'a mut StageResult {
     type State = StageProps<'a>;
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn render(self, area: Rect, buf: &mut Buffer, props: &mut Self::State) {
         match &mut self.0 {
             Ok(stage) => {
@@ -153,7 +153,7 @@ impl Stage {
     ///
     /// Input first, then the draw. In that order because the input is what a window's program acts
     /// on, and the draw is what the pane shows of how it answered.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn render_inner(
         &mut self,
         area: Rect,
@@ -209,7 +209,7 @@ impl Stage {
 
 impl Stage {
     /// A stage with nothing running yet: the dock is the whole of the screen.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new() -> Self {
         Self {
             page: Page::default(),
@@ -221,7 +221,7 @@ impl Stage {
     /// The compositor is built here rather than passed about, because a window is the one thing a
     /// compositor is made over and the run path is what hands it over. The program's words come with
     /// it: they belong to the screen the window is on.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn from_any_to_windows(
         &mut self,
         root: CompositableWindow,
@@ -235,7 +235,7 @@ impl Stage {
     }
 
     /// Back to the logs screen. The program keeps running — only the screen changes.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn from_streaming_to_logs(&mut self) {
         let Page::Stream { compositor, stdout } = std::mem::replace(&mut self.page, Page::Init)
         else {
@@ -246,7 +246,7 @@ impl Stage {
     }
 
     /// Back to the program's window, after a look at the logs.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn from_logs_to_streaming(&mut self) {
         let Page::Logs { compositor, stdout } = std::mem::replace(&mut self.page, Page::Init)
         else {
@@ -256,7 +256,7 @@ impl Stage {
     }
 
     /// Over, from wherever the session was, one frame short of the crossing.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn from_any_to_exiting(&mut self) {
         let (Page::Stream { stdout, .. } | Page::Logs { stdout, .. }) =
             std::mem::replace(&mut self.page, Page::Init)
@@ -275,7 +275,7 @@ impl Stage {
     /// Only the screen with the window on it takes the event: on the logs screen the window is not
     /// on the screen at all, so a key typed there is the furniture's — the strip's shortcut included
     /// — and forwarding it would let the program act on a press the strip already claimed.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn handle_event(&mut self, event: &termina::Event, winsize: rustix::termios::Winsize) -> bool {
         let Page::Stream { compositor, .. } = &mut self.page else {
             return false;
@@ -290,7 +290,7 @@ impl Stage {
     ///
     /// The borrow ends here rather than at the wait, which is why the two are separate: the task a
     /// wait answers borrows the stack it changes, and the stack can only lend it once.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn apply(&mut self, task: compositor::Task, winsize: rustix::termios::Winsize) {
         let compositor = match &mut self.page {
             Page::Stream { compositor, .. } | Page::Logs { compositor, .. } => compositor,
@@ -300,7 +300,7 @@ impl Stage {
     }
 
     /// Do the work a window change wants, and tell the pane's program what size its box is.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn step(&mut self, winsize: rustix::termios::Winsize) {
         let compositor = match &mut self.page {
             Page::Stream { compositor, .. } | Page::Logs { compositor, .. } => compositor,
@@ -311,20 +311,20 @@ impl Stage {
         }
     }
     /// The page that is up.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn get_page(&self) -> &Page {
         &self.page
     }
 
     /// Whether the screen on show is the alternate one.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn is_alternate(&self) -> bool {
         matches!(self.page, Page::Stream { .. })
     }
 
     /// Whether the session is over: the user asked to leave and the frame that carries the screen
     /// across has been drawn.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn finished(&self) -> bool {
         matches!(self.page, Page::Exiting { ready: true, .. })
     }
@@ -335,7 +335,7 @@ impl Stage {
 /// The words arrive on a thread of their own: the ring is handed out as its reading end, and the
 /// thread that fills it is detached because it lives exactly as long as the pipe does — the program
 /// exiting closes it, and the read that was parked returns end-of-file.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn ring(stdout: std::io::PipeReader) -> ringbuf::HeapCons<u8> {
     let (mut producer, consumer) = ringbuf::HeapRb::<u8>::new(RING_BUF_CAPACITY).split();
     std::thread::spawn(move || {

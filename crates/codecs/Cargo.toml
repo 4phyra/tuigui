@@ -33,3 +33,8 @@ yuvutils-rs = "0.8"
 # goes; a span with no subscriber is a no-op, so the instrumented code is the
 # same code either way.
 tracing = { workspace = true }
+
+[features]
+# Nothing of its own: the switch exists so `#[cfg_attr(feature = "tracy", ..)]` on this
+# crate's instrumentation has something to test, and the profiled build turns it on.
+tracy = []

@@ -74,7 +74,7 @@ impl UnixSocket {
     ///
     /// Binding is part of making one: an address nothing listens at is not an address a peer can
     /// dial, and every use of this is followed by `bind` or was a caller that forgot to.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn at(path: impl Into<PathBuf>) -> io::Result<Self> {
         let socket = Self {
             path: path.into(),
@@ -89,7 +89,7 @@ impl UnixSocket {
     ///
     /// Only for the paths `Transport::new` walks when it finds the standard address taken: it has
     /// to try a bind and see, so it cannot use [`UnixSocket::at`].
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn unbound(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
@@ -107,7 +107,7 @@ impl UnixSocket {
     /// The names after it are for a process that already has a live socket at the standard one —
     /// a second session, or a test runner running tests side by side. Each is announced, so a peer
     /// still dials the address it was given.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn socket_paths() -> impl Iterator<Item = PathBuf> {
         (0..16).map(|n| {
             let name = if n == 0 {
@@ -125,7 +125,7 @@ impl UnixSocket {
     }
 
     /// The path this socket is at.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
@@ -137,7 +137,7 @@ impl UnixSocket {
     /// dials the address of a socket nobody has bound dials nothing.
     ///
     /// A second call is not a rebind, which is what lets a caller be careless about it.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn bind(&self) -> io::Result<()> {
         let mut listener = self.listener.lock().await;
         if listener.is_none() {
@@ -179,7 +179,7 @@ impl UnixSocket {
     /// Adopt a stream as this socket's link.
     ///
     /// Shared by dialing and accepting, which differ only in where the stream came from.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     async fn adopt(&self, stream: tokio::net::UnixStream) {
         let (read, write) = tokio::io::split(stream);
         self.link.store(Some(Arc::new(Link {
@@ -191,7 +191,7 @@ impl UnixSocket {
 
 #[async_trait::async_trait]
 impl Transport for UnixSocket {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn name(&self) -> &'static str {
         NAME
     }
@@ -202,7 +202,7 @@ impl Transport for UnixSocket {
     /// socket announces a path nothing answers at. The standard path is tried first, that being
     /// the address two halves of a session find each other by; a process that already has a live
     /// socket there takes the next free name instead, and announces it.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     async fn new() -> io::Result<Self> {
         let mut taken = None;
         for path in Self::socket_paths() {
@@ -218,13 +218,13 @@ impl Transport for UnixSocket {
         Err(taken.expect("a path was offered"))
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn address(&self) -> String {
         self.path.to_string_lossy().into_owned()
     }
 
     /// A dialer: the socket at the announced path, with nothing listening here.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn from_magic(name: &str, address: &str) -> Option<Self> {
         (name == NAME).then(|| Self::unbound(address))
     }
@@ -234,7 +234,7 @@ impl Transport for UnixSocket {
     /// The greeting is here and not in the caller because the two halves of the handshake
     /// only make sense together: the side that dialed is the side that knows the link is new,
     /// so it greets, and a caller that forgot to would leave the other end waiting forever.
-    #[tracing::instrument(name = "msg.connect", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "msg.connect", skip_all))]
     async fn connect(&self) -> io::Result<Connection> {
         let stream = tokio::net::UnixStream::connect(&self.path).await?;
         self.adopt(stream).await;
@@ -254,7 +254,7 @@ impl Transport for UnixSocket {
     /// The mirror of [`Transport::connect`]. The order is fixed here rather than left to a
     /// caller: answering before the greeting arrives would be answering nothing, and reading
     /// after it would be reading a greeting already consumed.
-    #[tracing::instrument(name = "msg.accept", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "msg.accept", skip_all))]
     async fn accept(&self) -> io::Result<Connection> {
         let listener = {
             let guard = self.listener.lock().await;
@@ -280,7 +280,7 @@ impl Transport for UnixSocket {
         }
     }
 
-    #[tracing::instrument(name = "msg.send", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "msg.send", skip_all))]
     async fn send(&self, message: &Message) -> io::Result<()> {
         let link = self
             .link
@@ -300,7 +300,7 @@ impl Transport for UnixSocket {
     /// The read's own lock is held across the await, which is what keeps two readers from
     /// interleaving on one stream. It is not the write's lock: a session reads and writes at the
     /// same time, and one lock for both is a link that deadlocks itself.
-    #[tracing::instrument(name = "msg.recv", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "msg.recv", skip_all))]
     async fn recv(&self) -> io::Result<Option<Message>> {
         let link = self
             .link
@@ -321,7 +321,7 @@ impl UnixSocket {
     /// The path, because that is what the other end would need to say which socket this is.
     /// The label is logs and nothing else: the name and address are what identify a
     /// transport.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn label(&self) -> String {
         self.path.to_string_lossy().into_owned()
     }

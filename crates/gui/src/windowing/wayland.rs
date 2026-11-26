@@ -72,7 +72,7 @@ impl WaylandWindow {
     ///
     /// `None` for a window the session has already let go, which is not a failure: the caller
     /// asked about a handle it was given and the answer is that there is nothing behind it.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn new(inner: Weak<wayland::Window>) -> Option<Self> {
         let window = inner.upgrade()?;
         // Subscribed here, not at the first read: a subscription starts at the moment it is made,
@@ -93,7 +93,7 @@ impl Drop for WaylandWindow {
     ///
     /// The picture is named by a surface id that travels with every frame, and the far side frees
     /// it when the frames stop; a window that is over is one whose `Weak` no longer upgrades.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn drop(&mut self) {}
 }
 
@@ -103,7 +103,7 @@ impl WaylandServer {
     /// The wait for the window the program draws is the caller's, taken from the session's own
     /// channel by [`Self::take_root`]: only a turn notices a client has committed, so the news can
     /// only come from the session, and the wait can only live where it is awaited.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(options: wayland::Options) -> std::io::Result<Self> {
         let inner = Native::new(options).map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(Self {
@@ -116,7 +116,7 @@ impl WaylandServer {
     ///
     /// Owned rather than borrowed, because the caller has to keep turning the session while it
     /// waits: a future holding the session would make the very turn that answers it impossible.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn take_root(
         &mut self,
     ) -> std::io::Result<impl std::future::Future<Output = std::io::Result<Box<dyn Compositable>>>>
@@ -137,7 +137,7 @@ impl WaylandServer {
 }
 
 impl WindowingServer for WaylandServer {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn spawn(&mut self, path: &std::path::Path) -> std::io::Result<Option<std::io::PipeReader>> {
         // The program's own words, kept until someone takes them: what a program says belongs to
         // whoever shows it, and this side only started it. Both of its streams arrive here, in
@@ -146,17 +146,17 @@ impl WindowingServer for WaylandServer {
         Ok(None)
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn take_stdout(&mut self) -> Option<std::io::PipeReader> {
         self.stdout.take()
     }
 
-    #[tracing::instrument(name = "compositor.advance", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "compositor.advance", skip_all))]
     fn advance(&mut self, timeout: std::time::Duration) {
         self.inner.step(timeout);
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn is_running(&self) -> bool {
         self.inner.is_running()
     }
@@ -167,7 +167,7 @@ impl WindowingServer for WaylandServer {
 // describes a different signature than the one the vtable points at.
 #[async_trait::async_trait]
 impl Compositable for WaylandWindow {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn key_input(&self, event: termina::event::KeyEvent) -> std::io::Result<()> {
         let window = self
             .inner
@@ -177,7 +177,7 @@ impl Compositable for WaylandWindow {
         Ok(())
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn pointer_input(&self, event: termina::event::MouseEvent) -> std::io::Result<()> {
         let window = self
             .inner
@@ -199,7 +199,7 @@ impl Compositable for WaylandWindow {
     /// It waits for the client's next commit when nothing has been drawn since the last take,
     /// which is what makes this the frame clock: the caller's `select!` wakes when a picture
     /// exists, not on a tick. `None` is a window the session has let go.
-    #[tracing::instrument(name = "window.capture", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "window.capture", skip_all))]
     async fn capture(&self) -> std::io::Result<Option<Vec<u8>>> {
         let window = self.inner.upgrade().ok_or(Error::Gone)?;
         Ok(window.capture().await.map(|(pixels, _size)| pixels))
@@ -207,7 +207,7 @@ impl Compositable for WaylandWindow {
 
     /// How big this window is, in pixels: what its program last committed, or the size it was
     /// adopted at before it drew.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn size_px(&self) -> std::io::Result<(u32, u32)> {
         Ok(self
             .inner
@@ -221,7 +221,7 @@ impl Compositable for WaylandWindow {
     /// Asked unconditionally: whether this is a size the window was already asked for is the
     /// caller's record, not this one's — the window knows what its program last committed at,
     /// which is the answer to the ask rather than the ask itself.
-    #[tracing::instrument(name = "window.set_size", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "window.set_size", skip_all))]
     fn set_size(&self, size: (u32, u32)) -> std::io::Result<()> {
         self.inner
             .upgrade()
@@ -231,7 +231,7 @@ impl Compositable for WaylandWindow {
     }
 
     /// Whether this window is a popup, which its own program sized.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn is_popup(&self) -> bool {
         self.inner
             .upgrade()
@@ -239,7 +239,7 @@ impl Compositable for WaylandWindow {
     }
 
     /// The next window this one's program opens, or `None` once that program is over.
-    #[tracing::instrument(name = "window.children", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "window.children", skip_all))]
     async fn recv_new_child(&self) -> Option<Box<dyn Compositable>> {
         // A channel that closed is the session letting go of the window it belongs to, which is
         // its program being over: there is nothing more to open, and nothing wrong to report.
@@ -249,7 +249,7 @@ impl Compositable for WaylandWindow {
     }
 
     /// The next menu this one's program places inside it, or `None` once it is over.
-    #[tracing::instrument(name = "window.popups", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "window.popups", skip_all))]
     async fn recv_new_popup(&self) -> Option<Box<dyn Compositable>> {
         let window = self.new_popups.lock().await.recv().await.ok()?;
         WaylandWindow::new(window)
@@ -260,7 +260,7 @@ impl Compositable for WaylandWindow {
     ///
     /// In the parent's pixels, because that is what the client's own surface is measured in. The
     /// conversion into the pane's cells is the trait's, so it happens once for every backend.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn offset_px(&self) -> std::io::Result<Option<(i32, i32)>> {
         Ok(*self
             .inner
@@ -271,7 +271,7 @@ impl Compositable for WaylandWindow {
 
     /// What the program calls its window: the title it set, or its app id when it set no title, or
     /// nothing when it set neither.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn title(&self) -> std::io::Result<String> {
         Ok(self
             .inner
@@ -283,7 +283,7 @@ impl Compositable for WaylandWindow {
 
     /// Ask the program to close the window. It is a request: the client is told and decides, which
     /// is why the window may still be there afterwards.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn terminate(&self) -> std::io::Result<()> {
         self.inner
             .upgrade()

@@ -50,14 +50,14 @@ pub(crate) static STATS: RwLock<Stats> = RwLock::new(Stats {
 });
 
 /// Count one frame of `bytes` as uploaded. Called after the send succeeded.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub(crate) fn record(bytes: u64) {
     STATS.write().unwrap_or_else(|e| e.into_inner()).bytes += bytes;
 }
 
 /// Count one picture as placed. Called for every `Pace` the pane sends, which is one per picture
 /// it put on the screen.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub(crate) fn record_placed() {
     let mut stats = STATS.write().unwrap_or_else(|e| e.into_inner());
     stats.placed += 1;
@@ -66,14 +66,14 @@ pub(crate) fn record_placed() {
 /// Every byte the send path has put on the wire since the process started, for the test that
 /// measures one session.
 #[cfg(all(test, feature = "test-windowing"))]
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub(crate) fn uploaded() -> u64 {
     STATS.read().unwrap_or_else(|e| e.into_inner()).bytes
 }
 
 /// Zero the counters, for a test that measures one session rather than a process.
 #[cfg(all(test, feature = "test-windowing"))]
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub(crate) fn reset() {
     let mut stats = STATS.write().unwrap_or_else(|e| e.into_inner());
     stats.bytes = 0;
@@ -85,7 +85,7 @@ pub(crate) fn reset() {
 ///
 /// Both from one sample: two calls would be two chances to fall either side of a window
 /// boundary, and they are drawn as one fact.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub(crate) fn per_sec() -> (u64, u64) {
     let mut stats = STATS.write().unwrap_or_else(|e| e.into_inner());
     stats.per_sec_at(Instant::now());
@@ -95,7 +95,7 @@ pub(crate) fn per_sec() -> (u64, u64) {
 impl Stats {
     /// Bytes per second over the window ending at `now`, recomputed only once a full window has
     /// passed — and the frames that window held with it.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn per_sec_at(&mut self, now: Instant) -> f64 {
         let Some(start) = self.start else {
             self.start = Some(now);

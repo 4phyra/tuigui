@@ -7,3 +7,8 @@ description = "Carry an ascii string in terminal cells: symbol, foreground and b
 
 [dependencies]
 tracing = { workspace = true }
+
+[features]
+# Nothing of its own: the switch exists so `#[cfg_attr(feature = "tracy", ..)]` on this
+# crate's instrumentation has something to test, and the profiled build turns it on.
+tracy = []

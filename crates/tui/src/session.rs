@@ -39,7 +39,7 @@ pub(crate) use crate::video_stream::stacking;
 /// rather than allocated so both ends agree without a negotiation, and so it is
 /// stable across frames — a replacement under the same id is what makes a frame an
 /// update rather than a new image.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn image_id(surface: &SurfaceId) -> u32 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -102,7 +102,7 @@ impl<F: Format> Window<F> {
     ///
     /// Alpha 1/8: a step in service time is followed in about eight pictures, which is quicker
     /// than a user notices and slow enough not to chase frame-to-frame noise.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn observe_pace(&mut self, took: std::time::Duration) -> std::time::Duration {
         let pace = match self.pace {
             None => took,
@@ -120,7 +120,7 @@ impl<F: Format> Drop for Window<F> {
     /// screen: the last frame stays where it was for as long as the terminal keeps it. Saying so
     /// is the only thing that removes it, and this is the one place that always runs — a window
     /// closed, a session that ends, a link that dies.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn drop(&mut self) {
         if let VideoStream::Shown(image, _) =
             std::mem::replace(&mut self.picture, VideoStream::Nothing)
@@ -156,7 +156,7 @@ pub struct Session<F: Format> {
 }
 
 impl<F: Format> Session<F> {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(
         connection: Connection,
         debug: std::sync::Arc<DebugOptions>,
@@ -177,7 +177,7 @@ impl<F: Format> Session<F> {
     /// a session back. A `FuturesUnordered` makes sure a chatty client cannot starve a quiet one,
     /// and `?` on the read is the end of the session either way — a link that failed has nothing
     /// left to read.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn run(mut self, anchors: Anchors) -> Result<()> {
         // Read by a task of its own, so each message is stamped when the socket handed it over
         // rather than when this session got around to it.
@@ -236,7 +236,7 @@ impl<F: Format> Session<F> {
     /// drawing sends none, and waiting for one would leave the returning pane blank forever.
     ///
     /// Both questions are the same lookup, so they are answered in one pass.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     async fn reconcile(&mut self, anchors: &Anchors) {
         let snapshot = anchors.load();
         for (surface, window) in &mut self.windows {
@@ -255,7 +255,7 @@ impl<F: Format> Session<F> {
     }
 
     /// One message, and what it means.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     async fn handle_inner(
         &mut self,
         message: Message,
@@ -409,7 +409,7 @@ impl<F: Format> Session<F> {
     /// boundary the pane's is. The awaits are inside it, which is why this is
     /// `#[instrument]` rather than a held guard: `Span::enter`'s guard must not
     /// outlive an `.await`, and the attribute enters and exits per poll instead.
-    #[tracing::instrument(name = "frame", skip_all, fields(surface = ?surface))]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "frame", skip_all, fields(surface = ?surface)))]
     async fn place_frame(
         &mut self,
         surface: SurfaceId,
@@ -444,7 +444,7 @@ impl<F: Format> Session<F> {
     /// held back, or one it failed on. A failed codec is replaced from its own id, so the next
     /// frame starts from a clean state; the stored picture is left alone, because a window
     /// whose program stopped drawing keeps whatever it last showed.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn decode(
         debug: &DebugOptions,
         controller: &Controller,

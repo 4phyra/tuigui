@@ -32,7 +32,7 @@ use crate::utils::{peer_pid, proc_parent};
 /// The per-connection compositor state, resolved whichever kind of client the
 /// connection belongs to. XWayland's client carries `XWaylandClientData`
 /// instead, which smithay owns.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub(crate) fn compositor_client_state(
     client: &smithay::reexports::wayland_server::Client,
 ) -> Option<&CompositorClientState> {
@@ -54,7 +54,7 @@ impl State {
     /// the trust chain — and is attached to that parent's sub-clients. A
     /// connection whose parent is unknown is warned about and dropped: there is
     /// nothing to attach it to.
-    #[tracing::instrument(name = "wayland.accept_client", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.accept_client", skip_all))]
     pub(crate) fn accept_client(&mut self, stream: UnixStream) -> Result<(), CompError> {
         let root = self
             .root_client

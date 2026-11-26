@@ -27,7 +27,7 @@ impl Filter {
     /// The size is read here rather than passed, because it is the terminal's own answer and not
     /// something a caller decides: a rewrite measured against a made-up grid would blank cells the
     /// screen does not have. A terminal that will not report one is a failure, not a guess.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new() -> std::io::Result<Self> {
         let ws = shared_utils::resize::size()?;
         Ok(Self {
@@ -46,7 +46,7 @@ impl Filter {
     ///
     /// A chunk is already in memory, so it is its own reader: `&[u8]` is an `AsyncRead` that is
     /// always ready.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn feed(
         &mut self,
         chunk: impl tokio::io::AsyncRead + Unpin,
@@ -75,7 +75,7 @@ impl Filter {
     }
 
     /// Follow this terminal's own grid when it changes.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn resize(&mut self, rows: std::num::NonZeroU16, cols: std::num::NonZeroU16) {
         self.terminal.set_size(rows, cols);
     }

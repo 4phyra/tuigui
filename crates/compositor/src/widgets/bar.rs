@@ -27,7 +27,7 @@ pub struct Bar {
 
 impl Bar {
     /// Take the window's name for the frame about to be drawn.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn set_title(&mut self, title: String) {
         self.title = title;
     }
@@ -36,13 +36,13 @@ impl Bar {
     ///
     /// One cell in from the right edge, and as wide as a cross is: the glyph alone is
     /// a target a pointer has to hit exactly.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn close_area(area: Rect) -> Option<Rect> {
         (area.width > cross::WIDTH + 2)
             .then(|| Rect::new(area.right() - 1 - cross::WIDTH, area.y, cross::WIDTH, 1))
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn handle_mouse(
         &mut self,
         window: &CompositableWindow,
@@ -94,7 +94,7 @@ impl Bar {
 }
 
 impl Widget for &Bar {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Grey on a darker grey: the bar is chrome, and its own colour is what tells it apart
         // from the picture behind it. Named explicitly rather than left alone — a style that omits

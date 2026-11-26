@@ -110,7 +110,7 @@ impl Error {
     /// without a quote is worse than one with it, and much better than a failure to report at
     /// all.
     #[track_caller]
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn at(source: impl Into<InternalError>) -> Self {
         let location = std::panic::Location::caller();
         let Ok(text) = std::fs::read_to_string(location.file()) else {
@@ -170,7 +170,7 @@ impl From<InternalError> for Error {
     /// `#[track_caller]` like the rest, so `?` on an `InternalError` records the line that did
     /// the converting rather than this impl's.
     #[track_caller]
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn from(inner: InternalError) -> Self {
         Self::at(inner)
     }

@@ -66,13 +66,13 @@ mod id {
     };
 
     /// Allocate the next unique image/placement id.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub(crate) fn alloc() -> Id {
         I.write().next()
     }
 
     /// Reclaim an id for reuse.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub(crate) fn free(id: Id) {
         I.write().free(id);
     }
@@ -104,7 +104,7 @@ mod writer {
     /// Call it **once per process**: the destination is global because a command can be built and
     /// sent without reaching the controller that made it, so there is one writer and one place to
     /// configure it. Moving it mid-stream would split one image's escapes across two destinations.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn set_sink(out: Box<dyn Write + Send>) -> bool {
         OUT.set(Mutex::new(out)).is_ok()
     }
@@ -117,7 +117,7 @@ mod writer {
     /// be sitting in the queue while the wait begins, so nothing has been asked and the only
     /// possible outcome is a timeout. Writing here means the escape is on the wire before the
     /// future that awaits its acknowledgement exists.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub(crate) fn send(bytes: Vec<u8>) {
         IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
         match OUT.get() {
@@ -138,7 +138,7 @@ mod writer {
 
 /// Number of escape sequences produced but not yet flushed to the pty.
 /// Rising values mean the terminal is decoding slower than we produce.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn writer_in_flight() -> u64 {
     writer::IN_FLIGHT.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -148,7 +148,7 @@ pub fn writer_in_flight() -> u64 {
 /// Call it **once per process**: the destination is global because a command can be built and
 /// sent without reaching the controller that made it, so there is one writer and one place to
 /// configure it. `false` means it was already set, which is what a second call gets.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn set_sink(out: Box<dyn std::io::Write + Send>) -> bool {
     writer::set_sink(out)
 }
@@ -178,7 +178,7 @@ struct ReplyRouter {
 }
 
 impl ReplyRouter {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn start(stdin: impl std::io::Read + Send + 'static) -> JoinHandle<()> {
         Self::start_forwarding(stdin, std::io::sink())
     }
@@ -192,7 +192,7 @@ impl ReplyRouter {
     /// and passing on everything else is what splits one stream into the two
     /// things it actually carries, and `io::sink()` is what makes the ordinary
     /// path the same code with nowhere to put the extra bytes.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn start_forwarding(
         stdin: impl std::io::Read + Send + 'static,
         mut forward: impl std::io::Write + Send + 'static,
@@ -238,7 +238,7 @@ pub struct Reply {
 }
 
 impl From<Reply> for Result<Reply, TGPError> {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn from(mut value: Reply) -> Self {
         let Some(payload) = value.message.as_mut().and_then(|msg| msg.payload.take()) else {
             return Ok(value);
@@ -262,7 +262,7 @@ impl From<Reply> for Result<Reply, TGPError> {
 /// profiler and in a log, which matters because the alternative is an image
 /// whose cells silently draw nothing. Never to stderr: this runs inside a pane
 /// the session is drawing, so a line there is a line over the picture.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn log_reply_error(message: &str) {
     tracing::warn!("easytgp: {message}");
 }
@@ -273,7 +273,7 @@ pub struct PendingTransfer<F: Format> {
 }
 
 impl<F: Format> PendingTransfer<F> {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn new<C: FnOnce(Reply) -> DynImage<F> + Send + 'static>(reply: ReplyFuture, returns: C) -> Self {
         Self {
             reply,
@@ -298,7 +298,7 @@ enum ActionIdent {
 }
 
 impl ReplyFuture {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn new(ident: ActionIdent, diagnostic: Diagnostic) -> Self {
         // TODO: fix this nonesense
         let marker = id::alloc() + 99999;
@@ -333,7 +333,7 @@ impl ReplyFuture {
 impl<F: Unpin + Format> Future for PendingTransfer<F> {
     type Output = Res<DynImage<F>>;
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn poll(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -350,7 +350,7 @@ impl<F: Unpin + Format> Future for PendingTransfer<F> {
 impl Future for ReplyFuture {
     type Output = Reply;
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn poll(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -387,7 +387,7 @@ impl Future for ReplyFuture {
 /// modes to set — which is why nothing here is `unwrap`ped or returned. The version
 /// of this that lived in a global initializer aborted the process on exactly those
 /// cases.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn take_terminal_raw() {
     let stdin = std::io::stdin();
     let Ok(mut modes) = rustix::termios::tcgetattr(&stdin) else {
@@ -413,7 +413,7 @@ impl Controller {
     /// The path for a caller that owns the terminal outright: the renderer is the
     /// only writer, so there is nothing to share and nothing to strip out of the
     /// input.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn init(stdin: impl std::io::Read + Send + 'static) -> Arc<Controller> {
         Self::start(stdin, std::io::sink())
     }
@@ -427,7 +427,7 @@ impl Controller {
     ///
     /// So the ordinary path is this path with `io::sink()` for `forward`, which is
     /// what [`Controller::init`] is.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn init_with_forwarding(
         stdin: impl std::io::Read + Send + 'static,
         forward: impl std::io::Write + Send + 'static,
@@ -448,7 +448,7 @@ impl Controller {
     /// Escapes go to this process's stdout, written and flushed on the calling thread. No sink, no
     /// pipe, no queue: a transfer that is awaited has to be on the wire before the wait starts, or
     /// the terminal is never asked and the wait can only time out.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn init_with_pipe(
         stdin: impl std::io::Read + Send + 'static,
     ) -> std::io::Result<(Arc<Controller>, std::io::PipeReader)> {
@@ -457,7 +457,7 @@ impl Controller {
         Ok((controller, input))
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn start(
         stdin: impl std::io::Read + Send + 'static,
         forward: impl std::io::Write + Send + 'static,
@@ -476,7 +476,7 @@ impl Controller {
     }
 
     /// Takes image::RgbaImage or image::RgbImage
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new_png(
         &self,
         image: image::ImageBuffer<impl AnyFormat, Vec<u8>>,
@@ -487,18 +487,18 @@ impl Controller {
         Ok(self.new_from_raw(Png, bytes, None))
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new_rgb(&self, image: image::RgbImage, size: ImageSize) -> ImageRequest<Rgb> {
         self.new_from_raw(Rgb, image.into_vec(), Some(size))
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new_rgba(&self, image: image::RgbaImage, size: ImageSize) -> ImageRequest<Rgba> {
         self.new_from_raw(Rgba, image.into_vec(), Some(size))
     }
 
     /// Create an image request from raw parts.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new_from_raw<F: Format>(
         &self,
         format: F,
@@ -524,7 +524,7 @@ impl Controller {
     /// network the object is on the wrong side of the connection. The terminal
     /// is expected to unlink the object once it has read it; the frame is held
     /// by the request until then.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new_shm_rgb(&self, image: image::RgbImage) -> Res<ImageRequest<Shm>> {
         let size = ImageSize {
             width: image.width(),
@@ -544,7 +544,7 @@ impl Controller {
 
     // TODO: route errors here.
     // The only way for the user to run action directly is through this
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn raw_action(&self) -> Message {
         Message::new()
     }
@@ -552,12 +552,12 @@ impl Controller {
 
 impl PlacementHandle {
     /// Deletes the existing placement and returns a new one instead.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn replace(self, _request: PlacementRequest) -> Self {
         todo!()
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn delete(self) {
         todo!()
     }
@@ -597,7 +597,7 @@ pub type Res<R> = Result<R, TGPError>;
 pub struct Diagnostic(Message, Option<usize>);
 
 impl Diagnostic {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn of(command: &Message) -> Self {
         Self(
             Message {
@@ -610,7 +610,7 @@ impl Diagnostic {
 }
 
 impl Display for Diagnostic {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.1 {
             Some(len) => write!(f, "{} with {len} bytes of payload", self.0),
@@ -666,12 +666,12 @@ enum DynId {
 }
 
 impl DynId {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(id: Id) -> Self {
         Self::Assigned(Arc::new(id))
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn assigned(&self) -> Id {
         match self {
             DynId::Assigned(rw_lock) => **rw_lock,
@@ -707,7 +707,7 @@ pub struct ImageSize {
 /// a zero-sized frame outright. An explicit request wins; otherwise the image
 /// knows its own size, and falling back to it is what makes a caller that passes
 /// `..Default::default()` work.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn resolve_dims(
     requested: Option<u32>,
     requested_other: Option<u32>,
@@ -775,7 +775,7 @@ pub trait Format: Copy + Clone + Default + Unpin + Send + 'static {
     /// Direct sends the pixel data inline in the escape. Shared memory (`s`)
     /// sends only an object *name*, and the terminal maps the pixels out of it.
     /// A parser that does not recognize a value treats it as direct.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn medium(self) -> &'static str {
         "d"
     }
@@ -784,7 +784,7 @@ pub trait Format: Copy + Clone + Default + Unpin + Send + 'static {
     ///
     /// Chunking only makes sense for inline payloads; a local medium is a single
     /// command naming an object, so it must never be split across `m=1` chunks.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn is_inline(self) -> bool {
         true
     }
@@ -797,7 +797,7 @@ pub trait Format: Copy + Clone + Default + Unpin + Send + 'static {
     /// header, so declaring one is pointless there — and actively harmful: the
     /// declared size is still checked against the image, so a stale value would
     /// be rejected where omitting it was fine.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn needs_dimensions(self) -> bool {
         true
     }
@@ -806,17 +806,17 @@ pub trait Format: Copy + Clone + Default + Unpin + Send + 'static {
 #[derive(Clone, Copy, Default)]
 pub struct Png;
 impl Format for Png {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn to_cd(self) -> ControlData {
         ControlData('f', 100.to_string())
     }
     /// A PNG describes its own dimensions, so none are declared.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn needs_dimensions(self) -> bool {
         false
     }
     /// Encoded here, then carried inline: the pixels are in the escape itself.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn request(controller: &Controller, pixels: RgbImage) -> Res<ImageRequest<Self>> {
         controller.new_png(pixels)
     }
@@ -825,12 +825,12 @@ impl Format for Png {
 #[derive(Clone, Copy, Default)]
 pub struct Rgb;
 impl Format for Rgb {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn to_cd(self) -> ControlData {
         ControlData('f', 24.to_string())
     }
     /// Raw pixels have to be declared with the image's own size.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn request(controller: &Controller, pixels: RgbImage) -> Res<ImageRequest<Self>> {
         let size = ImageSize {
             width: pixels.width(),
@@ -843,11 +843,11 @@ impl Format for Rgb {
 #[derive(Clone, Copy, Default)]
 pub struct Rgba;
 impl Format for Rgba {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn to_cd(self) -> ControlData {
         ControlData('f', 32.to_string())
     }
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn request(controller: &Controller, pixels: RgbImage) -> Res<ImageRequest<Self>> {
         // The alpha channel is not in the caller's buffer, so it is added opaque:
         // `new_rgba` takes RGBA and every pixel here is fully opaque.
@@ -878,21 +878,21 @@ impl Format for Rgba {
 #[derive(Clone, Copy, Default)]
 pub struct Shm;
 impl Format for Shm {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn to_cd(self) -> ControlData {
         ControlData('f', 24.to_string())
     }
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn medium(self) -> &'static str {
         "s"
     }
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn is_inline(self) -> bool {
         false
     }
     /// Staged in a shared memory object: the escape carries the object's name, and
     /// the terminal maps it rather than decoding anything.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn request(controller: &Controller, pixels: RgbImage) -> Res<ImageRequest<Self>> {
         controller.new_shm_rgb(pixels)
     }
@@ -927,7 +927,7 @@ pub struct ShmFrame {
 
 impl ShmFrame {
     /// The bytes this object was filled with.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn data(&self) -> &[u8] {
         &self.data
     }
@@ -937,7 +937,7 @@ impl ShmFrame {
     /// The owned form exists so the hot path does not copy a frame twice: with
     /// [`ShmFrame::create`] the caller's `Vec` becomes a slice and is cloned into
     /// the object, which for a full frame is several megabytes of memcpy.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn create_owned(data: Vec<u8>) -> Res<Self> {
         Self::build(data)
     }
@@ -946,12 +946,12 @@ impl ShmFrame {
     ///
     /// Fails on a platform with no `/dev/shm`, or when the name is already
     /// taken (a stale object from a dead process whose pid was reused).
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn create(data: &[u8]) -> Res<Self> {
         Self::build(data.to_vec())
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn build(data: Vec<u8>) -> Res<Self> {
         let dir = std::path::Path::new(SHM_DIR);
         if !dir.is_dir() {
@@ -995,13 +995,13 @@ impl ShmFrame {
     /// The previous object is gone by now: the terminal unlinks what it reads,
     /// so a re-send has to name a new one. The bytes are already here, so this
     /// is one write and no pixel work.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn recreate(&self) -> Res<Self> {
         Self::create(&self.data)
     }
 
     /// The object's name, as the `t=s` payload is base64 of.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -1013,7 +1013,7 @@ impl ShmFrame {
     /// already removed ours, so a new object is needed. The bytes are already
     /// here, so this costs one write and no pixel work, where re-encoding from
     /// the caller's frame would cost a full frame of memcpy.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn resend(&self, size: ImageSize) -> Res<ImageRequest<Shm>> {
         let frame = Arc::new(self.recreate()?);
         Ok(ImageRequest {
@@ -1025,21 +1025,21 @@ impl ShmFrame {
     }
 
     /// The base64 payload this medium carries in place of pixel data.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn payload(&self) -> Vec<u8> {
         base64_turbo::STANDARD.encode(self.name.as_bytes()).into_bytes()
     }
 }
 
 impl std::fmt::Debug for ShmFrame {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ShmFrame").field("name", &self.name).finish()
     }
 }
 
 impl Drop for ShmFrame {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn drop(&mut self) {
         // The terminal normally got there first, in which case this is a no-op.
         let _ = std::fs::remove_file(&self.path);
@@ -1066,7 +1066,7 @@ impl<F: Format + 'static> ImageRequest<F> {
     //     todo!()
     // }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn transmit(self) -> PendingTransfer<F> {
         let id = DynId::new(id::alloc());
 
@@ -1117,7 +1117,7 @@ impl<F: Format + 'static> ImageRequest<F> {
     /// fresh id each frame would invalidate every placeholder cell referencing
     /// the old one, because the id lives in the cell's color. Reusing the id
     /// means a re-send can be unconditional and the client never repaints.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn transmit_as(self, id: Id) -> PendingTransfer<F> {
         // Moved into the closure rather than captured by reference: the closure
         // is boxed as `'static`, since the reply may arrive much later.
@@ -1137,7 +1137,7 @@ impl<F: Format + 'static> ImageRequest<F> {
         })
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn exec_transmit(&self, key: char, id: Id) -> ReplyFuture {
         // The `t` key must precede the payload: for a shared memory medium the
         // payload is an object name, not pixels.
@@ -1163,7 +1163,7 @@ impl<F: Format + 'static> ImageRequest<F> {
     ///
     /// Only the shared memory medium has an object; an inline one carries its pixels in the
     /// payload and needs nothing.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn temp_remove_this_api_maybe_resend_shm(mut self) -> Res<Self> {
         if let Some(held) = self.shm.take() {
             let frame = Arc::new(held.recreate()?);
@@ -1191,7 +1191,7 @@ impl<F: Format + 'static> ImageRequest<F> {
     /// The returned image holds the placement handle, so [`DynImage::displace`] and
     /// [`DynImage::delete`] see it — the placement was made by a command that also
     /// carried pixels, but it is an ordinary placement afterwards.
-    #[tracing::instrument(name = "tgp.transplace", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "tgp.transplace", skip_all))]
     pub fn transplace(self, id: Id, placement: PlacementRequest) -> PendingTransfer<F> {
         let placement_id = placement.placement_id.unwrap_or_else(id::alloc);
         let reply = self.exec_transplace(id, &placement, placement_id);
@@ -1225,7 +1225,7 @@ impl<F: Format + 'static> ImageRequest<F> {
     /// The keys are [`ImageRequest::exec_transmit`]'s and [`PlacementRequest::exec_place`]'s
     /// together, with `a=T` in place of the transmit's implicit add: `T` is the
     /// protocol's "transmit and place", and it is the only action that does both.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn exec_transplace(
         &self,
         image_id: Id,
@@ -1334,7 +1334,7 @@ pub struct PendingSync<'a> {
 impl<'a> Future for PendingSync<'a> {
     type Output = Res<()>;
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -1389,7 +1389,7 @@ impl<F: Format> DynImage<F> {
     /// Needed by callers that must name the image in their own escapes, the
     /// main case being Unicode placeholders: the id is encoded in the
     /// placeholder cell's foreground color, so the client has to know it.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn id(&self) -> Id {
         self.id.assigned()
     }
@@ -1399,7 +1399,7 @@ impl<F: Format> DynImage<F> {
     ///
     /// `#[instrument]` rather than a span the caller enters: the wait is the terminal's answer
     /// arriving, and a caller that wrapped it would be timing a future it did not write.
-    #[tracing::instrument(name = "tgp.sync", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "tgp.sync", skip_all))]
     pub fn sync<'a>(&'a mut self) -> PendingSync<'a> {
         PendingSync {
             pending: &mut self.pending,
@@ -1413,12 +1413,12 @@ impl<F: Format> DynImage<F> {
     /// Held past its reply so the frame can be transmitted again without
     /// re-encoding it, which is what a terminal needs after a whole-screen erase
     /// frees its own copy of the image.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn last_object(&self) -> Option<Arc<ShmFrame>> {
         self.held.clone()
     }
 
-    #[tracing::instrument(name = "tgp.place", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "tgp.place", skip_all))]
     pub fn place(&mut self, request: PlacementRequest) -> PlacementHandle {
         let id = request.placement_id.unwrap_or_else(id::alloc);
         let (fut, handle) = request.place(self.id.assigned(), id, "p");
@@ -1441,7 +1441,7 @@ impl<F: Format> DynImage<F> {
     /// pixels. They are still here, in the medium's own object or in the payload, which is
     /// why re-sending them is the whole answer. `a=T` is the one command that makes a
     /// picture and places it, so the pane is never briefly empty.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn retransplace(mut self, placement: PlacementRequest) -> Res<PendingTransfer<F>> {
         let id = self.id.assigned();
 
@@ -1460,7 +1460,7 @@ impl<F: Format> DynImage<F> {
     // TODO:
     // pub fn replace(&mut self, handle: PlacementHandle) {}
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn displace(&mut self, handle: PlacementHandle) -> Res<PlacementRequest> {
         if self.placements.remove(&handle) {
             // ^ Drops the value, reducing reference counter to just one.
@@ -1473,7 +1473,7 @@ impl<F: Format> DynImage<F> {
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn restore(&mut self) {}
 
     /// Free the image on the terminal, handing back the request that can make it again.
@@ -1481,7 +1481,7 @@ impl<F: Format> DynImage<F> {
     /// The pixels are not lost with the image: they come back here, because a caller that
     /// hid a window may want the same picture later, and re-encoding a frame is the
     /// expensive way to get them.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn delete(self) -> ImageRequest<F> {
         Message::new()
             .cd('a', "d")
@@ -1490,7 +1490,7 @@ impl<F: Format> DynImage<F> {
         self.request
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn resolve_frame_selector(&self, selector: FrameSelector) -> usize {
         use FrameSelector::*;
         match selector {
@@ -1500,7 +1500,7 @@ impl<F: Format> DynImage<F> {
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new_frame(&mut self, config: NewFrameRequest<F>) -> FrameHandle {
         let base_frame = config.from_frame;
         let idx = self.frames.len() + 2;
@@ -1523,7 +1523,7 @@ impl<F: Format> DynImage<F> {
         handle
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn edit_frame(
         &mut self,
         handle: &FrameHandle,
@@ -1611,13 +1611,13 @@ impl<F: Format> DynImage<F> {
         // PendingTransfer::new(reply, |_| ())
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn display_last_frame(&mut self) {
         self.display_frame(FrameSelector::Last)
     }
 
     // TODO: Use selector, rename to just display
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn display_frame(&mut self, frame: FrameSelector) {
         let reply = Message::new()
             .cd('a', "a")
@@ -1706,7 +1706,7 @@ pub struct NewFrameRequest<F: Format> {
 }
 
 impl<F: Format> NewFrameRequest<F> {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn create(
         self,
         // image where the change is happning
@@ -1857,7 +1857,7 @@ pub struct PlacementRequest {
 /// only when it believes it must, so the move has to be undone here: left where the placement
 /// stopped, that writer's next run of cells lands there. One function so both placement paths — a
 /// frame carrying pixels and a placement that only moves — cannot bracket differently.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn around_cursor(row: u16, col: u16, escape: &[u8]) -> Vec<u8> {
     let mut bytes = b"\x1b7".to_vec();
     bytes.extend_from_slice(crossterm::cursor::MoveTo(col, row).to_string().as_bytes());
@@ -1867,7 +1867,7 @@ fn around_cursor(row: u16, col: u16, escape: &[u8]) -> Vec<u8> {
 }
 
 impl PlacementRequest {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn place(
         self,
         image_id: Id,
@@ -1883,7 +1883,7 @@ impl PlacementRequest {
         )
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn exec_place(&self, image_id: Id, id: Id, action: &'static str) -> ReplyFuture {
         let request = Message::new() //
             .cd('a', action)
@@ -1950,7 +1950,7 @@ impl Message {
     // Private, because it returns `ActionIdent`, which is an implementation detail: it
     // exists so the reply router can tell a numbered image from an identified one, and a
     // caller has no use for the distinction.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn ident(&self) -> ActionIdent {
         // TODO: refactor
         self.cds
@@ -1973,7 +1973,7 @@ impl Message {
     // TODO: use async so this function isn't blocking forever
     /// Takes a byte iterator returns first parsed action consuming bytes along the way.
     /// If none found will block until the end of the iterator (usually on the program exit) and returns None
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn parse_next(buf: &mut std::iter::Peekable<impl Iterator<Item = u8>>) -> Option<Message> {
         Self::parse_next_with(buf, &mut std::io::sink())
     }
@@ -1993,7 +1993,7 @@ impl Message {
     /// TODO: the search for an intro is a byte-at-a-time loop, which is what makes
     /// it obviously correct and not fast. A real one scans with a `memchr` and
     /// copies the runs between replies in bulk.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn parse_next_with(
         buf: &mut std::iter::Peekable<impl Iterator<Item = u8>>,
         forward: &mut impl std::io::Write,
@@ -2058,7 +2058,7 @@ impl Message {
 
     // This is private, users are supposed to use Controller for the manual actions, this guarantees that the router is configured.
     // TODO: make this take initial action keys
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn new() -> Message {
         Message {
             cds: vec![],
@@ -2066,13 +2066,13 @@ impl Message {
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn payload(mut self, payload: impl Into<Vec<u8>>) -> Self {
         self.payload.replace(payload.into());
         self
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn get_from_key(&self, key: char) -> Option<String> {
         self.cds
             .iter()
@@ -2082,12 +2082,12 @@ impl Message {
 
     // TODO: Narrow the scope of the value
     /// Takes ownership
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn cd(self, key: char, value: impl Display) -> Self {
         self.push_cd(ControlData(key, value.to_string()))
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn cd_opt(self, key: char, value_o: Option<impl Display>) -> Self {
         if let Some(value) = value_o {
             self.push_cd(ControlData(key, value.to_string()))
@@ -2096,7 +2096,7 @@ impl Message {
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn cd_if(self, condition: bool, key: char, value: impl Display) -> Self {
         if condition {
             self.push_cd(ControlData(key, value.to_string()))
@@ -2105,7 +2105,7 @@ impl Message {
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn push_cd(mut self, cd: ControlData) -> Self {
         self.cds.push(cd);
         self
@@ -2113,7 +2113,7 @@ impl Message {
 
     // TODO: implement chunking
     /// execute the command
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn send(self) -> ReplyFuture {
         self.send_medium(true)
     }
@@ -2124,7 +2124,7 @@ impl Message {
     /// it is one command by construction: the `m` key is meaningless for it and
     /// splitting it would hand the terminal a fragment of a name. `inline` says
     /// which of the two this is.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn send_medium(mut self, inline: bool) -> ReplyFuture {
         const CHUNK_SIZE: usize = 16 * 1024;
         const LOCK: Mutex<()> = Mutex::new(());
@@ -2172,7 +2172,7 @@ impl Message {
         ReplyFuture::new(aident, diagnostic)
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn send_raw(mut self, no_reply: bool) {
         // CRITICAL: this is not supposed to be here.
         //
@@ -2192,7 +2192,7 @@ impl Message {
     ///
     /// Separated from the write so the encoding can be asserted without a
     /// terminal: `\x1b_G<cds>;<payload>\x1b\\`.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn into_escape(self) -> Vec<u8> {
         let cds = self
             .cds
@@ -2212,7 +2212,7 @@ impl Message {
 /// name, and neither answers the question a failure raises, which is which command
 /// was refused and with what arguments.
 impl Display for Message {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -2253,7 +2253,7 @@ pub enum TGPError {
 }
 
 impl TGPError {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn restore_restorable(self) -> Res<()> {
         match self {
             TGPError::Evicted(mut entity) =>
@@ -2291,19 +2291,19 @@ impl ControlData {
     /// The fields are private, so this is the only way to build one from outside — which is
     /// what a caller implementing [`Format`] needs, since `to_cd` has to return the format's
     /// `f=` key.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(key: char, value: impl Display) -> Self {
         Self(key, value.to_string())
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn format(&self) -> String {
         format!("{}={}", self.0, self.1.trim())
     }
 
     /// Takes an iter and consumes first <k>=<v> terminated by either `,` or `;` (terminators aren't consumed)
     /// returns parsed struct
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn parse(buf: &mut std::iter::Peekable<impl Iterator<Item = u8>>) -> Option<Self> {
         let k = buf.next()?;
 

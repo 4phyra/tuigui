@@ -30,7 +30,7 @@ impl Tracking {
     /// The one question worth asking the terminal: the inline viewport anchors to the cursor at
     /// construction, and asking then is safe because the input thread does not exist yet. After that
     /// this never asks again — the whole point.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(backend: CrosstermBackend<io::Stdout>) -> io::Result<Self> {
         let (x, y) = ratatui::crossterm::cursor::position()?;
         Ok(Self { inner: backend, cursor: Position { x, y } })
@@ -38,12 +38,12 @@ impl Tracking {
 }
 
 impl io::Write for Tracking {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         io::Write::write(&mut self.inner, buf)
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn flush(&mut self) -> io::Result<()> {
         io::Write::flush(&mut self.inner)
     }
@@ -52,7 +52,7 @@ impl io::Write for Tracking {
 impl Backend for Tracking {
     type Error = io::Error;
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
@@ -66,29 +66,29 @@ impl Backend for Tracking {
         Ok(())
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
         self.inner.append_lines(n)?;
         self.cursor.y += n;
         Ok(())
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn hide_cursor(&mut self) -> Result<(), Self::Error> {
         self.inner.hide_cursor()
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn show_cursor(&mut self) -> Result<(), Self::Error> {
         self.inner.show_cursor()
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
         Ok(self.cursor)
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
         let position = position.into();
         self.inner.set_cursor_position(position)?;
@@ -96,37 +96,37 @@ impl Backend for Tracking {
         Ok(())
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn clear(&mut self) -> Result<(), Self::Error> {
         self.inner.clear()
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
         self.inner.clear_region(clear_type)
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn size(&self) -> Result<Size, Self::Error> {
         self.inner.size()
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
         self.inner.window_size()
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn flush(&mut self) -> Result<(), Self::Error> {
         self.inner.flush()
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn scroll_region_up(&mut self, region: core::ops::Range<u16>, line_count: u16) -> Result<(), Self::Error> {
         self.inner.scroll_region_up(region, line_count)
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn scroll_region_down(&mut self, region: core::ops::Range<u16>, line_count: u16) -> Result<(), Self::Error> {
         self.inner.scroll_region_down(region, line_count)
     }

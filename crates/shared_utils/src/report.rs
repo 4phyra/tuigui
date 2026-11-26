@@ -19,7 +19,7 @@
 ///
 /// Once per process, and the second call is not an error: a report is printed once, at the end,
 /// so the first install is the one that matters.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn install_report_handler() {
     let width = rustix::termios::tcgetwinsize(std::io::stdout())
         .map(|size| usize::from(size.ws_col))
@@ -43,7 +43,7 @@ pub fn install_report_handler() {
 /// `Debug` on a `Report` is miette's graphical form: the message, the labels, and the chain
 /// beneath. `Display` is one line of prose with all of that thrown away, which is why this
 /// exists rather than a `to_string()` at the call site.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn drawn(report: miette::Report) -> String {
     format!("{report:?}")
 }
@@ -57,7 +57,7 @@ pub fn drawn(report: miette::Report) -> String {
 ///
 /// The span is the whole line, found by walking to the `line`th newline. Offsets are byte
 /// offsets into `source`, which is what `SourceSpan` takes.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn line_span(source: &'static str, line: usize) -> miette::SourceSpan {
     let mut start = 0;
     for _ in 1..line {

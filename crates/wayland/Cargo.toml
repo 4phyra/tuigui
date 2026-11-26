@@ -41,3 +41,8 @@ libc = "0.2"
 wayland-client = "0.31"
 rustix = { workspace = true }
 memmap2 = "0.9"
+
+[features]
+# Nothing of its own: the switch exists so `#[cfg_attr(feature = "tracy", ..)]` on this
+# crate's instrumentation has something to test, and the profiled build turns it on.
+tracy = []

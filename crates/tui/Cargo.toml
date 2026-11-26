@@ -66,7 +66,18 @@ tracing-subscriber = { workspace = true, optional = true }
 
 [features]
 default = []
-tracy = ["dep:tracing-tracy", "dep:tracing-subscriber"]
+tracy = [
+    "dep:tracing-tracy",
+    "dep:tracing-subscriber",
+    # Every crate whose code runs inside a session carries its own switch: an attribute is
+    # compiled out by the crate that holds it, so the profiler has to turn each one on.
+    "wire/tracy",
+    "easytgp/tracy",
+    "codecs/tracy",
+    "cell_map/tracy",
+    "cellcode/tracy",
+    "shared_utils/tracy",
+]
 
 [dev-dependencies]
 # The drawn report is a snapshot: what is reviewed is its shape — the arrow, the label's

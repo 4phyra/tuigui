@@ -74,7 +74,7 @@ pub struct Options {
 pub const STEP_TIMEOUT: Duration = Duration::from_millis(4);
 
 /// A monotonic timestamp for event delivery, since process start.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub(crate) fn server_time() -> u32 {
     static BOOT: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     BOOT.get_or_init(Instant::now).elapsed().as_millis() as u32
@@ -118,7 +118,7 @@ pub struct WaylandServer {
 impl WaylandServer {
     /// Start the headless session: display, private socket, the single output,
     /// the seat, and (when asked) the XWayland server.
-    #[tracing::instrument(name = "wayland.new", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.new", skip_all))]
     pub fn new(options: Options) -> Result<Self, CompError> {
         // A private runtime dir, isolated from the caller's (Hyprland's): the
         // child's `XDG_RUNTIME_DIR` points here, so the only Wayland socket it
@@ -175,7 +175,7 @@ impl WaylandServer {
     /// The wait is the caller's to hold and this session's to answer: a turn is what notices a
     /// client has committed, and [`WaylandServer::step`] is that turn. Taken rather than lent
     /// because awaiting a receiver consumes it, and a session has one root.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn take_root_receiver(&mut self) -> Option<tokio::sync::oneshot::Receiver<Weak<Window>>> {
         self.root.take()
     }
@@ -191,7 +191,7 @@ impl WaylandServer {
     ///
     /// `TMPDIR` is not used for this: it is whatever launched us, and under a shell it is
     /// a per-shell directory a grandchild does not inherit.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn new_runtime_dir() -> Result<PathBuf, CompError> {
         let base = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
@@ -210,7 +210,7 @@ impl WaylandServer {
 
     /// Bind the session's private socket, picking a free name under the
     /// runtime dir. Returns the socket and the path it was bound at.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn new_socket(
         runtime_dir: &Path,
     ) -> Result<(ListeningSocket, PathBuf), CompError> {
@@ -243,7 +243,7 @@ impl WaylandServer {
     }
 
     /// The session's single output: the one window fills it.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn new_output(
         resolution: (u32, u32),
         dpi: f64,
@@ -285,20 +285,20 @@ impl WaylandServer {
     }
 
     /// The output's resolution in pixels.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn size(&self) -> (u32, u32) {
         self.state.server_size
     }
 
     /// The root window's tree, shared by the `Arc` the tree keeps it under:
     /// the strong share from which weak handles are minted.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn root_tree(&self) -> Option<Arc<Window>> {
         self.state.root_client.as_ref()?.root_window.read().unwrap().clone()
     }
 
     /// Whether the session's program is still running.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn is_running(&self) -> bool {
         self.state
             .root_client
@@ -318,7 +318,7 @@ impl WaylandServer {
     /// spawns its own child hands it a runtime dir and a socket name that no longer
     /// agree, and the child finds no display at all. An absolute path needs neither,
     /// and travels through any number of grandchildren unchanged.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn new_command(path: &Path, socket_name: &Path) -> std::process::Command {
         let mut command = std::process::Command::new(path);
         command
@@ -363,7 +363,7 @@ impl WaylandServer {
     /// holds `WM_S0`: an X11 client that connects earlier dies with "Can't
     /// open display". Stepping drives the XWayland source until the display
     /// is advertised or XWayland reports itself unavailable.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn route_display(&mut self, command: &mut std::process::Command) -> Result<(), CompError> {
         loop {
             match &self.state.x11_display {
@@ -390,7 +390,7 @@ impl WaylandServer {
     /// Nothing is waited for. The child has not connected yet, so it has no
     /// window: the caller learns about both by advancing the server and asking
     /// `root_tree` again, which is what makes the loop the caller's to own.
-    #[tracing::instrument(name = "wayland.spawn", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.spawn", skip_all))]
     pub fn spawn(
         &mut self,
         path: &std::path::Path,
@@ -453,8 +453,8 @@ impl WaylandServer {
     ///
     /// The server only moves forward when this is called, so the caller's loop
     /// is the session's heartbeat.
-    #[tracing::instrument(name = "wayland.step", skip(self))]
-    pub fn step(&mut self, timeout: Duration) {
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.step", skip(self)))]
+    pub fn step(&mut self, _timeout: Duration) {
         let WaylandServer {
             state,
             event_loop,
@@ -523,7 +523,7 @@ impl WaylandServer {
     /// windows are configured and captured at. Windows are not re-configured
     /// here; whoever wants one resized asks the window itself, through
     /// `wayland::Window::set_size`.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn set_size(&mut self, size: (u32, u32)) {
         let mode = smithay::output::Mode {
             size: (size.0 as i32, size.1 as i32).into(),
@@ -537,7 +537,7 @@ impl WaylandServer {
 }
 
 impl Drop for WaylandServer {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.runtime_dir);
     }

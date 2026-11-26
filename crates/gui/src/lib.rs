@@ -133,7 +133,7 @@ pub struct StreamingOptions {
 
 impl StreamingOptions {
     /// The codec this session streams with.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn codec(&self) -> CodecId {
         match self.jpeg {
             true => CodecId::Jpeg,
@@ -189,7 +189,7 @@ impl Gui {
     /// lets the session be driven by a caller that is not a terminal (`tuigui`, or a
     /// test). The caller owns its own runtime, so this is `async` with no runtime of its
     /// own.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn run(
         self,
         stdin: impl tokio::io::AsyncRead + Send + Unpin + 'static,
@@ -406,7 +406,7 @@ impl Gui {
 /// reported pixels directly would be `0x0` in that case, and a zero-sized output is not a
 /// small window: it is no surface at all, so a program started into it never commits a
 /// buffer and never says why.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn output_size() -> std::io::Result<(u32, u32)> {
     let ws = rustix::termios::tcgetwinsize(std::io::stdin()).map_err(std::io::Error::from)?;
     let (cols, rows) = (u32::from(ws.ws_col).max(1), u32::from(ws.ws_row).max(1));
@@ -435,7 +435,7 @@ struct ModeGuard {
 
 impl ModeGuard {
     /// Take the terminal, and put it back on drop.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn install() -> std::io::Result<Self> {
         let stdin = std::io::stdin();
         let original = rustix::termios::tcgetattr(&stdin).map_err(std::io::Error::from)?;
@@ -455,7 +455,7 @@ impl ModeGuard {
 impl Drop for ModeGuard {
     /// Give the terminal back as the shell left it: the main screen, no capture, a visible
     /// cursor, and the line discipline the kernel had before the first key was read.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn drop(&mut self) {
         let _ = crossterm::execute!(
             std::io::stdout(),
@@ -475,7 +475,7 @@ impl Drop for ModeGuard {
 ///
 /// At the bottom of this file because it is small, and here rather than in a module
 /// because there is one of it.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn install_logger() -> std::path::PathBuf {
     // One fixed path, so it is the same file every run and can simply be read
     // afterwards. A path per process would mean knowing a pid before the log could
@@ -550,7 +550,7 @@ fn frame_mark() {
 fn frame_mark() {}
 
 #[cfg(feature = "tracy")]
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn install_tracing() -> std::io::Result<()> {
     use tracing::Level;
     use tracing_subscriber::filter::Targets;

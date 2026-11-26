@@ -12,12 +12,12 @@ use crate::utils::map_rgba;
 
 impl CompositorHandler for State
 {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.globals.compositor_state
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn client_compositor_state<'a>(
         &self,
         client: &'a smithay::reexports::wayland_server::Client,
@@ -26,7 +26,7 @@ impl CompositorHandler for State
             .expect("client has neither RootClient, SubClient nor XWaylandClientData")
     }
 
-    #[tracing::instrument(name = "wayland.commit", skip_all, fields(surface = ?surface.id()))]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.commit", skip_all, fields(surface = ?surface.id())))]
     fn commit(&mut self, surface: &WlSurface) {
         // Software compositing: read the committed buffer straight into the
         // owning client's window and accumulate damage. (No renderer-side
@@ -94,7 +94,7 @@ impl CompositorHandler for State
 /// The buffer is still released here for the same reason — a client waiting on
 /// `wl_buffer.release` would otherwise never draw again, and the window would be waiting
 /// for a picture from a client that is waiting for its buffer.
-#[tracing::instrument(name = "wayland.hold", skip_all, fields(surface = ?surface.id()))]
+#[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.hold", skip_all, fields(surface = ?surface.id())))]
 fn hold(state: &mut State, surface: &WlSurface) {
     // A surface with a parent is a subsurface: client-side decorations, a tooltip, a cursor. It
     // belongs to the window that owns it rather than being a window of its own, so it will never
@@ -140,7 +140,7 @@ fn hold(state: &mut State, surface: &WlSurface) {
     state.pending_commits.insert(surface.clone(), (pixels, size));
 }
 
-#[tracing::instrument(name = "wayland.commit_into", skip_all, fields(surface = ?surface.id()))]
+#[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.commit_into", skip_all, fields(surface = ?surface.id())))]
 fn commit_into(win: &crate::window::Window, surface: &WlSurface) {
     let mut frame = None;
     smithay::wayland::compositor::with_states(surface, |states| {

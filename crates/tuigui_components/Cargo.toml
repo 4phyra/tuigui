@@ -25,3 +25,8 @@ path = "src/bin/gallery.rs"
 # of termlens is what turns a screen into a picture a reviewer can look at;
 # the session suites at the root turn it off for their own dep.
 termlens = "0.11"
+
+[features]
+# Nothing of its own: the switch exists so `#[cfg_attr(feature = "tracy", ..)]` on this
+# crate's instrumentation has something to test, and the profiled build turns it on.
+tracy = []

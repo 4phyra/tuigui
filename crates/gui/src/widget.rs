@@ -74,7 +74,7 @@ impl MainWidget {
     /// Built before the input thread exists, and that order is not cosmetic: `Viewport::Inline`
     /// asks the terminal where the cursor is, and crossterm reads that answer off stdin itself. A
     /// reader holding stdin would take the reply.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(session: Session, debug: std::sync::Arc<crate::DebugOptions>) -> std::io::Result<Self> {
         Ok(Self {
             session,
@@ -98,7 +98,7 @@ impl MainWidget {
     /// The dock's rows are the bottom three of the area the frame drew, and the events that move
     /// them are the pointer's: a press is aimed at a cell, so the area has to be the one the user
     /// is looking at rather than the whole terminal.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn handle_event(&mut self, event: &termina::Event) -> std::io::Result<bool> {
         let winsize = rustix::termios::tcgetwinsize(std::io::stdin())?;
         let dock_area = Rect {
@@ -110,7 +110,7 @@ impl MainWidget {
     }
 
     /// Whether something on the pane is still moving, so the next frame is already owed.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn is_animating(&self) -> bool {
         self.session.is_animating()
     }
@@ -119,7 +119,7 @@ impl MainWidget {
     ///
     /// One call, because the wait and the work cannot be held at once: what the wait answers borrows
     /// the stack it changes, so the borrow has to end between the two.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn step(&mut self) {
         let winsize = rustix::termios::tcgetwinsize(std::io::stdin())
             .expect("the terminal must report its own size");
@@ -127,7 +127,7 @@ impl MainWidget {
     }
 
     /// The program's window is up, and its output has somewhere to go.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn from_any_to_windows(
         &mut self,
         root: compositor::CompositableWindow,
@@ -137,7 +137,7 @@ impl MainWidget {
     }
 
     /// Whether the session is over.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn done(&self) -> bool {
         self.session.done()
     }
@@ -148,7 +148,7 @@ impl MainWidget {
     /// alternate screen is this side's, and leaving it is a draw, not a drop. Called
     /// from the arm that saw the program end, because the future that would have
     /// drawn the next frame is the one that just finished.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn finish(&mut self) {
         if let Ok(stage) = &mut self.session.stage.0 {
             stage.from_any_to_exiting();
@@ -159,7 +159,7 @@ impl MainWidget {
     ///
     /// The span is here and not around the caller: this is the one call that knows what a frame is
     /// made of, so this is where the profiler's timeline should be divided.
-    #[tracing::instrument(name = "frame", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "frame", skip_all))]
     pub fn render(&mut self) -> Result<(), crate::Error> {
         // The frame's own length, which is what paces anything animated. Capped at one frame,
         // because the gap since the last draw is not always a frame's worth: a pane that sat idle
@@ -268,7 +268,7 @@ impl MainWidget {
     /// Above and not in the pane, because the pane the inline terminal draws is its visible rows
     /// and its own top row *is* the cursor row: a line written inside it would be painted over by
     /// the next frame, which is exactly the output a user wants to keep reading.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn print_program_stdout(&mut self) -> std::result::Result<(), crate::Error> {
         if self.program_stdout.is_empty() {
             return Ok(());

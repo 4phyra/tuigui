@@ -199,7 +199,7 @@ impl SurfaceId {
     /// windows cannot collide by accident. The entropy comes from `RandomState`, which the
     /// process seeds from the OS, mixed with a counter so two calls in the same nanosecond
     /// still differ.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn random() -> Self {
         use std::collections::hash_map::RandomState;
         use std::hash::{BuildHasher, Hasher};
@@ -233,7 +233,7 @@ impl SurfaceId {
     /// Both colours must be true colour to compare: a palette index names whatever
     /// the terminal has in that slot, which is not a fact a surface carries, so an
     /// indexed or default colour matches nothing.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn matches(&self, cell: &cell_map::Cell) -> bool {
         let cell_map::Cell {
             symbol,
@@ -249,7 +249,7 @@ impl SurfaceId {
 
 /// A colour from `seed`, kept away from the extremes so a surface never looks like a
 /// plain default cell.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn colour(seed: u64) -> (u8, u8, u8) {
     use std::hash::{BuildHasher as _, Hasher as _};
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
@@ -284,7 +284,7 @@ impl Message {
     /// Fails when rkyv cannot serialize the message, which a message made of a
     /// string and bytes does not do; the error is carried rather than swallowed
     /// because a serializer that fails is a bug worth naming.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn to_bytes(&self) -> Result<Vec<u8>, rancor::Error> {
         Ok(rkyv::to_bytes::<rancor::Error>(self)?.to_vec())
     }
@@ -301,7 +301,7 @@ impl Message {
     /// Fails when the bytes are not an archive of a message — garbage, a
     /// truncated one, or one from a peer speaking a different shape of this
     /// enum. Validation runs before the bytes are believed.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, rancor::Error> {
         rkyv::from_bytes::<Self, rancor::Error>(bytes)
     }

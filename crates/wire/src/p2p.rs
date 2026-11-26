@@ -109,7 +109,7 @@ impl P2p {
     /// can be resolved from its key alone once the peer has published. Hole punching
     /// replaces the relay with a direct path as soon as one works; that is the library's
     /// business and not this file's.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn host() -> io::Result<Self> {
         let endpoint = Endpoint::builder(presets::N0)
             .alpns(vec![ALPN.to_vec()])
@@ -134,7 +134,7 @@ impl P2p {
     ///
     /// Bound once and kept. A second call is not a rebind, which is what lets both the
     /// handshake and a retry reach it without agreeing on who went first.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     async fn endpoint(&self) -> io::Result<Endpoint> {
         let mut endpoint = self.endpoint.lock().await;
         if endpoint.is_none() {
@@ -155,7 +155,7 @@ impl P2p {
     /// Adopt a stream pair as this transport's link.
     ///
     /// Shared by dialing and accepting, which differ only in who opened the stream.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     async fn adopt(&self, (send, recv): (iroh::endpoint::SendStream, iroh::endpoint::RecvStream)) {
         self.link.store(Some(Arc::new(Link {
             read: Mutex::new(framed_read(recv)),
@@ -167,7 +167,7 @@ impl P2p {
     ///
     /// The key, because that is what identifies the endpoint at the other end: an address
     /// is how to reach it, and two addresses can name one endpoint.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn label(addr: &EndpointAddr) -> String {
         EndpointTicket::new(addr.clone()).to_string()
     }
@@ -175,7 +175,7 @@ impl P2p {
 
 #[async_trait::async_trait]
 impl Transport for P2p {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn name(&self) -> &'static str {
         NAME
     }
@@ -184,7 +184,7 @@ impl Transport for P2p {
     ///
     /// Bound here because `to_magic` has to name an address a peer can dial, and an endpoint's key
     /// is minted at bind time: until there is one there is nothing to announce.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     async fn new() -> io::Result<Self> {
         Self::host().await
     }
@@ -193,7 +193,7 @@ impl Transport for P2p {
     ///
     /// The peer's ticket when dialing, this endpoint's when hosting — known since
     /// construction, so no lock is needed to read it.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn address(&self) -> String {
         EndpointTicket::new(self.announce.clone()).to_string()
     }
@@ -204,7 +204,7 @@ impl Transport for P2p {
     /// the endpoint is this side's own anyway: see [`P2p::endpoint`], which makes it when
     /// something that can await asks. Nothing is lost by the split, because a ticket is
     /// the whole of what the peer said.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn from_magic(name: &str, address: &str) -> Option<Self> {
         if name != NAME {
             return None;
@@ -226,7 +226,7 @@ impl Transport for P2p {
     /// opener that waited to be read would deadlock against an acceptor waiting to be
     /// told. Sending the [`Message::Ping`] is that first move, and it is the handshake's
     /// anyway.
-    #[tracing::instrument(name = "msg.connect", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "msg.connect", skip_all))]
     async fn connect(&self) -> io::Result<Connection> {
         let peer = self
             .peer
@@ -261,7 +261,7 @@ impl Transport for P2p {
     /// The mirror of [`Transport::connect`], and the same order reversed: the stream is
     /// accepted only once the peer has written on it, so the greeting arrives with the
     /// news that there is a stream to answer on.
-    #[tracing::instrument(name = "msg.accept", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "msg.accept", skip_all))]
     async fn accept(&self) -> io::Result<Connection> {
         let endpoint = self.endpoint().await?;
         let incoming = endpoint
@@ -291,7 +291,7 @@ impl Transport for P2p {
         }
     }
 
-    #[tracing::instrument(name = "msg.send", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "msg.send", skip_all))]
     async fn send(&self, message: &Message) -> io::Result<()> {
         let link = self
             .link
@@ -306,7 +306,7 @@ impl Transport for P2p {
     /// Waiting is the point: a peer has to send a message, so a read that answered the
     /// instant it was asked would be asking before the peer had a chance to write.
     /// `None` means the peer finished the stream, which is the normal end of a session.
-    #[tracing::instrument(name = "msg.recv", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "msg.recv", skip_all))]
     async fn recv(&self) -> io::Result<Option<Message>> {
         let link = self
             .link

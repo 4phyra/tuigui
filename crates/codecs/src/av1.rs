@@ -148,7 +148,7 @@ impl Encoder {
     /// [`Error::HardwareUnavailable`] when no candidate opens: no hardware
     /// AV1 encoder on this machine, which is the designed failure and names
     /// `--jpeg`.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(width: u32, height: u32) -> Result<Self, Error> {
         ffmpeg_next::init().map_err(Error::boxed)?;
         let mut tried = String::new();
@@ -173,7 +173,7 @@ impl Encoder {
     }
 
     /// Open one candidate, with its device, pool and codec context.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn open(backend: &EncoderBackend, width: u32, height: u32) -> Result<Self, io::Error> {
         let codec = ffmpeg_next::encoder::find_by_name(backend.name).ok_or_else(|| {
             io::Error::other(format!("{} is not built into this ffmpeg", backend.name))
@@ -227,7 +227,7 @@ impl Encoder {
 }
 
 impl crate::Encoder for Encoder {
-    #[tracing::instrument(name = "codec.encode", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "codec.encode", skip_all))]
     fn encode(
         &mut self,
         bgra: &[u8],
@@ -323,7 +323,7 @@ impl Decoder {
     /// [`Error::HardwareUnavailable`] when no candidate opens: no hardware
     /// AV1 decoder on this machine, which is the designed failure and names
     /// `--jpeg`.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new() -> Result<Self, Error> {
         ffmpeg_next::init().map_err(Error::boxed)?;
         let mut tried = String::new();
@@ -348,7 +348,7 @@ impl Decoder {
     }
 
     /// Open one candidate, with its device and codec context.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn open(backend: &DecoderBackend) -> Result<Self, io::Error> {
         let codec = ffmpeg_next::decoder::find_by_name(backend.name).ok_or_else(|| {
             io::Error::other(format!("{} is not built into this ffmpeg", backend.name))
@@ -373,7 +373,7 @@ impl Decoder {
     }
 
     /// The picture `surface` carries, as R,G,B.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn pixels(surface: &frame::Frame, len: usize) -> Result<Frame, Error> {
         let width = unsafe { (*surface.as_ptr()).width as u32 };
         let height = unsafe { (*surface.as_ptr()).height as u32 };
@@ -413,7 +413,7 @@ impl Decoder {
 }
 
 impl crate::Decoder for Decoder {
-    #[tracing::instrument(name = "codec.decode", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "codec.decode", skip_all))]
     fn decode(&mut self, stream: &[u8]) -> Result<Option<Frame>, Error> {
         if !stream.is_empty() {
             let _send = tracing::info_span!("codec.send_packet").entered();
@@ -444,7 +444,7 @@ impl crate::Decoder for Decoder {
 }
 
 /// Whether `error` means "no more pictures right now" rather than a failure.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn quiet(error: ffmpeg_next::Error) -> bool {
     matches!(error, ffmpeg_next::Error::Eof)
         || matches!(
@@ -455,14 +455,14 @@ fn quiet(error: ffmpeg_next::Error) -> bool {
 
 /// The size the codec is opened at. AV1's 4:2:0 needs even dimensions, and a
 /// driver handed an odd one loses the whole GPU context instead of refusing it.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn coded(size: u32) -> u32 {
     size + size % 2
 }
 
 /// `bgra` at `width` x `height`, padded to the coded even size by repeating the
 /// last column and row, so an odd capture can be encoded as an even picture.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn pad_bgra(bgra: &[u8], width: u32, height: u32, coded_width: u32, coded_height: u32) -> Vec<u8> {
     let (w, h) = (width as usize, height as usize);
     let (cw, ch) = (coded_width as usize, coded_height as usize);
@@ -479,7 +479,7 @@ fn pad_bgra(bgra: &[u8], width: u32, height: u32, coded_width: u32, coded_height
 }
 
 /// An encode failure at a known size, as the error the caller sees.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn encode_error<E>(width: u32, height: u32) -> impl FnOnce(E) -> Error
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -497,7 +497,7 @@ where
 /// bytes are B, G, R, A on a little-endian machine, which is exactly the input
 /// the conversion library's BGRA path wants. The color math and the 4:2:0
 /// subsample are its SIMD code, not ours.
-#[tracing::instrument(name = "codec.bgra_to_nv12", skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(name = "codec.bgra_to_nv12", skip_all))]
 fn bgra_to_nv12(bgra: &[u8], width: u32, height: u32) -> Result<(Vec<u8>, Vec<u8>), Error> {
     let (w, h) = (width as usize, height as usize);
     // The tight NV12 layout, including the odd-width chroma row padded to a

@@ -7,7 +7,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 /// Fire all pending frame callbacks on a window's surface tree, and its
 /// subsurfaces' — the "you may draw the next frame" signal a client waits on
 /// after registering one with `wl_surface.frame`.
-#[tracing::instrument(name = "wayland.frame_callbacks", skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.frame_callbacks", skip_all))]
 pub(crate) fn fire_frame_callbacks(surface: &WlSurface) {
     smithay::wayland::compositor::with_surface_tree_downward(
         surface,
@@ -28,7 +28,7 @@ pub(crate) fn fire_frame_callbacks(surface: &WlSurface) {
 
 /// The connecting process's pid, straight from the socket (`SO_PEERCRED`).
 /// Linux-only by the crate gate.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub(crate) fn peer_pid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
     use std::os::unix::io::AsRawFd;
 
@@ -52,7 +52,7 @@ pub(crate) fn peer_pid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
 
 /// The parent of `pid`, as the kernel reports it. `None`: no parent known
 /// (init's child, or the process vanished between connect and lookup).
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub(crate) fn proc_parent(pid: u32) -> Option<u32> {
     sysinfo::System::new_all()
         .process(sysinfo::Pid::from_u32(pid))
@@ -75,7 +75,7 @@ pub(crate) fn proc_parent(pid: u32) -> Option<u32> {
 ///
 /// The size comes back because the pixels are cropped to their opaque bounds, so a caller
 /// cannot assume the buffer's dimensions.
-#[tracing::instrument(name = "wayland.map_rgba", skip(buffer, out))]
+#[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.map_rgba", skip(buffer, out)))]
 pub(crate) fn map_rgba(
     buffer: &smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
     out: &mut Vec<u8>,
@@ -137,7 +137,7 @@ pub(crate) fn map_rgba(
 /// written densely at `size.0 * 4` per row.
 ///
 /// No resampling: the caller passes the size it cropped to, and the pixels are those pixels.
-#[tracing::instrument(name = "wayland.copy_bgra", skip(src, dst))]
+#[cfg_attr(feature = "tracy", tracing::instrument(name = "wayland.copy_bgra", skip(src, dst)))]
 fn copy_bgra(src: &[u8], src_stride: usize, size: (usize, usize), dst: &mut [u8]) {
     let (w, h) = size;
     if w == 0 || h == 0 {
@@ -150,7 +150,7 @@ fn copy_bgra(src: &[u8], src_stride: usize, size: (usize, usize), dst: &mut [u8]
     }
 }
 
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn wl_bpp(f: smithay::reexports::wayland_server::protocol::wl_shm::Format) -> usize {
     use smithay::backend::allocator::format::get_bpp;
     use smithay::wayland::shm;

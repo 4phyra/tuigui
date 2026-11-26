@@ -44,7 +44,7 @@ pub const ANNOUNCE_SEPARATOR: &str = " : ";
 pub const ANNOUNCE_MAX_LEN: usize = 1024;
 
 /// An announcement, in the one place its format is defined.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn announcement(name: &str, address: &str) -> String {
     format!("{name}{ANNOUNCE_SEPARATOR}{address}")
 }
@@ -53,7 +53,7 @@ pub fn announcement(name: &str, address: &str) -> String {
 ///
 /// Including the separator is what keeps a name that is also an ordinary word from
 /// matching: only the name *followed by the separator* starts an announcement.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn announcement_prefix(name: &str) -> String {
     announcement(name, "")
 }
@@ -67,7 +67,7 @@ pub fn announcement_prefix(name: &str) -> String {
 /// Here rather than on any one transport, because a list of channels is a fact about the
 /// seam: put it under `unix` and adding a second channel would mean editing the first one's
 /// file, which reads as though that channel owned the decision.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn names() -> Vec<&'static str> {
     vec![crate::unix::NAME, crate::p2p::NAME]
 }
@@ -102,7 +102,7 @@ pub struct MessageCodec;
 impl Encoder<Message> for MessageCodec {
     type Error = io::Error;
 
-    #[tracing::instrument(name = "msg.encode", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "msg.encode", skip_all))]
     fn encode(&mut self, message: Message, dst: &mut BytesMut) -> io::Result<()> {
         let body = message
             .to_bytes()
@@ -123,7 +123,7 @@ impl Decoder for MessageCodec {
     type Item = Message;
     type Error = io::Error;
 
-    #[tracing::instrument(name = "msg.decode", skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(name = "msg.decode", skip_all))]
     fn decode(&mut self, src: &mut BytesMut) -> io::Result<Option<Message>> {
         if src.len() < 4 {
             return Ok(None);
@@ -149,13 +149,13 @@ impl Decoder for MessageCodec {
 }
 
 /// One half of a byte stream, reading whole messages.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn framed_read<S: AsyncRead>(stream: S) -> FramedRead<S, MessageCodec> {
     FramedRead::new(stream, MessageCodec)
 }
 
 /// One half of a byte stream, writing whole messages.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn framed_write<S: AsyncWrite>(stream: S) -> FramedWrite<S, MessageCodec> {
     FramedWrite::new(stream, MessageCodec)
 }
@@ -180,7 +180,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(transport: impl Transport + 'static) -> Self {
         Self {
             transport: std::sync::Arc::new(transport),
@@ -188,13 +188,13 @@ impl Connection {
     }
 
     /// The transport carrying this link.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn transport(&self) -> &dyn Transport {
         &*self.transport
     }
 
     /// Send one message.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn send(&self, message: &Message) -> io::Result<()> {
         self.transport.send(message).await
     }
@@ -202,14 +202,14 @@ impl Connection {
     /// Read one message, waiting for a whole one.
     ///
     /// `None` means the peer closed between messages, which is the normal end of one.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn recv(&self) -> io::Result<Option<Message>> {
         self.transport.recv().await
     }
 }
 
 impl std::fmt::Debug for Connection {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The transport and where it goes, never the bytes.
         f.debug_struct("Connection")
@@ -251,7 +251,7 @@ pub trait Transport: Send + Sync {
     ///
     /// The transport's own, both halves: it builds the text and reads one back with
     /// [`Transport::from_magic`]. Nothing outside looks inside.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn to_magic(&self) -> String {
         announcement(self.name(), &self.address())
     }
@@ -313,7 +313,7 @@ pub trait Transport: Send + Sync {
 ///
 /// Here and not in a transport because there is no channel and no address: it is two ends
 /// of one buffer.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn in_process(capacity: usize) -> (impl Stream, impl Stream) {
     tokio::io::duplex(capacity)
 }

@@ -35,7 +35,7 @@ impl Raw {
     ///
     /// Nothing here touches the *terminal's* modes (`?7` autowrap and the like), which
     /// live outside the tty and cannot be read back.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn install() -> io::Result<Self> {
         let stdin = io::stdin();
         let original = rustix::termios::tcgetattr(&stdin)?;
@@ -47,7 +47,7 @@ impl Raw {
 }
 
 impl Drop for Raw {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn drop(&mut self) {
         let _ = rustix::termios::tcsetattr(
             io::stdin(),

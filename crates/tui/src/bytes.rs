@@ -51,7 +51,7 @@ pub struct Bytes {
 }
 
 impl Bytes {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new() -> Self {
         Self {
             subscribers: Arc::new(Mutex::new(Vec::new())),
@@ -67,7 +67,7 @@ impl Bytes {
     ///
     /// A subscription cannot be removed, which is right for both readers here: neither
     /// stops wanting the output while the session lasts.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn subscribe(&self) -> mpsc::Receiver<Vec<u8>> {
         let (chunks, stream) = mpsc::channel(256);
         self.views().push(chunks);
@@ -80,7 +80,7 @@ impl Bytes {
     /// writes, and stalling there would stop the command's output. A subscriber that is
     /// behind loses chunks in its own queue rather than holding up the others or the
     /// command.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn publish(&self, chunk: &[u8]) {
         let mut views = self.views();
         // A send that fails because the queue is full is a chunk lost, and a send that fails
@@ -95,7 +95,7 @@ impl Bytes {
     }
 
     /// How many readers are subscribed, for a caller that wants to report it.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn subscribers(&self) -> usize {
         self.views().len()
     }
@@ -104,21 +104,21 @@ impl Bytes {
     ///
     /// A poisoned lock is taken back rather than propagated: the list is either the old
     /// one or the new one, so there is no half-written state to protect.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn views(&self) -> std::sync::MutexGuard<'_, Vec<Subscriber>> {
         self.subscribers.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
 impl Default for Bytes {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl std::fmt::Debug for Bytes {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // How many are reading, never what they are: a subscriber is a channel, and the
         // count is the only part a log needs.

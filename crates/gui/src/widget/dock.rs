@@ -78,7 +78,7 @@ impl Dock {
     /// Only the drawing is here. Waiting for the dial is the run path's, because a dial is what
     /// starts the program and the program is not this half's: what the dock says is where to reach
     /// this pane, and the transport itself has already gone to the side that waits on it.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(advert: String, program: String) -> std::io::Result<Self> {
         log::info!("announcing {advert}");
         // The record as cells, padded to a fixed length: blank braille in front, so the row is the
@@ -116,7 +116,7 @@ pub struct DockProps<'a> {
 impl<'a> StatefulWidget for &'a mut Dock {
     type State = DockProps<'a>;
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn render(self, area: Rect, buf: &mut Buffer, props: &mut Self::State) {
         // The row inside the border, which is the whole of the dock's content: the box is
         // three rows because a box is what makes it read as furniture under a screen.
@@ -214,13 +214,13 @@ impl Dock {
     /// A tab strip walks its band over a few frames, and a frame nobody asked for is a band frozen
     /// halfway. Asking here rather than keeping a flag beside it keeps the answer where the motion
     /// is: the strip is the only thing in the dock that animates.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn is_animating(&self) -> bool {
         self.tabs.is_moving()
     }
 
     /// The program's words while it was watched, and the screen's own state, are the stage's.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn status<'a>(&'a self, stage: &'a Result<Stage, String>) -> &'a str {
         match stage {
             Err(message) => message,
@@ -239,7 +239,7 @@ impl Dock {
     /// their own state machines: what the dock does is act on what they report. A press on the cross
     /// ends the session; a press on a tab asks for the other screen, and whether the session moves is
     /// the session's to say.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn handle_event(
         &mut self,
         event: &termina::Event,
@@ -304,7 +304,7 @@ impl Dock {
 }
 
 /// The dock waiting to be dialed: the barcode, and whatever the state has to say.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn render_waiting(
     inner: Rect,
     row: Rect,
@@ -338,7 +338,7 @@ fn render_waiting(
 ///
 /// The border is drawn before this every frame, so the cells the mark overwrites are fresh
 /// each time: blanking only what this frame paints is enough, and no width is kept around.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn light(area: Rect, buf: &mut Buffer, said: &str, rgb: (u8, u8, u8), suffix: Option<&str>) {
     /// The dot that breathes.
     const DOT: char = '•';
@@ -401,7 +401,7 @@ fn light(area: Rect, buf: &mut Buffer, said: &str, rgb: (u8, u8, u8), suffix: Op
 ///
 /// The bar is coral and the command is not, so the row is marked as the command's without
 /// recolouring the text: what the pane is running reads like anything else it prints.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn render_program(row: Rect, buf: &mut Buffer, status: &str) {
     /// The bar, inked to the left edge of its cell.
     const BAR: char = '▏';

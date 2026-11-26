@@ -125,7 +125,7 @@ pub struct DebugOptions {
 }
 
 impl Tui {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn run(
         self,
         stdin: impl Read + Send + 'static,
@@ -320,7 +320,7 @@ pub(crate) fn frame_mark() {
 pub(crate) fn frame_mark() {}
 
 #[cfg(feature = "tracy")]
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn install_tracing() -> io::Result<()> {
     use tracing::Level;
     use tracing_subscriber::filter::Targets;

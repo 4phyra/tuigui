@@ -35,7 +35,7 @@ pub struct Button {
 }
 
 impl Button {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(label: impl Into<String>, colour: Color, on_click: impl FnMut() + 'static) -> Self {
         Self {
             label: label.into(),
@@ -47,7 +47,7 @@ impl Button {
     }
 
     /// The columns the button needs: the label, and its padding.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn width(&self) -> u16 {
         let label = u16::try_from(self.label.chars().count()).unwrap_or(u16::MAX);
         label.saturating_add(PADDING * 2)
@@ -59,7 +59,7 @@ impl Button {
 /// Each channel is taken toward black by a fixed fraction, so a held button is its own colour with
 /// the light turned down rather than some other colour: two buttons of different colours stay
 /// distinguishable while they are pressed.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn darker(colour: Color) -> Color {
     let Color::Rgb(r, g, b) = colour else {
         // A named colour has no channels to dim. There is nothing between `Red` and a darker
@@ -76,7 +76,7 @@ fn darker(colour: Color) -> Color {
 ///
 /// Each channel is lifted toward white by a fixed fraction rather than scaled: scaling leaves a
 /// dark colour dark, which is exactly the case a hover has to be visible in.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn brighter(colour: Color) -> Color {
     let Color::Rgb(r, g, b) = colour else {
         // A named colour has no channels to lift, so the pointer's hint is left as the only
@@ -93,7 +93,7 @@ fn brighter(colour: Color) -> Color {
 
 impl Button {
     /// Take this frame's input for a button drawn in `area`.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn handle_events(&mut self, area: Rect, events: &mut Vec<Event>) {
         // A frame with no pointer event leaves the last answer alone: the pointer did not move, it
         // did not leave.
@@ -115,7 +115,7 @@ impl Button {
 }
 
 impl Widget for &Button {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn render(self, area: Rect, buf: &mut Buffer) {
         let hovered = self.hovered;
 

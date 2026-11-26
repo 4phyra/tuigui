@@ -45,3 +45,8 @@ image = { workspace = true, features = ["jpeg"] }
 [[example]]
 name = "dummy"
 path = "examples/dummy.rs"
+
+[features]
+# Nothing of its own: the switch exists so `#[cfg_attr(feature = "tracy", ..)]` on this
+# crate's instrumentation has something to test, and the profiled build turns it on.
+tracy = []

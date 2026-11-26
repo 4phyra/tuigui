@@ -9,7 +9,7 @@ use std::io;
 /// question again with nothing changed in between.
 ///
 /// The reader must be non-blocking — a pipe with nothing to give has to answer rather than wait.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn drain_reader(reader: &mut impl io::BufRead) -> io::Result<Option<Vec<u8>>> {
     let mut all = Vec::new();
     loop {
@@ -51,7 +51,7 @@ pub fn drain_reader(reader: &mut impl io::BufRead) -> io::Result<Option<Vec<u8>>
 /// rather than as an empty read, so that is `None` too. "Nothing waiting" is therefore
 /// `Some(vec![])` — an empty chunk, which every consumer already treats as nothing to do — because
 /// the caller ends the session on `None`.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub async fn drain_reader_async(
     reader: &mut (impl tokio::io::AsyncBufRead + Unpin),
 ) -> io::Result<Option<Vec<u8>>> {

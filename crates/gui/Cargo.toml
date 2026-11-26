@@ -90,7 +90,19 @@ tracing-subscriber = { workspace = true, optional = true }
 
 [features]
 default = []
-tracy = ["dep:tracing-tracy", "dep:tracing-subscriber"]
+tracy = [
+    "dep:tracing-tracy",
+    "dep:tracing-subscriber",
+    # Every crate whose code runs inside a session carries its own switch: an attribute is
+    # compiled out by the crate that holds it, so the profiler has to turn each one on.
+    "wire/tracy",
+    "codecs/tracy",
+    "cellcode/tracy",
+    "compositor/tracy",
+    "shared_utils/tracy",
+    "tuigui_components/tracy",
+    "wayland/tracy",
+]
 # Swaps the wayland session for a scripted one, so the client's own session loop can run in a
 # test without a compositor. Not for release builds.
 test-windowing = []

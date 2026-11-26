@@ -77,7 +77,7 @@ impl Cell {
     /// The bits this cell carries.
     /// `None` for a symbol outside the braille block, which is how a decoder finds the end of
     /// a run: any other character on the row is not part of this record.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn bits(self) -> Option<u64> {
         let symbol = u32::from(self.symbol).checked_sub(SYMBOL_BASE)?;
         if symbol >= 1 << SYMBOL_BITS {
@@ -92,7 +92,7 @@ impl Cell {
     ///
     /// Infallible: the symbol is the low eight bits, and the braille block is exactly two
     /// hundred and fifty-six code points starting at [`SYMBOL_BASE`].
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn from_bits(bits: u64) -> Self {
         let fg = (bits >> SYMBOL_BITS) & 0xFF_FFFF;
         Self {
@@ -123,7 +123,7 @@ pub enum Error {
 }
 
 impl fmt::Display for Error {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotPrintable { at } => write!(f, "byte {at} is not printable ascii"),
@@ -143,7 +143,7 @@ impl std::error::Error for Error {}
 /// No capacity, no count and no header: the number of cells follows from the number of bytes,
 /// which is `ceil(len / 4)`. A caller that wants the record flush against the right edge of a
 /// pane pads in front of it when drawing, and this side never hears about it.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn encode(text: &str, mut take: impl FnMut(Cell)) -> Result<(), Error> {
     let bytes = text.as_bytes();
     for (at, byte) in bytes.iter().enumerate() {
@@ -178,7 +178,7 @@ pub fn encode(text: &str, mut take: impl FnMut(Cell)) -> Result<(), Error> {
 /// `cells` is a count, not a width: the caller has already decided how many columns the record
 /// may occupy. Requesting fewer cells than the payload needs is [`Error::NoRoom`] rather than a
 /// silent truncation, because a shortened record is a wrong record.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn encode_padded(
     text: &str,
     cells: usize,
@@ -202,7 +202,7 @@ pub fn encode_padded(
 /// whose every cell is braille. A cell that is not braille is an error rather than the end of
 /// the record, because only a caller reading a row knows where one record ends and another
 /// thing begins — see [`decode_run`].
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn decode(cells: impl Iterator<Item = Cell>) -> Result<String, Error> {
     let mut bytes = Vec::new();
     for cell in cells {
@@ -232,7 +232,7 @@ pub fn decode(cells: impl Iterator<Item = Cell>) -> Result<String, Error> {
 /// The run is the cells up to the first one that is not braille. That is the whole of the
 /// scan: a slot of one or two cells in a row of otherwise-scattered braille is a program
 /// drawing a graph, while a contiguous run is a record.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub fn decode_run(cells: impl Iterator<Item = Cell>) -> (Result<String, Error>, Vec<Cell>) {
     let mut run = Vec::new();
     let mut rest = Vec::new();

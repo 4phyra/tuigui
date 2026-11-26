@@ -28,7 +28,7 @@ pub struct SubClient {
 }
 
 impl SubClient {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub(crate) fn new(pid: u32) -> Self {
         SubClient {
             pid,
@@ -40,7 +40,7 @@ impl SubClient {
 
     /// Dispatch this helper's queued inputs: its own window tree, then the
     /// helpers it started.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub(crate) fn dispatch_inputs(&self, state: &mut State) {
         if let Some(tree) = self.root_window.read().unwrap().as_ref() {
             tree.dispatch_inputs(state);
@@ -59,8 +59,8 @@ impl SubClient {
 }
 
 impl ClientData for SubClient {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn initialized(&self, _id: ClientId) {}
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn disconnected(&self, _id: ClientId, _reason: DisconnectReason) {}
 }

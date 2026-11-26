@@ -55,7 +55,7 @@ const STEP: std::time::Duration = std::time::Duration::from_millis(4);
 ///
 /// `transport` is the link the render path already bound and announced: it arrives once, and every
 /// window's servant keeps a clone of the connection, so each streams at its own pace.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 pub async fn run(
     root_initializer: tokio::sync::oneshot::Sender<(CompositableWindow, io::PipeReader)>,
     options: crate::windowing::Options,
@@ -164,7 +164,7 @@ pub async fn run(
 /// behind cells nobody could blank. The wait is safe here because the caller polls the link beside
 /// this future, which is what carries the answer.
 #[async_recursion::async_recursion]
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 async fn serve_window(
     window: Box<dyn Compositable>,
     codec: codecs::CodecId,
@@ -376,7 +376,7 @@ async fn serve_window(
 /// `None` is a codec holding the frame back: not a failure, and not pixels either — the picture
 /// the pane already holds stays in the box. The codec is the session's, passed in: every window of
 /// one session streams with the same one.
-#[tracing::instrument(skip(window, encoder, pixels))]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip(window, encoder, pixels)))]
 fn encode(
     window: &dyn Compositable,
     codec: codecs::CodecId,
@@ -397,7 +397,7 @@ fn encode(
 /// `bytes` is the encoded picture, or `None` for a frame that only moves the picture — a window
 /// resized, dragged, or raised without its program drawing anything. The rank is read by the
 /// caller at the moment of sending, so a raise costs no message of its own.
-#[tracing::instrument(skip(connection, bytes))]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip(connection, bytes)))]
 async fn send_frame(
     connection: &Connection,
     surface: wire::message::SurfaceId,
@@ -427,7 +427,7 @@ async fn send_frame(
 ///
 /// Under `test-windowing` there is no terminal to ask, so a fixed 80x24 stands in: the scripted
 /// window never reads it anyway, but the frame path measures in cells and needs an answer.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn winsize() -> io::Result<rustix::termios::Winsize> {
     if cfg!(feature = "test-windowing") {
         return Ok(rustix::termios::Winsize {
@@ -445,7 +445,7 @@ fn winsize() -> io::Result<rustix::termios::Winsize> {
 /// That signature is not decoration. The far side finds where a picture goes by scanning the pane
 /// for these cells, so a window drawn without them is a window nothing can be placed on — the
 /// pictures arrive and are dropped for want of an anchor.
-#[tracing::instrument(skip_all)]
+#[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
 fn paint_surface(
     surface: wire::message::SurfaceId,
 ) -> impl Fn(

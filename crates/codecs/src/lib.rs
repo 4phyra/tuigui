@@ -87,7 +87,7 @@ impl CodecId {
     ///
     /// Fails for a codec this build does not carry, which is the server's to
     /// report back as an [`wire::message::Message::Error`] rather than a guess.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn to_decoder(self) -> Result<Box<dyn Decoder>, Error> {
         match self {
             Self::Av1 => Ok(Box::new(av1::Decoder::new()?)),
@@ -104,7 +104,7 @@ impl CodecId {
     /// # Errors
     ///
     /// Fails for a codec this build does not carry, or one that refuses the size.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn to_encoder(self, size: (u32, u32)) -> Result<Box<dyn Encoder>, Error> {
         match self {
             Self::Av1 => Ok(Box::new(av1::Encoder::new(size.0, size.1)?)),
@@ -131,7 +131,7 @@ impl Frame {
     ///
     /// Exists for the debug path that paints without a codec, which wants the
     /// same shape a real decode produces.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn solid(width: u32, height: u32, (r, g, b): (u8, u8, u8)) -> Self {
         Self {
             width,
@@ -148,7 +148,7 @@ impl Frame {
 }
 
 impl std::fmt::Debug for Frame {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Frame")
             .field("width", &self.width)
@@ -213,7 +213,7 @@ pub enum Error {
 
 impl Error {
     /// A codec's own error, as the source of this one.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn boxed(error: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Build(Box::new(error))
     }

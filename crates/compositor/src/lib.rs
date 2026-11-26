@@ -69,7 +69,7 @@ impl Compositor {
     ///
     /// The root is the program itself: it has no chrome, and a key pressed before anything was
     /// clicked is its. Every other window arrives through [`Compositor::run`].
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn new(root: CompositableWindow) -> Self {
         Self {
             windows: vec![vec![DecoratedWindow::new(
@@ -102,7 +102,7 @@ impl Compositor {
     ///
     /// `winsize` is the terminal's report of itself: it is what turns a box of cells into a
     /// program's size, and the caller owns the terminal, so it is handed in.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn step(&mut self, winsize: rustix::termios::Winsize) -> Result<(), Error> {
         self.maybe_resize_root(winsize)?;
         if let Some(place) = self.recv_tasks().await {
@@ -122,7 +122,7 @@ impl Compositor {
     /// stack it changes. What a caller does with it is await nothing and just call it.
     ///
     /// `None` is a stack with nothing left in it, which is a session whose program never drew.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub async fn recv_tasks(&mut self) -> Option<Task> {
         let mut waits = tokio::task::JoinSet::new();
         for (group, entries) in self.windows.iter_mut().enumerate() {
@@ -166,7 +166,7 @@ impl Compositor {
     ///
     /// A group is a window and its menus: dropping the window drops them, since nothing else shows
     /// them.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn remove(&mut self, group: usize, inner: usize) {
         if inner == 0 {
             self.windows.remove(group);
@@ -184,7 +184,7 @@ impl Compositor {
     /// size it was last configured with. Asking only the root leaves a dragged window with its ring
     /// in the new place and its picture drawn for the old box. `maybe_set_size` sends nothing when
     /// the box and the committed size already agree, so a turn with no change costs a comparison.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn maybe_resize_root(&mut self, winsize: rustix::termios::Winsize) -> Result<(), Error> {
         if let Some(root) = self.windows.first_mut().and_then(|group| group.first_mut()) {
             root.state.area = self.pane;
@@ -205,7 +205,7 @@ impl Compositor {
     ///
     /// `opened_by` is the group whose window opened it: a child of the root goes beside the root,
     /// and one a window opened goes above that window rather than at the bottom of the stack.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn add_window(
         &mut self,
         opened_by: usize,
@@ -235,7 +235,7 @@ impl Compositor {
     /// No bar: a popup is the client's own drawing, and this side's chrome over it would be
     /// furniture on something that does not want any. It joins its parent's group, so moving the
     /// window moves the menu with no bookkeeping.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn add_popup(
         &mut self,
         group: usize,
@@ -281,7 +281,7 @@ impl Compositor {
     /// The event is the pane's while it is here: it is fed, not lent, so nothing comes back. What
     /// the answer says is whether the frame changed — a pointer moved, a window raised — because a
     /// frame is drawn for that and not for every event a program is handed.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub fn handle_event(
         &mut self,
         event: termina::Event,
@@ -346,7 +346,7 @@ impl Compositor {
     }
 
     /// A window's own size in cells: what its program last committed, in the pane's grid.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn cells(&self, window: &CompositableWindow, winsize: rustix::termios::Winsize) -> (u16, u16) {
         let size = *window.size.lock().unwrap_or_else(|e| e.into_inner());
         crate::widgets::cells(size, winsize)
@@ -355,7 +355,7 @@ impl Compositor {
 
 /// The compositor as the pane draws it: every window, bottom of the stack first.
 impl Widget for &mut Compositor {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn render(self, area: Rect, buf: &mut Buffer) {
         self.pane = area;
         // The root fills the pane, so this is where it learns its box: a window that has never been
@@ -396,7 +396,7 @@ pub enum Error {
 }
 
 impl std::fmt::Display for Error {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Frame(e) => write!(f, "the frame could not be sent: {e}"),
@@ -408,7 +408,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl From<Error> for std::io::Error {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn from(error: Error) -> Self {
         std::io::Error::other(error)
     }

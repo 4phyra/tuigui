@@ -20,7 +20,7 @@ use crate::state::State;
 
 impl XwmHandler for State
 {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn xwm_state(&mut self, _xwm: XwmId) -> &mut X11Wm {
         self.globals
             .x11_wm
@@ -28,7 +28,7 @@ impl XwmHandler for State
             .expect("XWM handler invoked before the X11 WM was started")
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn new_window(&mut self, _xwm: XwmId, window: X11Surface) {
         tracing::debug!(window = window.window_id(), "x11: new window");
         if window.is_override_redirect() {
@@ -36,12 +36,12 @@ impl XwmHandler for State
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn new_override_redirect_window(&mut self, _xwm: XwmId, _window: X11Surface) {
         tracing::debug!("x11: new override-redirect window (ignored)");
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn map_window_request(&mut self, _xwm: XwmId, window: X11Surface) {
         tracing::debug!(window = window.window_id(), "x11: map request");
         // Grant the mapping first (the client draws at the size it requested),
@@ -54,13 +54,13 @@ impl XwmHandler for State
         self.admit_x11(&window);
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, _window: X11Surface) {}
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn unmapped_window(&mut self, _xwm: XwmId, _window: X11Surface) {}
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn destroyed_window(&mut self, _xwm: XwmId, window: X11Surface) {
         // Only drop the window we admitted. XWayland regularly creates and
         // destroys helper windows (tooltips, override-redirect, transient
@@ -86,7 +86,7 @@ impl XwmHandler for State
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn configure_request(
         &mut self,
         _xwm: XwmId,
@@ -103,7 +103,7 @@ impl XwmHandler for State
         let _ = window.configure(full);
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn configure_notify(
         &mut self,
         _xwm: XwmId,
@@ -113,7 +113,7 @@ impl XwmHandler for State
     ) {
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn resize_request(
         &mut self,
         _xwm: XwmId,
@@ -123,10 +123,10 @@ impl XwmHandler for State
     ) {
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn move_request(&mut self, _xwm: XwmId, _window: X11Surface, _button: u32) {}
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn send_selection(
         &mut self,
         _xwm: XwmId,
@@ -137,7 +137,7 @@ impl XwmHandler for State
         // We never allow_selection_access, so this must not be called.
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn allow_selection_access(&mut self, _xwm: XwmId, _selection: SelectionTarget) -> bool {
         false
     }
@@ -145,12 +145,12 @@ impl XwmHandler for State
 
 impl XWaylandShellHandler for State
 {
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn xwayland_shell_state(&mut self) -> &mut XWaylandShellState {
         &mut self.globals.xwayland_shell_state
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     fn surface_associated(&mut self, _xwm: XwmId, _wl_surface: WlSurface, window: X11Surface) {
         // Association gives us the wl_surface for an X11 window. If we haven't
         // admitted it at map time (ordering can vary), do it now.
@@ -165,7 +165,7 @@ impl State
     /// Dead in this build: XWayland is never spawned (`WaylandServer::new`
     /// ignores `use_x11`), so no XWM ever runs and nothing calls this. It
     /// exists only because the `XwmHandler` trait demands the method.
-    #[tracing::instrument(skip_all)]
+    #[cfg_attr(feature = "tracy", tracing::instrument(skip_all))]
     pub(crate) fn admit_x11(&mut self, _window: &X11Surface) {
         tracing::warn!("x11: admission is not wired up in this build; ignoring a window");
     }
