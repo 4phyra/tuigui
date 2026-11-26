@@ -168,3 +168,6 @@ neither: what it needs arrives as parameters and is gone when it returns.
   stacking order, a drag in flight, an encoder's stream history — belongs on a
   struct. The rule is about new state that exists only because a parameter felt
   awkward.
+
+## Commit style
+This repository is using Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/) please use that format
